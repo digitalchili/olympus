@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { resolveMinionsWorkspaceDir } from './paths.js';
 
 function configuredRoot(): string {
-  const candidate = process.env.MINIONS_PROJECT_ROOT?.trim() || join(homedir(), 'Dev');
+  const candidate = process.env.OLYMPUS_DISPATCH_PROJECT_ROOT?.trim() || join(homedir(), 'Dev');
   return existsSync(candidate) ? resolve(candidate) : resolveMinionsWorkspaceDir();
 }
 

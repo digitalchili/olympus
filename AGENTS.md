@@ -189,6 +189,7 @@ HERMES_AGENT_DIR=                # Path to Hermes agent dir (default: ~/.hermes/
 HERMES_AGENT_RUN_LIMIT=10        # Max concurrent AIAgent.run_conversation calls
 OLYMPUS_DISPATCH_HOME=~/.olympus-dispatch          # State directory (DB, logs, backups, workspace)
 DB_PATH=~/.olympus-dispatch/data/olympus-dispatch.db  # SQLite database path
+OLYMPUS_DISPATCH_PROJECT_ROOT=~/Dev     # Root for the host-side project-folder picker
 OLYMPUS_DISPATCH_MODEL_LIST_CACHE_TTL_SECONDS=60  # Cache TTL for model list in Python worker
 ```
 
