@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.tsbuildinfo
+.vscode/
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+debug.md
+.gstack/

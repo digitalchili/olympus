@@ -1,0 +1,79 @@
+{
+  "name": "minionsai",
+  "version": "0.1.24",
+  "description": "Mission Control for Hermes Agent — a Kanban board for autonomous agent tasks",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "minions": "bin/minions.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=development tsx watch --include='server/workers/**/*.py' server/index.ts",
+    "dev:server": "NODE_ENV=development tsx watch --include='server/workers/**/*.py' server/index.ts",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && npm run build:server && npm run build:client && npm run build:assets",
+    "build:client": "cd client && npx vite build --outDir ../dist/server/client/dist --emptyOutDir",
+    "build:server": "npx tsc -p server/tsconfig.json",
+    "build:assets": "rsync -a --prune-empty-dirs --exclude='__pycache__' --include='*/' --include='*.sql' --include='*.py' --exclude='*' server/ dist/server/server/",
+    "start": "NODE_ENV=production node dist/server/server/index.js",
+    "prod": "npm run build && npm run start",
+    "prepublishOnly": "npm run build",
+    "test": "python3 tests/test_hermes_worker_resolve.py && for test_file in tests/*.test.ts; do TSX_TSCONFIG_PATH=client/tsconfig.json tsx \"$test_file\" || exit 1; done"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@streamdown/code": "^1.1.1",
+    "@types/papaparse": "^5.5.2",
+    "ag-grid-community": "^33.2.5",
+    "ag-grid-react": "^33.2.5",
+    "archiver": "^7.0.1",
+    "better-sqlite3": "^11.7.0",
+    "cors": "^2.8.5",
+    "cron-parser": "^5.5.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "lucide-react": "^1.12.0",
+    "multer": "^2.1.1",
+    "papaparse": "^5.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^7.14.2",
+    "react-router-dom": "^7.14.2",
+    "sonner": "^2.0.7",
+    "streamdown": "^2.4.0",
+    "uuid": "^11.0.5",
+    "yaml": "^2.9.0",
+    "yauzl": "^3.3.1",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/archiver": "^7.0.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/uuid": "^10.0.0",
+    "@types/yauzl": "^2.10.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}

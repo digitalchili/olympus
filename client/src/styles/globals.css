@@ -1,0 +1,147 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --sidebar: 240 4% 95.5%;
+    --surface: 240 20% 99%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --sidebar: 240 5.9% 10%;
+    --surface: 0 0% 12%;
+  }
+}
+
+@layer utilities {
+  .mobile-chat-content {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .mobile-chat-content :where(p, li, blockquote, h1, h2, h3, h4, h5, h6, a, span) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .mobile-chat-content :where(pre, code, table) {
+    max-width: 100%;
+  }
+
+  .mobile-chat-content :where(pre, table) {
+    overflow-x: auto;
+  }
+
+  .mobile-chat-content :where(img, video, canvas, svg) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  @media (max-width: 640px) {
+    input,
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
+
+    .mobile-chat-content :where(pre, code) {
+      font-size: 13px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .mobile-chat-content :where(pre) {
+      overflow-x: hidden;
+    }
+  }
+}
+
+@layer components {
+  .rename-title-shell {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+
+  .rename-title-layout-hidden {
+    opacity: 0;
+  }
+
+  .rename-title-reveal {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    white-space: inherit;
+    text-overflow: inherit;
+  }
+
+  .rename-title-caret {
+    display: inline-block;
+    width: 1px;
+    height: 0.95em;
+    margin-left: 1px;
+    vertical-align: -0.12em;
+    background: currentColor;
+    opacity: 0.55;
+    animation: rename-title-caret 700ms steps(1, end) infinite;
+  }
+
+  .rename-title-shell:not(:focus-within) .rename-title-input-hidden {
+    color: transparent;
+  }
+}
+
+@keyframes rename-title-caret {
+  0%, 45% {
+    opacity: 0.55;
+  }
+  46%, 100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rename-title-layout-hidden {
+    opacity: 1;
+  }
+
+  .rename-title-reveal {
+    display: none;
+  }
+
+  .rename-title-shell .rename-title-input-hidden {
+    color: inherit;
+  }
+}
