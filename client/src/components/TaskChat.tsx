@@ -7,7 +7,7 @@ import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
-import { ApiError, compactTask, interruptTask, type AgentRunSettings } from '../lib/api';
+import { ApiError, compactTask, interruptTask, steerTask, type AgentRunSettings } from '../lib/api';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
@@ -126,6 +126,9 @@ function QueuedMessageBar({
   isSending,
   canRetry,
   waitingLabel,
+  isSteering,
+  onSteer,
+  onEdit,
   onRemove,
   onRetry,
 }: {
@@ -134,10 +137,15 @@ function QueuedMessageBar({
   isSending: boolean;
   canRetry: boolean;
   waitingLabel: string;
+  isSteering: boolean;
+  onSteer: () => void;
+  onEdit: () => void;
   onRemove: () => void;
   onRetry: () => void;
 }) {
   const statusLabel = isSending ? 'Sending...' : error ?? waitingLabel;
+  const { text, filePaths } = splitAttachmentMessage(queuedMessage.content);
+  const messagePreview = text || (filePaths.length === 1 ? '1 attachment' : `${filePaths.length} attachments`);
 
   return (
     <div className="mx-3 mb-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900/60 sm:mx-4">
@@ -152,8 +160,26 @@ function QueuedMessageBar({
             </span>
           </div>
           <p className="mt-1 truncate text-sm text-zinc-700 dark:text-zinc-200">
-            {queuedMessage.content}
+            {messagePreview}
           </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onSteer}
+            disabled={isSending || isSteering || Boolean(error)}
+            className="rounded-md px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          >
+            {isSteering ? 'Steering…' : 'Steer now'}
+          </button>
+          <button
+            type="button"
+            onClick={onEdit}
+            disabled={isSending || isSteering}
+            className="rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+          >
+            Edit
+          </button>
         </div>
         {error && canRetry && (
           <button
@@ -213,6 +239,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
   const [queuedMessage, setQueuedMessage] = useState<QueuedMessage | null>(null);
   const [queuedSendError, setQueuedSendError] = useState<string | null>(null);
   const [autoSendingQueuedId, setAutoSendingQueuedId] = useState<string | null>(null);
+  const [steeringQueuedId, setSteeringQueuedId] = useState<string | null>(null);
   const [outgoingRevealActive, setOutgoingRevealActive] = useState(false);
   const [interruptInFlight, setInterruptInFlight] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
@@ -474,6 +501,37 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     }
   }, [interruptInFlight, isStreaming, taskId]);
 
+  const handleSteerQueuedMessage = useCallback(async () => {
+    if (!queuedMessage || steeringQueuedId || queuedIsSending) return;
+
+    setSteeringQueuedId(queuedMessage.id);
+    setQueuedSendError(null);
+    try {
+      const result = await steerTask(taskId, queuedMessage.content);
+      if (result.steered) {
+        setQueuedMessage((current) => current?.id === queuedMessage.id ? null : current);
+      }
+      // When Hermes is between turns or the message has an attachment, it stays
+      // queued and the normal post-run send path delivers it without losing data.
+    } catch (error) {
+      setQueuedSendError(toErrorMessage(error, 'Failed to steer Hermes'));
+    } finally {
+      setSteeringQueuedId((current) => current === queuedMessage.id ? null : current);
+    }
+  }, [queuedIsSending, queuedMessage, steeringQueuedId, taskId]);
+
+  const handleEditQueuedMessage = useCallback(() => {
+    if (!queuedMessage || queuedIsSending || steeringQueuedId) return;
+    setInput(queuedMessage.content);
+    setModel(queuedMessage.settings.model ?? null);
+    setProvider(queuedMessage.settings.provider ?? null);
+    setReasoningEffort(queuedMessage.settings.reasoningEffort ?? null);
+    setRunMode(queuedMessage.settings.mode ?? 'task');
+    setQueuedMessage(null);
+    setQueuedSendError(null);
+    window.requestAnimationFrame(() => inputRef.current?.focus());
+  }, [queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId]);
+
   const handleRemoveQueuedMessage = useCallback(() => {
     if (queuedIsSending) return;
     setQueuedMessage(null);
@@ -653,6 +711,9 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
               isSending={queuedIsSending}
               canRetry={!taskBusyForQueue && !configPending && !queuedIsSending}
               waitingLabel={compactionBlocker ? 'Sends after compaction' : 'Sends after current response'}
+              isSteering={steeringQueuedId === queuedMessage.id}
+              onSteer={() => void handleSteerQueuedMessage()}
+              onEdit={handleEditQueuedMessage}
               onRemove={handleRemoveQueuedMessage}
               onRetry={handleRetryQueuedMessage}
             />

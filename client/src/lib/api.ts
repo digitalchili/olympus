@@ -156,6 +156,13 @@ export function interruptTask(taskId: string, reason?: string) {
   });
 }
 
+export function steerTask(taskId: string, content: string) {
+  return request<{ steered: boolean; queued: boolean }>(`/tasks/${taskId}/steer`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  });
+}
+
 export function fetchScheduledTasks(includeDisabled = true, limit = 100) {
   return request<{ scheduledTasks: ScheduledTask[] }>(`/scheduled-tasks?includeDisabled=${includeDisabled ? 'true' : 'false'}&limit=${limit}`);
 }

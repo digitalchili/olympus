@@ -34,6 +34,7 @@ export type WorkerRequest =
   | { id: string; type: 'goal.clear'; sessionId: string }
   | { id: string; type: 'goal.evaluate'; sessionId: string; responseText: string }
   | { id: string; type: 'chat.interrupt'; taskId?: string; sessionId?: string; reason?: string }
+  | { id: string; type: 'chat.steer'; taskId?: string; sessionId?: string; message: string }
   | {
       id: string;
       type: 'chat';
@@ -77,6 +78,7 @@ export type WorkerResult =
   | { goal: GoalStateSnapshot | null }
   | { cleared: boolean }
   | { interrupted: boolean }
+  | { steered: boolean }
   | GoalDecision
   | { title: string }
   | {

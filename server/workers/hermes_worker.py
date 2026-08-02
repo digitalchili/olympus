@@ -473,6 +473,20 @@ def _clear_task_active(task_key: str, request_id: str) -> None:
             PENDING_INTERRUPTS.pop(task_key, None)
 
 
+def _steer_active_chat(request: dict[str, Any]) -> dict[str, bool]:
+    task_key = _task_key_for(request)
+    message = string_or_none(request.get("message"))
+    if not message:
+        return {"steered": False}
+
+    with ACTIVE_TASKS_LOCK:
+        agent = ACTIVE_AGENTS.get(task_key)
+
+    if agent is None or not hasattr(agent, "steer"):
+        return {"steered": False}
+    return {"steered": bool(agent.steer(message))}
+
+
 def _interrupt_active_chat(request: dict[str, Any]) -> dict[str, bool]:
     task_key = _task_key_for(request)
     reason = string_or_none(request.get("reason")) or DEFAULT_INTERRUPT_REASON
@@ -1633,6 +1647,8 @@ def _handle_request(request: dict[str, Any]) -> None:
             _submit_background_agent_request(request_id, request, name_prefix="goal", handler=_goal_evaluate)
         elif request_type == "chat.interrupt":
             _result(request_id, _interrupt_active_chat(request))
+        elif request_type == "chat.steer":
+            _result(request_id, _steer_active_chat(request))
         elif request_type == "chat":
             _submit_chat_request(request_id, request)
         elif request_type == "session.compress":

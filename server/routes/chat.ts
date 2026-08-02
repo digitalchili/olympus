@@ -373,6 +373,29 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
   }
 });
 
+chatRouter.post('/:id/steer', async (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  if (!isInterruptibleRun(getRunStatus(task.id))) {
+    return res.status(409).json({ error: 'This task has no active message to steer' });
+  }
+  // Hermes intentionally queues steers containing files: it cannot safely inject
+  // binary attachments into the middle of a running tool turn.
+  if (/\n\n\[Attached files:\n[\s\S]*\]$/.test(content)) {
+    return res.json({ steered: false, queued: true });
+  }
+
+  try {
+    const steered = await adapter.steerChat(task.id, content);
+    res.json({ steered, queued: !steered });
+  } catch (error) {
+    res.status(503).json({ error: toErrorMessage(error, 'Could not steer Hermes run') });
+  }
+});
+
 chatRouter.post('/:id/compact', async (req, res) => {
   const task = getTask(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
