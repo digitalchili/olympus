@@ -280,7 +280,7 @@ async function readInstalledSkill(skillFile: string, root = resolveHermesSkillsD
     name: sidecar?.displayName || frontmatter.name || registrySlug || fallbackName,
     description: frontmatter.description || sidecar?.summary || '',
     key: frontmatter.name || registrySlug || fallbackName,
-    source: provider === 'clawhub' ? 'ClawHub' : 'Local',
+    source: provider === 'clawhub' ? 'ClawHub' : 'Hermes',
     provider,
     registrySlug,
     registryOwnerHandle,
