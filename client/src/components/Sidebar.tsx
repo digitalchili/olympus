@@ -79,8 +79,8 @@ export function Sidebar() {
         ) : (
           <div className="flex items-center justify-between w-full px-2">
             <button onClick={() => navigate('/')} className="shrink-0" title="Home" aria-label="Home">
-              <img src="/logo-black.png" alt="Olympus Dispatch" className="h-9 w-12 object-contain dark:hidden" />
-              <img src="/logo-white.png" alt="" className="hidden h-9 w-12 object-contain dark:block" />
+              <img src="/logo-black.png" alt="Olympus Dispatch" className="h-[25px] w-[34px] object-contain dark:hidden" />
+              <img src="/logo-white.png" alt="" className="hidden h-[25px] w-[34px] object-contain dark:block" />
             </button>
             <button
               onClick={toggleSidebar}
