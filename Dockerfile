@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Keep the Node and Python/Hermes runtimes aligned with the central Somboon VPS.
-ARG HERMES_IMAGE=nousresearch/hermes-agent:v2026.7.7.2@sha256:9c841866021c54c4596849f6135717e8a4d52ba510b7f52c50aef1de1a283973
+ARG HERMES_IMAGE=nousresearch/hermes-agent:v2026.7.30@sha256:b869e64d6496d4763d5e4fb675b5f504cb23b0e35ec9b790481a56118602b10f
 
 FROM ${HERMES_IMAGE} AS dependencies
 WORKDIR /app
@@ -9,6 +9,10 @@ RUN npm ci
 
 FROM dependencies AS build
 COPY . ./
+# build:assets uses rsync, which is deliberately absent from the slim Hermes runtime.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends rsync \
+ && rm -rf /var/lib/apt/lists/*
 RUN npm run build
 
 FROM ${HERMES_IMAGE} AS production-dependencies
