@@ -18,8 +18,8 @@ export function resolveHermesHome(): string {
 }
 
 export function resolveMinionsHome(): string {
-  const configured = process.env.MINIONS_HOME?.trim();
-  return resolveHomeAwarePath(configured || '~/.minions');
+  const configured = process.env.OLYMPUS_DISPATCH_HOME?.trim();
+  return resolveHomeAwarePath(configured || '~/.olympus-dispatch');
 }
 
 export function resolveMinionsDataDir(): string {
@@ -41,7 +41,7 @@ export function resolveMinionsSkillsDir(): string {
 export function resolveMinionsDbPath(): string {
   const configured = process.env.DB_PATH?.trim();
   if (configured) return resolveHomeAwarePath(configured);
-  return join(resolveMinionsDataDir(), 'minions.db');
+  return join(resolveMinionsDataDir(), 'olympus-dispatch.db');
 }
 
 export function ensureMinionsStateDirs(): void {

@@ -10,7 +10,7 @@ We try to only add new functionality that is small (that is, simple and few line
 
 ## What This Is
 
-Minions is an autonomous task management system with a Kanban board UI. Users create tasks via a chat interface; each task is a Hermes agent session that autonomously decides how to execute — doing the work itself, spawning child sessions, or creating Hermes cron jobs shown in Minions as Scheduled Tasks. Successful agent runs move tasks to review automatically. The user never talks to child sessions directly; recurring work is managed from the Scheduled Tasks page.
+Olympus Dispatch is Digital Chili's private Hermes-first task management system with a Kanban board UI. Users create tasks via a chat interface; each task is a Hermes agent session that autonomously decides how to execute — doing the work itself, spawning child sessions, or creating Hermes cron jobs shown as Scheduled Tasks. Successful agent runs move tasks to review automatically. The user never talks to child sessions directly; recurring work is managed from the Scheduled Tasks page.
 
 ## Prerequisites
 
@@ -55,8 +55,8 @@ Hermes AIAgent
 
 ### State directory
 
-All persistent state lives under `MINIONS_HOME` (default: `~/.minions/`):
-- `data/minions.db` — SQLite database
+All persistent state lives under `OLYMPUS_DISPATCH_HOME` (default: `~/.olympus-dispatch/`):
+- `data/olympus-dispatch.db` — SQLite database
 - `logs/` — log files
 - `workspace/` — default working directory for Hermes task artifacts
 - `skills/` — installed skills, registered with Hermes via `external_dirs`
@@ -68,12 +68,12 @@ All persistent state lives under `MINIONS_HOME` (default: `~/.minions/`):
 | Agent communication | Python subprocess + JSONL | Imports Hermes AIAgent directly — no HTTP gateway overhead, structured streaming events, per-task model/reasoning control |
 | Task execution | Autonomous agent session | Each task IS a Hermes session. The agent decides execution strategy (self, child session, Hermes cron job/scheduled task). Our backend doesn't manage child sessions. |
 | Review transition | Successful agent runs move to review | After a chat or goal run completes successfully, the server records the response metadata and moves an `in_progress` task to `in_review` in the same update. No separate completion evaluation runs outside the conversation. |
-| Source of truth | Hermes SessionDB for chat history; Minions SQLite for task metadata; in-memory LiveChatRun for active streams | Hermes owns all transcripts and replay. Minions has no message table. `tasks.id` is the Hermes root session ID; Minions stores task metadata, per-task settings, and `last_agent_response_at`. During active streaming, `live-chat.ts` holds an in-memory `LiveChatRun` with accumulated messages. After streaming ends and the run TTL expires, chat history is projected from Hermes SessionDB on demand. |
+| Source of truth | Hermes SessionDB for chat history; Olympus Dispatch SQLite for task metadata; in-memory LiveChatRun for active streams | Hermes owns all transcripts and replay. Olympus Dispatch has no message table. `tasks.id` is the Hermes root session ID; Olympus Dispatch stores task metadata, per-task settings, and `last_agent_response_at`. During active streaming, `live-chat.ts` holds an in-memory `LiveChatRun` with accumulated messages. After streaming ends and the run TTL expires, chat history is projected from Hermes SessionDB on demand. |
 | Status ownership | Successful runs auto-move to `in_review`; human moves everything else via drag-drop | Clean separation: the system queues completed agent work for review, and humans control final completion. |
 
 ## Key Patterns
 
-- **Session lifecycle**: `tasks.id` is the Minions task ID and the Hermes root session ID. Chat and history reads all use `task.id`; Minions does not persist Hermes-returned child or continuation session IDs.
+- **Session lifecycle**: `tasks.id` is the Olympus Dispatch task ID and the Hermes root session ID. Chat and history reads all use `task.id`; Olympus Dispatch does not persist Hermes-returned child or continuation session IDs.
 - **Chat projection**: `GET /tasks/:id/messages` loads raw rows from Hermes `SessionDB.get_messages()` via the Python worker, which filters out tool-call-only turns and empty messages. The client shows optimistic messages during streaming and loads the projected history from Hermes on page load/task switch.
 - **Review transition**: After each successful chat or goal run, `recordCompletedAgentRun()` records `last_agent_response_at` and context usage. If the task is still `in_progress`, the same update moves it to `in_review` and broadcasts the change.
 - **Agent defaults**: Global default model/reasoning settings are stored in the Python worker via `settings.set` and surfaced through `GET /api/agent/defaults`. The Settings page lets users pick the default model (two-panel picker with search) and reasoning effort for all new tasks. Agent settings routes live in `server/routes/agent.ts`.
@@ -82,9 +82,9 @@ All persistent state lives under `MINIONS_HOME` (default: `~/.minions/`):
 - **Live-chat state** (`server/live-chat.ts`): In-memory `Map<taskId, LiveChatRun>` accumulates streaming events into structured messages (user + assistant with tools/thinking/usage). This is ephemeral — on server restart, active run state is lost, but the Hermes session history remains in SessionDB.
 - **SSE board events**: `/api/events` broadcasts board-level events (task CRUD) to all clients. Separate from per-task live chat SSE.
 - **Disconnect resilience**: If the browser disconnects during a stream, the server continues draining the worker stream to completion. On successful completion, `last_agent_response_at` is recorded for the task.
-- **Scheduled Tasks**: Hermes manages the underlying cron job state internally. Minions exposes `/api/scheduled-tasks` endpoints to list, create, edit, pause, resume, trigger, remove, and read local output files. Scheduled tasks are standalone; Minions no longer links them to task IDs.
-- **File browser**: `server/routes/files.ts` exposes CRUD operations on the `MINIONS_HOME/workspace/` directory (list, read, write, create, rename, delete, upload via multer). The client's `FileBrowserPage` provides a full file manager UI.
-- **Skills**: `server/routes/skills.ts` backs the client's `SkillsPage`. Skills install under `MINIONS_HOME/skills/`, and that directory is registered as a Hermes `external_dirs` entry in `~/.hermes/config.yaml` (edited via the `yaml` library, idempotently) so agent runs load them. Two install sources: the ClawHub registry (`POST /skills/install` by slug — downloads files, verifies SHA-256 checksums, writes a `.minions-skill.json` sidecar with provider/version/source metadata) and local folder/`.zip` import (`POST /skills/import`, multipart via multer). ClawHub browsing is server-proxied through `GET /skills/registry/{search,browse,:slug/content,:slug/scan}` — the client never calls `clawhub.ai` directly. Other endpoints: `GET /skills` (list installed), `GET /skills/:id/content`, `DELETE /skills/:id`. Skills are pure Node + filesystem + HTTP — they do not go through the Python worker.
+- **Scheduled Tasks**: Hermes manages the underlying cron job state internally. Olympus Dispatch exposes `/api/scheduled-tasks` endpoints to list, create, edit, pause, resume, trigger, remove, and read local output files. Scheduled tasks are standalone; Olympus Dispatch no longer links them to task IDs.
+- **File browser**: `server/routes/files.ts` exposes CRUD operations on the `OLYMPUS_DISPATCH_HOME/workspace/` directory (list, read, write, create, rename, delete, upload via multer). The client's `FileBrowserPage` provides a full file manager UI.
+- **Skills**: `server/routes/skills.ts` backs the client's `SkillsPage`. Skills install under `OLYMPUS_DISPATCH_HOME/skills/`, and that directory is registered as a Hermes `external_dirs` entry in `~/.hermes/config.yaml` (edited via the `yaml` library, idempotently) so agent runs load them. Two install sources: the ClawHub registry (`POST /skills/install` by slug — downloads files, verifies SHA-256 checksums, writes an `.olympus-dispatch-skill.json` sidecar with provider/version/source metadata) and local folder/`.zip` import (`POST /skills/import`, multipart via multer). ClawHub browsing is server-proxied through `GET /skills/registry/{search,browse,:slug/content,:slug/scan}` — the client never calls `clawhub.ai` directly. Other endpoints: `GET /skills` (list installed), `GET /skills/:id/content`, `DELETE /skills/:id`. Skills are pure Node + filesystem + HTTP — they do not go through the Python worker.
 - **Server imports**: Use `.js` extensions in import paths (ESM with tsx).
 
 ## Task State Machine
@@ -187,9 +187,9 @@ PORT=6969                        # Web server port
 HERMES_PYTHON=                   # Path to Python with Hermes deps (auto-detected if unset)
 HERMES_AGENT_DIR=                # Path to Hermes agent dir (default: ~/.hermes/hermes-agent)
 HERMES_AGENT_RUN_LIMIT=10        # Max concurrent AIAgent.run_conversation calls
-MINIONS_HOME=~/.minions          # State directory (DB, logs, backups, workspace)
-DB_PATH=~/.minions/data/minions.db  # SQLite database path
-MINIONS_MODEL_LIST_CACHE_TTL_SECONDS=60  # Cache TTL for model list in Python worker
+OLYMPUS_DISPATCH_HOME=~/.olympus-dispatch          # State directory (DB, logs, backups, workspace)
+DB_PATH=~/.olympus-dispatch/data/olympus-dispatch.db  # SQLite database path
+OLYMPUS_DISPATCH_MODEL_LIST_CACHE_TTL_SECONDS=60  # Cache TTL for model list in Python worker
 ```
 
 ## Hermes Python Library

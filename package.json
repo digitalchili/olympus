@@ -1,11 +1,16 @@
 {
-  "name": "minionsai",
+  "name": "olympus-dispatch",
   "version": "0.1.24",
-  "description": "Mission Control for Hermes Agent — a Kanban board for autonomous agent tasks",
+  "description": "Digital Chili's Hermes-first mission control for autonomous agent tasks",
+  "author": "Digital Chili",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leakim69/olympus-dispatch.git"
+  },
   "license": "MIT",
   "type": "module",
   "bin": {
-    "minions": "bin/minions.mjs"
+    "olympus-dispatch": "bin/olympus-dispatch.mjs"
   },
   "files": [
     "bin",

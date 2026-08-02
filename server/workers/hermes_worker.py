@@ -124,7 +124,7 @@ _CONFIG_CACHE: dict[str, Any] | None = None
 _CONFIG_MTIME: float = 0.0
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 try:
-    _MODEL_LIST_CACHE_TTL_SECONDS = max(0.0, float(os.environ.get("MINIONS_MODEL_LIST_CACHE_TTL_SECONDS", "60")))
+    _MODEL_LIST_CACHE_TTL_SECONDS = max(0.0, float(os.environ.get("OLYMPUS_DISPATCH_MODEL_LIST_CACHE_TTL_SECONDS", "60")))
 except ValueError:
     _MODEL_LIST_CACHE_TTL_SECONDS = 60.0
 
@@ -1016,7 +1016,7 @@ def _create_agent(
         "api_key": runtime.get("api_key"),
         "quiet_mode": True,
         "verbose_logging": False,
-        "platform": "minions",
+        "platform": "olympus-dispatch",
         "session_id": session_id,
         "session_db": session_db,
         "enabled_toolsets": _resolve_toolsets(cfg),
@@ -1391,7 +1391,7 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
 def _run_one_shot_agent(label: str, system_message: str, user_message: str) -> str:
     """Run a throwaway zero-reasoning agent turn and return its raw text response."""
     agent = _create_agent(
-        session_id=f"minions-{label}-{uuid.uuid4().hex[:8]}",
+        session_id=f"olympus-dispatch-{label}-{uuid.uuid4().hex[:8]}",
         requested_model=None,
         reasoning_effort="none",
     )

@@ -70,7 +70,7 @@ async function main() {
   }
   const boundPort = await listenWithFallback(httpServer, PORT, PORT_FALLBACK_ATTEMPTS);
 
-  console.log(`Hermes Agent Mission Control running on http://localhost:${boundPort}`);
+  console.log(`Olympus Dispatch by Digital Chili running on http://localhost:${boundPort}`);
 }
 
 function closeHttpServer(): Promise<void> {

@@ -50,7 +50,7 @@ export function ProjectFolderPicker({ value, disabled = false, onChange }: Proje
         type="button"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        title={value ?? 'Choose a project folder on the Minions host'}
+        title={value ?? 'Choose a project folder on the Olympus Dispatch host'}
         className="inline-flex h-9 max-w-[16rem] items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-700 sm:max-w-[20rem]"
       >
         <FolderGit2 size={16} className="shrink-0" />
@@ -63,7 +63,7 @@ export function ProjectFolderPicker({ value, disabled = false, onChange }: Proje
             <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Select project folder</h2>
-                <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{data?.path ?? 'Loading folders on the Minions host...'}</p>
+                <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{data?.path ?? 'Loading folders on the Olympus Dispatch host...'}</p>
               </div>
               <button type="button" onClick={() => setOpen(false)} className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label="Close folder picker"><X size={17} /></button>
             </div>

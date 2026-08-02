@@ -1,4 +1,4 @@
-const installedSymbol = Symbol.for('minions.timestampedLoggingInstalled');
+const installedSymbol = Symbol.for('olympus-dispatch.timestampedLoggingInstalled');
 
 type WritableStream = typeof process.stdout | typeof process.stderr;
 

@@ -1,74 +1,64 @@
-# Minions
+# Olympus Dispatch
 
-**Mission Control for Hermes Agent**
+**Digital Chili's Hermes-first mission control for autonomous work.**
 
-Hermes Agent is powerful, but running real work on it means juggling terminal sessions, losing track of which job finished, and manually checking on long-running tasks. The more you delegate, the harder it gets to manage.
+Olympus Dispatch is a private Digital Chili fork of [Minions](https://github.com/agent37-platform/minions), tailored for supervising Hermes agents across projects. It is a local-first Kanban and review cockpit — not a replacement for Codex or an IDE.
 
-Minions gives you one screen to create, supervise, and review autonomous Hermes Agent work.
+## What it does
 
-Hosted access option on [Agent37](https://www.agent37.com).
+- Create and supervise autonomous Hermes tasks
+- Move completed agent work into a human review queue
+- Stream visible agent activity and responses live
+- Select a **server-hosted project folder** for each task
+- Manage recurring Hermes jobs
+- Browse workspace files and installed skills
+- Keep task metadata in local SQLite while Hermes retains session transcripts
 
-## Screenshots
+## Intended workflow
 
-![Kanban board of tasks](screenshots/tasks-board.jpg)
+```text
+Telegram / browser request
+        ↓
+Olympus Dispatch creates and tracks the task
+        ↓
+Hermes performs the work in the chosen workspace
+        ↓
+Human reviews evidence and approves, reopens, or completes
+```
 
-![New task creation screen](screenshots/new-task.jpg)
+Codex and other coding agents remain the hands-on implementation environment. Olympus Dispatch is the control plane: task visibility, workspace context, run history, and review.
 
-## Quick Start
+## Quick start
 
-**Prerequisites:** Node.js 18+ and [Hermes Agent](https://hermes-agent.nousresearch.com)
+**Prerequisites:** Node.js 18+ and [Hermes Agent](https://hermes-agent.nousresearch.com).
 
 ```bash
-npx minionsai
+npm install
+npm run dev
 ```
 
 Open [http://localhost:6969](http://localhost:6969).
 
-Local sqllite db is created on first run and state lives in `~/.minions/`
+The default local state directory is `~/.olympus-dispatch/`:
 
-Check the installed version:
+- `data/olympus-dispatch.db` — task metadata
+- `logs/` — application logs
+- `workspace/` — default agent workspace
+- `skills/` — Olympus Dispatch-managed skills
+
+Set `OLYMPUS_DISPATCH_HOME` to relocate this state directory. `DB_PATH` can override the database path independently.
+
+## Development
 
 ```bash
-minions --version
-npm view minionsai version
+npm run dev      # development server on :6969
+npm run build    # production build
+npm run start    # run the compiled build
+npm test         # worker and TypeScript checks
 ```
 
-The Settings page also shows the version of the running Minions server.
+## Upstream and licensing
 
-## Features
+This repository is a private Digital Chili fork of [agent37-platform/minions](https://github.com/agent37-platform/minions), currently based on upstream `v0.1.24`.
 
-- **Kanban board**: see every task at a glance: in progress, in review, done
-- **Autonomous execution**: describe what you want in chat, walk away; the agent decides how to get it done
-- **Automatic review queue**: successful agent runs move cards to ready for review
-- **Live streaming**: watch tool calls, reasoning, and responses in real time
-- **Human-in-the-loop**: agents propose completion; you verify and close. Nothing moves to done without your sign-off
-- **Per-task model control**: override model and reasoning effort on any task
-- **Scheduled Tasks**: create and manage recurring Hermes jobs, history, and output
-- **File browser**: see files agents have created in the workspace directory
-- **Local-first option**: self-host with SQLite, no account, and no cloud dependency. Your local data stays on your machine
-
-## How It Works
-
-Each task is a persistent Hermes root session. You talk to it, it works, and the board reflects where everything stands. Chat transcripts live in Hermes's session database; Minions stores task metadata, status, and per-task settings in a local SQLite database.
-
-## Who It's For
-
-- **Hermes power users** juggling multiple sessions across projects
-- **Indie founders** delegating research, ops, writing, and coding to their agent
-- **Anyone running long-lived Hermes work** who needs to know what finished, what's stuck, and what needs attention
-
-## Roadmap
-
-- **Scheduled task supervision**: automatically monitor, recover, and report on scheduled agent jobs
-- **Notifications**: get alerted via Telegram, WhatsApp, or webhook when a task needs review
-- **Skills library**: pluggable skill templates for common workflows (lead gen, web research, content pipelines, data collection, competitive monitoring, outbound sequences)
-- **OpenClaw adapter**: run Minions against OpenClaw-hosted agents
-
-## FAQ
-
-**Can I use this with other agents?**
-Not yet. The adapter interface exists, but launch is Hermes-only. OpenClaw is next.
-
-## Contributing
-
-Contributions are welcome. Please open an issue first with the feature or change you have in mind and why it should be added. Once the approach is approved, create a PR. See [CLAUDE.md](CLAUDE.md) for architecture and development details.
+The upstream remote is retained as `upstream` so future updates can be reviewed and merged deliberately. Olympus Dispatch retains the upstream MIT license and attribution.

@@ -17,4 +17,4 @@ npm publish        # prepublishOnly runs the build automatically
 git push --follow-tags
 ```
 
-End users install with `npx minionsai` — see [README.md](README.md).
+This Digital Chili fork is deployed from source or the private GitHub repository; it is not published to npm.

@@ -14,7 +14,7 @@ function readPackageMetadata() {
   try {
     return JSON.parse(readFileSync(packageJsonPath, 'utf8'));
   } catch {
-    return { name: 'minionsai', version: 'unknown' };
+    return { name: 'olympus-dispatch', version: 'unknown' };
   }
 }
 
@@ -25,19 +25,19 @@ if (command === '--version' || command === '-v' || command === 'version') {
 
 if (command === '--help' || command === '-h' || command === 'help') {
   const metadata = readPackageMetadata();
-  console.log(`Usage: minions [options]
+  console.log(`Usage: olympus-dispatch [options]
 
-${metadata.description ?? 'Mission Control for Hermes Agent'}
+${metadata.description ?? "Digital Chili's Hermes-first mission control"}
 
 Options:
-  -v, --version  Print the installed Minions version
+  -v, --version  Print the installed Olympus Dispatch version
   -h, --help     Show this help message`);
   process.exit(0);
 }
 
 if (!existsSync(serverEntry)) {
   console.error(
-    `minions: built server entry not found at ${serverEntry}.\n` +
+    `olympus-dispatch: built server entry not found at ${serverEntry}.\n` +
       `If you are running from a source checkout, use "npm run dev" or "npm run prod" instead.`,
   );
   process.exit(1);

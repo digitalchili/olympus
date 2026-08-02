@@ -11,11 +11,11 @@ import type { ClawHubSkillSummary, ClawHubStats, SkillMeta } from '../../shared/
 import { resolveHermesHome, resolveMinionsSkillsDir } from '../paths.js';
 
 const CLAWHUB_API_BASE = 'https://clawhub.ai/api/v1';
-const SIDECAR_FILENAME = '.minions-skill.json';
+const SIDECAR_FILENAME = '.olympus-dispatch-skill.json';
 const MAX_SKILL_FILES = 250;
 const MAX_SKILL_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_SKILL_TOTAL_BYTES = 25 * 1024 * 1024;
-const SKILL_IMPORT_TMP_DIR = join(tmpdir(), 'minions-skill-imports');
+const SKILL_IMPORT_TMP_DIR = join(tmpdir(), 'olympus-dispatch-skill-imports');
 
 mkdirSync(SKILL_IMPORT_TMP_DIR, { recursive: true });
 
@@ -701,7 +701,7 @@ function resolveConfigDir(value: string): string {
   return resolve(resolveHermesHome(), expanded);
 }
 
-// Registers MINIONS_HOME/skills as a Hermes `skills.external_dirs` entry so agent
+// Registers OLYMPUS_DISPATCH_HOME/skills as a Hermes `skills.external_dirs` entry so agent
 // runs load installed skills. Idempotent — called once at server boot; installs
 // drop skills into the already-registered dir and need no further config write.
 export async function ensureHermesExternalSkillsDir(): Promise<void> {
