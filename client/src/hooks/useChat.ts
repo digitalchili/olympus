@@ -8,6 +8,7 @@ import type {
 } from '@shared/types';
 import { fetchMessages, BASE } from '../lib/api';
 import { toErrorMessage } from '../lib/format';
+import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
 
 export type { ContextUsage, ToolProgressEvent };
@@ -59,7 +60,7 @@ function ensureAssistant(run: LiveChatRun): LiveChatMessage {
   const existing = findLastAssistant(run.messages);
   if (existing) return existing;
   const msg: LiveChatMessage = {
-    id: crypto.randomUUID(),
+    id: createUuid(),
     task_id: run.taskId,
     role: 'assistant',
     content: '',
@@ -350,8 +351,8 @@ export function useChat() {
     const now = Date.now();
     setMessages((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), role: 'user', content, created_at: now },
-      { id: crypto.randomUUID(), role: 'assistant', content: `[Error: ${error}]`, created_at: now },
+      { id: createUuid(), role: 'user', content, created_at: now },
+      { id: createUuid(), role: 'assistant', content: `[Error: ${error}]`, created_at: now },
     ]);
     setIsStreaming(false);
     setThinkingContent('');

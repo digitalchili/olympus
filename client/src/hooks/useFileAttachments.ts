@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import { deleteFileEntry, uploadChatAttachment } from '../lib/api';
 import { attachmentMessage, toErrorMessage } from '../lib/format';
+import { createUuid } from '../lib/uuid';
 
 export type PendingFile = {
   id: string;
@@ -72,7 +73,7 @@ export function useFileAttachments(uploadBucketId: string) {
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const next: PendingFile[] = Array.from(files).map((file) => ({
-      id: crypto.randomUUID(),
+      id: createUuid(),
       file,
       previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
       status: 'uploading',

@@ -10,6 +10,7 @@ import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
 import { ApiError, compactTask, interruptTask, type AgentRunSettings } from '../lib/api';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, toErrorMessage } from '../lib/format';
+import { createUuid } from '../lib/uuid';
 import type { ChatRunMode, GoalStateSnapshot } from '@shared/types';
 
 interface TaskChatProps {
@@ -416,7 +417,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     const settings = { model, provider, reasoningEffort, mode: isGoalStreaming ? 'task' : runMode };
     if (taskBusyForQueue) {
       setQueuedMessage({
-        id: crypto.randomUUID(),
+        id: createUuid(),
         content: messageText,
         settings,
       });

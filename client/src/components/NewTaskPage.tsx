@@ -9,6 +9,7 @@ import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { isEditableTarget, handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
 import { GOAL_MODE_PLACEHOLDER, toErrorMessage } from '../lib/format';
+import { createUuid } from '../lib/uuid';
 import type { ChatRunMode } from '@shared/types';
 
 type NewTaskLocationState = {
@@ -31,7 +32,7 @@ export function NewTaskPage() {
   const [workdir, setWorkdir] = useState<string | null>(null);
   const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig();
   const uploadBucketRef = useRef<string | null>(null);
-  if (uploadBucketRef.current === null) uploadBucketRef.current = `draft-${crypto.randomUUID()}`;
+  if (uploadBucketRef.current === null) uploadBucketRef.current = `draft-${createUuid()}`;
   const uploadBucketId = uploadBucketRef.current;
   const {
     pendingFiles,
