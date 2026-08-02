@@ -4,7 +4,6 @@ import './db/index.js';
 import { createServer, type Server } from 'node:http';
 import app, { adapter } from './app.js';
 import { mountFrontend, type FrontendCleanup } from './frontend.js';
-import { ensureHermesExternalSkillsDir } from './routes/skills.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = 20;
@@ -50,15 +49,6 @@ async function listenWithFallback(
 }
 
 async function main() {
-  // Re-register the skills dir with Hermes every boot, so installed skills stay
-  // visible even if config.yaml was regenerated or skills were restored on disk.
-  await ensureHermesExternalSkillsDir().catch((error) => {
-    console.error(
-      'Failed to register skills directory with Hermes — installed skills may not load:',
-      error instanceof Error ? error.message : error,
-    );
-  });
-
   closeFrontend = await mountFrontend(app, httpServer);
   try {
     await adapter.start();

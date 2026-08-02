@@ -34,8 +34,8 @@ export function resolveMinionsWorkspaceDir(): string {
   return join(resolveMinionsHome(), 'workspace');
 }
 
-export function resolveMinionsSkillsDir(): string {
-  return join(resolveMinionsHome(), 'skills');
+export function resolveHermesSkillsDir(): string {
+  return join(resolveHermesHome(), 'skills');
 }
 
 export function resolveMinionsDbPath(): string {
@@ -49,6 +49,6 @@ export function ensureMinionsStateDirs(): void {
   mkdirSync(resolveMinionsDataDir(), { recursive: true });
   mkdirSync(resolveMinionsLogsDir(), { recursive: true });
   mkdirSync(resolveMinionsWorkspaceDir(), { recursive: true });
-  mkdirSync(resolveMinionsSkillsDir(), { recursive: true });
+  mkdirSync(resolveHermesSkillsDir(), { recursive: true });
   mkdirSync(dirname(dbPath), { recursive: true });
 }

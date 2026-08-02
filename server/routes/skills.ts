@@ -1,14 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, mkdirSync } from 'node:fs';
 import { access, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import multer from 'multer';
 import yauzl from 'yauzl';
-import { parseDocument } from 'yaml';
 import { Router, type Request, type Response } from 'express';
 import type { ClawHubSkillSummary, ClawHubStats, SkillMeta } from '../../shared/types.js';
-import { resolveHermesHome, resolveMinionsSkillsDir } from '../paths.js';
+import { resolveHermesSkillsDir } from '../paths.js';
 
 const CLAWHUB_API_BASE = 'https://clawhub.ai/api/v1';
 const SIDECAR_FILENAME = '.olympus-dispatch-skill.json';
@@ -265,7 +264,7 @@ function skillIdFromFile(root: string, skillFile: string): string {
   return relative(root, dirname(skillFile)).split(sep).join('/');
 }
 
-async function readInstalledSkill(skillFile: string, root = resolveMinionsSkillsDir()): Promise<SkillMeta> {
+async function readInstalledSkill(skillFile: string, root = resolveHermesSkillsDir()): Promise<SkillMeta> {
   const content = await readFile(skillFile, 'utf8');
   const frontmatter = parseFrontmatter(content);
   const skillDir = dirname(skillFile);
@@ -316,7 +315,7 @@ async function findSkillFiles(dir: string, found: string[] = []): Promise<string
 }
 
 async function listInstalledSkills(): Promise<SkillMeta[]> {
-  const root = resolveMinionsSkillsDir();
+  const root = resolveHermesSkillsDir();
   await mkdir(root, { recursive: true });
   const files = await findSkillFiles(root);
   const skills = await Promise.all(files.map((file) => readInstalledSkill(file, root)));
@@ -328,7 +327,7 @@ async function listInstalledSkills(): Promise<SkillMeta[]> {
 }
 
 function resolveInstalledSkillFile(id: string): string {
-  const root = resolveMinionsSkillsDir();
+  const root = resolveHermesSkillsDir();
   const relId = normalizeSkillId(id);
   const skillFile = resolve(root, relId, 'SKILL.md');
   ensureInside(root, skillFile);
@@ -336,7 +335,7 @@ function resolveInstalledSkillFile(id: string): string {
 }
 
 async function deleteInstalledSkill(id: string): Promise<SkillMeta> {
-  const root = resolveMinionsSkillsDir();
+  const root = resolveHermesSkillsDir();
   const skillFile = resolveInstalledSkillFile(id);
   if (!await pathExists(skillFile)) {
     throw new RouteError(404, `Skill '${id}' is not installed`, 'SKILL_NOT_FOUND');
@@ -683,60 +682,6 @@ async function downloadClawHubFiles(slug: string, version: string, versionPayloa
   return files;
 }
 
-function displayHomePath(path: string): string {
-  const home = homedir();
-  const resolved = resolve(path);
-  if (resolved === home) return '~';
-  if (resolved.startsWith(`${home}${sep}`)) return `~/${relative(home, resolved).split(sep).join('/')}`;
-  return resolved;
-}
-
-function resolveConfigDir(value: string): string {
-  const trimmed = value.trim();
-  const expanded = trimmed === '~'
-    ? homedir()
-    : trimmed.startsWith('~/')
-      ? join(homedir(), trimmed.slice(2))
-      : trimmed;
-  return resolve(resolveHermesHome(), expanded);
-}
-
-// Registers OLYMPUS_DISPATCH_HOME/skills as a Hermes `skills.external_dirs` entry so agent
-// runs load installed skills. Idempotent — called once at server boot; installs
-// drop skills into the already-registered dir and need no further config write.
-export async function ensureHermesExternalSkillsDir(): Promise<void> {
-  const skillsDir = resolveMinionsSkillsDir();
-  const hermesHome = resolveHermesHome();
-  const configPath = join(hermesHome, 'config.yaml');
-  await mkdir(hermesHome, { recursive: true });
-
-  const existing = await readFile(configPath, 'utf8').catch(() => '');
-  const doc = parseDocument(existing);
-  const data = (doc.toJS() ?? {}) as { skills?: unknown };
-  const skillsValue = data.skills;
-  const rawDirs = isRecord(skillsValue) ? skillsValue.external_dirs : undefined;
-  const existingDirs = Array.isArray(rawDirs)
-    ? rawDirs.filter((dir): dir is string => typeof dir === 'string')
-    : typeof rawDirs === 'string'
-      ? [rawDirs]
-      : [];
-
-  if (existingDirs.some((dir) => resolveConfigDir(dir) === resolve(skillsDir))) {
-    return;
-  }
-
-  // If `skills:` exists but is not a mapping (a bare `skills:` parses to null, or
-  // it could be a scalar/list), `setIn(['skills', 'external_dirs'], …)` throws
-  // "Expected YAML collection at skills". Drop the offending node so setIn can
-  // recreate the mapping; a real mapping is left intact, preserving sibling keys.
-  if (skillsValue !== undefined && !isRecord(skillsValue)) {
-    doc.deleteIn(['skills']);
-  }
-
-  doc.setIn(['skills', 'external_dirs'], [...existingDirs, displayHomePath(skillsDir)]);
-  await writeFile(configPath, doc.toString(), 'utf8');
-}
-
 async function writeSkillFiles(destination: string, files: Map<string, Buffer>, sidecar: MinionsSkillSidecar): Promise<void> {
   const parent = dirname(destination);
   const tempDir = join(parent, `.${basename(destination)}.tmp-${Date.now()}-${randomUUID()}`);
@@ -765,7 +710,7 @@ async function installClawHubSkill(slug: string, ownerHandle: string | undefined
   installed: boolean;
   alreadyInstalled: boolean;
 }> {
-  const skillsRoot = resolveMinionsSkillsDir();
+  const skillsRoot = resolveHermesSkillsDir();
   const destination = ownerHandle
     ? resolve(skillsRoot, 'clawhub', ownerHandle, slug)
     : resolve(skillsRoot, 'clawhub', slug);
@@ -834,7 +779,7 @@ async function importLocalSkill(uploadedFiles: Express.Multer.File[], relativePa
   const frontmatter = parseFrontmatter(skillContent.toString('utf8'));
   const displayName = frontmatter.name || prepared.rootName || 'Local skill';
   const summary = frontmatter.description || '';
-  const skillsRoot = resolveMinionsSkillsDir();
+  const skillsRoot = resolveHermesSkillsDir();
   const baseSlug = slugifySkillDirectoryName(displayName, 'skill');
   const destination = await uniqueLocalSkillDestination(skillsRoot, baseSlug);
 
@@ -986,7 +931,7 @@ skillsRouter.get('/:id/content', async (req, res) => {
       throw new RouteError(404, `Skill '${req.params.id}' is not installed`, 'SKILL_NOT_FOUND');
     }
 
-    const root = resolveMinionsSkillsDir();
+    const root = resolveHermesSkillsDir();
     const [skill, content] = await Promise.all([
       readInstalledSkill(skillFile, root),
       readFile(skillFile, 'utf8'),
