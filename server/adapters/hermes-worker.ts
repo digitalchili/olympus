@@ -19,7 +19,9 @@ import type { AgentAdapter, AgentRunOptions, AgentRunSettings, StreamEvent } fro
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveMinionsWorkspaceDir } from '../paths.js';
 
-const WORKER_READY_TIMEOUT_MS = 10_000;
+// A cold Hermes Python worker can spend tens of seconds importing providers and state.
+// Keep the UI responsive after startup rather than killing a healthy worker prematurely.
+const WORKER_READY_TIMEOUT_MS = 60_000;
 const WORKER_INTERRUPT_TIMEOUT_MS = 10_000;
 
 type WorkerRequestInput = WorkerRequest extends infer Request
