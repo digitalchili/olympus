@@ -243,6 +243,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
   const [outgoingRevealActive, setOutgoingRevealActive] = useState(false);
   const [interruptInFlight, setInterruptInFlight] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const {
     pendingFiles,
     dragOver,
@@ -357,6 +358,29 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
   useEffect(() => {
     if (!configPending) inputRef.current?.focus();
   }, [configPending, taskId]);
+
+  const updateJumpToBottomVisibility = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    setShowJumpToBottom(container.scrollHeight - container.scrollTop - container.clientHeight > 96);
+  }, []);
+
+  const jumpToBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    updateJumpToBottomVisibility();
+    container.addEventListener('scroll', updateJumpToBottomVisibility, { passive: true });
+    return () => container.removeEventListener('scroll', updateJumpToBottomVisibility);
+  }, [taskId, updateJumpToBottomVisibility]);
+
+  useLayoutEffect(() => {
+    updateJumpToBottomVisibility();
+  }, [messages.length, isStreaming, updateJumpToBottomVisibility]);
 
   useLayoutEffect(() => {
     if (loadedTaskId !== taskId || didInitialScrollRef.current) return;
@@ -685,6 +709,17 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
             {outgoingRevealActive && <div aria-hidden="true" className="h-[45vh] sm:h-[52vh]" />}
           </div>
         </div>
+        {showJumpToBottom && (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            aria-label="Jump to latest message"
+            title="Jump to latest message"
+            className="absolute right-5 bottom-4 z-10 rounded-full border border-zinc-200/90 bg-white/90 p-2 text-zinc-500 shadow-sm backdrop-blur transition hover:bg-white hover:text-zinc-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700/90 dark:bg-zinc-800/90 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:right-8"
+          >
+            <ChevronDown size={18} strokeWidth={2.5} />
+          </button>
+        )}
       </div>
 
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
