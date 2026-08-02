@@ -1584,7 +1584,8 @@ def _handle_request(request: dict[str, Any]) -> None:
     request_type = request.get("type")
     try:
         if request_type == "health":
-            _warm_agent()
+            # Keep startup lightweight: importing AIAgent can be slow on a cold macOS
+            # launchd process. Agent imports happen lazily for agent-dependent requests.
             _result(request_id, {
                 "ok": True,
                 "agentDir": str(_AGENT_DIR) if _AGENT_DIR else None,
