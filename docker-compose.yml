@@ -1,0 +1,56 @@
+services:
+  olympus-dispatch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Dokploy records this immutable commit-derived tag in its persisted .env.
+    image: olympus-dispatch:${OLYMPUS_DISPATCH_IMAGE_TAG:?set OLYMPUS_DISPATCH_IMAGE_TAG}
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "6969"
+      HOME: /opt/data/home
+      HERMES_HOME: /opt/data
+      HERMES_AGENT_DIR: /opt/hermes
+      HERMES_PYTHON: /opt/hermes/.venv/bin/python
+      HERMES_DISABLE_LAZY_INSTALLS: "1"
+      HERMES_WRITE_SAFE_ROOT: /opt/data
+      OLYMPUS_DISPATCH_HOME: /opt/data/olympus-dispatch
+      OLYMPUS_DISPATCH_PROJECT_ROOT: /opt/data/olympus-dispatch/workspace
+    # The sole listener is explicitly bound to the host's Tailscale address.
+    # No Traefik domain or public host-port is configured for this private UI.
+    ports:
+      - "${OLYMPUS_DISPATCH_BIND_ADDRESS:?set OLYMPUS_DISPATCH_BIND_ADDRESS}:${OLYMPUS_DISPATCH_PORT:-19696}:6969"
+    volumes:
+      # Olympus state is separate from Dokploy's regenerable code/ checkout.
+      - olympus_dispatch_state:/opt/data/olympus-dispatch
+      # Narrow integration boundary: the existing central Hermes runtime state.
+      # It is required because Olympus directly imports AIAgent and SessionDB.
+      - hermes_data:/opt/data
+    networks:
+      - somboon_runtime
+    user: "10000:10000"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+volumes:
+  olympus_dispatch_state:
+    external: true
+    name: ${OLYMPUS_DISPATCH_STATE_VOLUME:?set OLYMPUS_DISPATCH_STATE_VOLUME}
+  hermes_data:
+    external: true
+    name: ${HERMES_DATA_VOLUME:?set HERMES_DATA_VOLUME}
+
+networks:
+  somboon_runtime:
+    external: true
+    name: ${SOMBOON_RUNTIME_NETWORK:?set SOMBOON_RUNTIME_NETWORK}

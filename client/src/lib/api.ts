@@ -107,6 +107,19 @@ export function createTask(
   });
 }
 
+export interface TaskSearchResult {
+  taskId: string;
+  taskTitle: string;
+  taskStatus: TaskStatus;
+  role: 'task' | 'user' | 'assistant' | 'system' | 'tool';
+  snippet: string;
+  timestamp: number;
+}
+
+export function searchTasks(query: string) {
+  return request<{ results: TaskSearchResult[] }>(`/search?q=${encodeURIComponent(query)}`);
+}
+
 export function fetchMessages(taskId: string) {
   return request<{ messages: TaskMessage[]; context?: ContextUsage | null }>(`/tasks/${taskId}/messages`);
 }
@@ -121,6 +134,50 @@ export function fetchHealth() {
 
 export function fetchAppVersion() {
   return request<AppVersion>('/version');
+}
+
+export interface InstallationSettings {
+  name: string;
+}
+
+export function fetchInstallationSettings() {
+  return request<InstallationSettings>('/installation');
+}
+
+export function updateInstallationName(name: string) {
+  return request<InstallationSettings>('/installation', {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export interface HermesProfile {
+  name: string;
+  active: boolean;
+  description: string;
+  model: string | null;
+  provider: string | null;
+  skillCount: number;
+  skills: string[];
+  hasSoul: boolean;
+  soulPreview: string | null;
+}
+
+export function fetchHermesProfiles() {
+  return request<{ profiles: HermesProfile[] }>('/profiles');
+}
+
+export function createHermesProfile(input: { name: string; description?: string }) {
+  return request<{ profile: HermesProfile }>('/profiles', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteHermesProfile(name: string) {
+  return request<{ ok: boolean; name: string }>(`/profiles/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
 }
 
 export function fetchAgentDefaults() {

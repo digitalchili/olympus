@@ -1,0 +1,17 @@
+.git
+.github
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.log
+coverage
+server/workers/__pycache__
+__pycache__
+.pytest_cache
+.DS_Store
+screenshots

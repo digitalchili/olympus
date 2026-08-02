@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
+import { useState } from 'react';
 import { Header, HeaderProvider } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { Board } from './components/Board';
@@ -8,6 +9,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { ScheduledTasksPage } from './components/ScheduledTasksPage';
 import { SkillsPage } from './components/SkillsPage';
 import { FileBrowserPage } from './components/FileBrowserPage';
+import { TaskSearchDialog } from './components/TaskSearchDialog';
 import { Toaster } from 'sonner';
 import { useTasks } from './hooks/useTasks';
 import { useTheme } from './hooks/useTheme';
@@ -15,10 +17,11 @@ import { useTheme } from './hooks/useTheme';
 function AppShell() {
   useTasks();
   const { theme } = useTheme();
+  const [searchOpen, setSearchOpen] = useState(false);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-surface dark:bg-zinc-900 sm:h-screen sm:bg-sidebar dark:sm:bg-zinc-950">
-      <Sidebar />
+      <Sidebar onOpenSearch={() => setSearchOpen(true)} />
       <main className="flex flex-1 flex-col min-w-0 overflow-hidden bg-surface pb-[calc(3.75rem_+_env(safe-area-inset-bottom))] dark:bg-zinc-900 sm:m-2 sm:ml-0 sm:rounded-xl sm:border sm:border-zinc-200 sm:pb-0 sm:shadow-sm sm:dark:border-zinc-800">
         <HeaderProvider>
           <Header />
@@ -40,6 +43,7 @@ function AppShell() {
           </Routes>
         </HeaderProvider>
       </main>
+      <TaskSearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
       <Toaster
         theme={theme === 'system' ? 'system' : theme}
         position="top-center"

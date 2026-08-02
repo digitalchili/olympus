@@ -1,16 +1,23 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder } from 'lucide-react';
+import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search } from 'lucide-react';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
+import { fetchInstallationSettings } from '../lib/api';
 
 const isMac = /Mac/.test(navigator.userAgent);
 
-export function Sidebar() {
+export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const installationName = useStore((s) => s.installationName);
+  const setInstallationName = useStore((s) => s.setInstallationName);
+
+  useEffect(() => {
+    fetchInstallationSettings().then(({ name }) => setInstallationName(name)).catch(() => undefined);
+  }, [setInstallationName]);
 
   useEffect(() => {
     let chordKey: string | null = null;
@@ -18,6 +25,12 @@ export function Sidebar() {
 
     function handleKeyDown(e: KeyboardEvent) {
       const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        onOpenSearch();
+        return;
+      }
+
       if (mod && e.shiftKey && e.key.toLowerCase() === 'o') {
         e.preventDefault();
         navigate('/tasks/new');
@@ -51,7 +64,7 @@ export function Sidebar() {
       window.removeEventListener('keydown', handleKeyDown);
       if (chordTimeout) clearTimeout(chordTimeout);
     };
-  }, [navigate]);
+  }, [navigate, onOpenSearch]);
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/' || (location.pathname.startsWith('/tasks/') && location.pathname !== '/tasks/new');
@@ -77,10 +90,11 @@ export function Sidebar() {
             <PanelLeft size={20} />
           </button>
         ) : (
-          <div className="flex items-center justify-between w-full px-2">
-            <button onClick={() => navigate('/')} className="shrink-0" title="Home" aria-label="Home">
-              <img src="/logo-black.png" alt="Olympus Dispatch" className="h-[25px] w-[34px] object-contain dark:hidden" />
-              <img src="/logo-white.png" alt="" className="hidden h-[25px] w-[34px] object-contain dark:block" />
+          <div className="flex items-center justify-between w-full gap-2 px-2">
+            <button onClick={() => navigate('/')} className="flex min-w-0 items-center gap-2" title={`Home · ${installationName}`} aria-label={`Home · ${installationName}`}>
+              <img src="/logo-black.png" alt="Olympus Dispatch" className="h-[25px] w-[34px] shrink-0 object-contain dark:hidden" />
+              <img src="/logo-white.png" alt="" className="hidden h-[25px] w-[34px] shrink-0 object-contain dark:block" />
+              <span className="max-w-[112px] truncate text-[clamp(0.7rem,1vw,0.875rem)] font-semibold leading-tight text-zinc-700 dark:text-zinc-200">{installationName}</span>
             </button>
             <button
               onClick={toggleSidebar}
@@ -111,6 +125,16 @@ export function Sidebar() {
             collapsed={desktopCollapsed}
             shortcut={isMac ? '⇧⌘O' : 'Ctrl+⇧+O'}
           />
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            title={`Search tasks (${isMac ? '⌘K' : 'Ctrl+K'})`}
+            className={`group flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${desktopCollapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'}`}
+          >
+            <Search size={18} />
+            <span className={desktopCollapsed ? 'sm:hidden' : ''}>Search</span>
+            {!desktopCollapsed && <span className="hidden ml-auto text-[10px] text-zinc-400 sm:inline">{isMac ? '⌘K' : 'Ctrl+K'}</span>}
+          </button>
           <SidebarLink
             icon={<Columns3 size={18} />}
             label="Tasks"

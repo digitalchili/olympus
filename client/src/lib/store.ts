@@ -6,6 +6,7 @@ interface AppState {
   taskRuns: Map<string, TaskRunState>;
   tasksLoaded: boolean;
   sidebarCollapsed: boolean;
+  installationName: string;
 
   setTasks: (tasks: Task[]) => void;
   upsertTask: (task: Task) => void;
@@ -13,6 +14,7 @@ interface AppState {
   setTaskRuns: (runs: TaskRunState[]) => void;
   setTaskRun: (run: TaskRunState) => void;
   toggleSidebar: () => void;
+  setInstallationName: (name: string) => void;
 }
 
 function tasksEqual(a: Task, b: Task): boolean {
@@ -40,6 +42,7 @@ export const useStore = create<AppState>((set) => ({
   taskRuns: new Map<string, TaskRunState>(),
   tasksLoaded: false,
   sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
+  installationName: 'Hermes',
 
   setTasks: (tasks) => set({ tasks, tasksLoaded: true }),
 
@@ -98,6 +101,8 @@ export const useStore = create<AppState>((set) => ({
       localStorage.setItem('sidebarCollapsed', String(next));
       return { sidebarCollapsed: next };
     }),
+
+  setInstallationName: (installationName) => set({ installationName }),
 }));
 
 export async function optimisticMoveTask(

@@ -82,6 +82,7 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
   } = useDraggable({ id: task.id, data: { task } });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const isUnseen = hasUnseenAgentResponse(task);
+  const isUnseenReview = isUnseen && task.status === 'in_review';
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -109,12 +110,16 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
       <div
         ref={setNodeRef}
         onContextMenu={handleContextMenu}
-        className={`group/card relative rounded-lg bg-white dark:bg-zinc-900 border cursor-grab active:cursor-grabbing select-none transition-[opacity,box-shadow,border-color] duration-150 ${
+        className={`group/card relative rounded-lg border cursor-grab active:cursor-grabbing select-none transition-[background-color,opacity,box-shadow,border-color] duration-150 ${
+          isUnseenReview ? 'bg-violet-50/80 dark:bg-violet-950/25' : 'bg-white dark:bg-zinc-900'
+        } ${
           isDragging
             ? 'opacity-30 border-dashed border-zinc-300 dark:border-zinc-600 shadow-none'
-            : isUnseen
-              ? 'border-zinc-400 dark:border-zinc-600 shadow-lg hover:shadow-xl hover:border-zinc-400 dark:hover:border-zinc-500'
-              : 'border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
+            : isUnseenReview
+              ? 'border-violet-200 dark:border-violet-800/70 shadow-md hover:shadow-lg hover:border-violet-300 dark:hover:border-violet-700'
+              : isUnseen
+                ? 'border-zinc-400 dark:border-zinc-600 shadow-lg hover:shadow-xl hover:border-zinc-400 dark:hover:border-zinc-500'
+                : 'border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
         }`}
       >
         <Link

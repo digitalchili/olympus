@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bot, Sun, Moon, Monitor, Info, Volume2, VolumeX, Play } from 'lucide-react';
+import { Sun, Moon, Monitor, Info, Volume2, VolumeX, Play } from 'lucide-react';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { useSoundOnComplete } from '../hooks/useSoundOnComplete';
 import { useAgentConfig } from '../hooks/useAgentConfig';
-import { fetchAppVersion, updateAgentDefaults } from '../lib/api';
+import { fetchAppVersion, updateAgentDefaults, updateInstallationName } from '../lib/api';
+import { useStore } from '../lib/store';
 import type { AppVersion } from '@shared/types';
 import { toErrorMessage } from '../lib/format';
+import { ProfilesSettings } from './ProfilesSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
 import {
   REASONING_EFFORTS,
@@ -53,6 +55,11 @@ function SegmentedGroup<T>({ options, value, onChange }: {
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { enabled: soundEnabled, setEnabled: setSoundEnabled, playPreview } = useSoundOnComplete();
+  const installationName = useStore((state) => state.installationName);
+  const setInstallationName = useStore((state) => state.setInstallationName);
+  const [nameDraft, setNameDraft] = useState(installationName);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
 
   const { defaults: agentDefaults, modelGroups, isLoading: isLoadingDefaults, replaceDefaults } = useAgentConfig();
   const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
@@ -96,16 +103,52 @@ export function SettingsPage() {
     }
   }, [replaceDefaults]);
 
+  useEffect(() => {
+    setNameDraft(installationName);
+  }, [installationName]);
+
+  const saveInstallationName = useCallback(async () => {
+    const requestedName = nameDraft.trim() || 'Hermes';
+    if (requestedName === installationName) {
+      setNameDraft(requestedName);
+      return;
+    }
+    setSavingName(true);
+    setNameError(null);
+    try {
+      const { name } = await updateInstallationName(requestedName);
+      setInstallationName(name);
+      setNameDraft(name);
+    } catch (error) {
+      setNameError(toErrorMessage(error, 'Failed to save name'));
+    } finally {
+      setSavingName(false);
+    }
+  }, [installationName, nameDraft, setInstallationName]);
+
   return (
     <div className="flex-1 p-6 overflow-y-auto">
       <div className="max-w-2xl space-y-5">
         <div>
-          <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500 mb-2">Adapter type</h2>
-          <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-1 gap-1">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100">
-              <Bot size={14} />
-              Hermes
-            </div>
+          <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500 mb-2">Name</h2>
+          <div className="max-w-sm">
+            <input
+              value={nameDraft}
+              maxLength={80}
+              onChange={(event) => { setNameDraft(event.target.value); setNameError(null); }}
+              onBlur={saveInstallationName}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur();
+                }
+              }}
+              aria-label="Installation name"
+              placeholder="Hermes"
+              className="h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-800 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-800"
+            />
+            <p className={`mt-1.5 text-xs ${nameError ? 'text-red-500' : 'text-zinc-500 dark:text-zinc-400'}`}>
+              {nameError ?? (savingName ? 'Saving…' : 'Shown beside the logo for this Hermes installation.')}
+            </p>
           </div>
         </div>
 
@@ -165,6 +208,8 @@ export function SettingsPage() {
             </select>
           </div>
         </section>
+
+        <ProfilesSettings />
 
         <div>
           <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500 mb-2">Theme</h2>

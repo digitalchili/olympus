@@ -7,6 +7,10 @@ import { createAgentRouter, createTaskAgentSettingsRouter } from './routes/agent
 import { createScheduledTasksRouter } from './routes/scheduled-tasks.js';
 import { skillsRouter } from './routes/skills.js';
 import { filesRouter } from './routes/files.js';
+import { searchRouter } from './routes/search.js';
+import { createInstallationRouter } from './routes/installation.js';
+import { createUpdatesRouter } from './routes/updates.js';
+import { profilesRouter } from './routes/profiles.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { initSSE, addClient, sendEvent } from './events.js';
@@ -36,6 +40,7 @@ app.get('/api/events', (req, res) => {
 
 app.use('/api/files', express.json({ limit: '25mb' }), filesRouter);
 app.use('/api/project-folders', projectFoldersRouter);
+app.use('/api/search', searchRouter);
 
 app.use(express.json());
 
@@ -43,6 +48,9 @@ app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
+app.use('/api/installation', createInstallationRouter());
+app.use('/api/updates', createUpdatesRouter());
+app.use('/api/profiles', profilesRouter);
 app.use('/api/scheduled-tasks', createScheduledTasksRouter(adapter));
 app.use('/api/skills', skillsRouter);
 
