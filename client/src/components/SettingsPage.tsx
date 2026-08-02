@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Settings, Bot, Sun, Moon, Monitor, Info, Volume2, VolumeX, Play } from 'lucide-react';
+import { Bot, Sun, Moon, Monitor, Info, Volume2, VolumeX, Play } from 'lucide-react';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { useSoundOnComplete } from '../hooks/useSoundOnComplete';
 import { useAgentConfig } from '../hooks/useAgentConfig';
@@ -105,11 +105,6 @@ export function SettingsPage() {
             <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100">
               <Bot size={14} />
               Hermes
-            </div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-zinc-400 dark:text-zinc-500 cursor-not-allowed">
-              <Settings size={14} />
-              OpenClaw
-              <span className="ml-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500">Soon</span>
             </div>
           </div>
         </div>
