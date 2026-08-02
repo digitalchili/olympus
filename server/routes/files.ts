@@ -16,7 +16,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import archiver from 'archiver';
 import multer from 'multer';
@@ -132,6 +132,25 @@ filesRouter.get('/read', async (req, res) => {
     });
   } catch (error) {
     sendFileError(res, error, 'Failed to read file');
+  }
+});
+
+filesRouter.get('/preview', async (req, res) => {
+  try {
+    const targetPath = resolveRequiredPath(req.query.path);
+    const targetStats = await stat(targetPath);
+    if (!targetStats.isFile()) {
+      throw new FileRouteError(400, 'Path is not a previewable file', 'NOT_PREVIEWABLE');
+    }
+    if (!isPreviewableImage(targetPath)) {
+      throw new FileRouteError(415, 'Only image files can be previewed inline', 'UNSUPPORTED_PREVIEW');
+    }
+
+    res.sendFile(targetPath, (previewError) => {
+      if (previewError) sendStreamingFileError(res, previewError, 'Failed to preview file');
+    });
+  } catch (error) {
+    sendFileError(res, error, 'Failed to preview file');
   }
 });
 
@@ -555,6 +574,12 @@ function compareEntries(a: FileEntry, b: FileEntry): number {
   const typeDifference = (ENTRY_RANK[a.type] ?? 3) - (ENTRY_RANK[b.type] ?? 3);
   if (typeDifference !== 0) return typeDifference;
   return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+}
+
+const PREVIEWABLE_IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
+
+function isPreviewableImage(path: string): boolean {
+  return PREVIEWABLE_IMAGE_EXTENSIONS.has(extname(path).toLowerCase());
 }
 
 async function looksBinary(filePath: string, size: number): Promise<boolean> {

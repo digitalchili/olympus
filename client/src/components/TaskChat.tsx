@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, Fragment } from 'react';
 import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText, FilePenLine, Globe, Code, Wrench, X, Target, Square } from 'lucide-react';
 import { InputToolbar, ContextRing } from './InputToolbar';
-import { AttachButton, AttachDropOverlay, AttachmentTray, UploadErrorBar } from './ChatAttachments';
+import { AttachButton, AttachDropOverlay, AttachmentTray, MessageAttachmentCards, UploadErrorBar } from './ChatAttachments';
 import { MarkdownContent } from './MarkdownContent';
 import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
@@ -9,7 +9,7 @@ import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
 import { ApiError, compactTask, interruptTask, type AgentRunSettings } from '../lib/api';
 import { useStore } from '../lib/store';
-import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, toErrorMessage } from '../lib/format';
+import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import type { ChatRunMode, GoalStateSnapshot } from '@shared/types';
 
@@ -552,12 +552,14 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
 
               if (msg.role === 'user') {
                 const isLatestUserMessage = msg.id === latestUserMessageId;
+                const { text, filePaths } = splitAttachmentMessage(msg.content);
                 return (
                   <Fragment key={msg.id}>
                     {compactDivider}
                     <div ref={isLatestUserMessage ? latestUserMessageRef : undefined} className="flex min-w-0 justify-end">
                       <div className="min-w-0 max-w-[92%] overflow-hidden rounded-2xl bg-zinc-100 px-3.5 py-2.5 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap break-words dark:bg-zinc-800 dark:text-zinc-100 sm:max-w-[85%] sm:px-4">
-                        {msg.content}
+                        {text && <div>{text}</div>}
+                        <MessageAttachmentCards paths={filePaths} />
                       </div>
                     </div>
                   </Fragment>

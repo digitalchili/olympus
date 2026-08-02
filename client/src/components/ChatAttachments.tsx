@@ -1,5 +1,6 @@
 import { useRef } from 'react';
-import { FileText, Loader2, Paperclip, RotateCcw, X } from 'lucide-react';
+import { Download, FileText, Image as ImageIcon, Loader2, Paperclip, RotateCcw, X } from 'lucide-react';
+import { fileDownloadUrl, filePreviewUrl } from '../lib/api';
 import { formatBytes } from '../lib/format';
 import type { PendingFile } from '../hooks/useFileAttachments';
 
@@ -66,6 +67,55 @@ export function AttachmentTray({
               <X size={12} />
             </button>
           </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const IMAGE_EXTENSION = /\.(avif|gif|jpe?g|png|svg|webp)$/i;
+const PDF_EXTENSION = /\.pdf$/i;
+
+function attachmentName(path: string): string {
+  const name = path.split('/').pop() || 'Attachment';
+  return name.replace(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}-/i, '');
+}
+
+/** Attachment cards for persisted messages. File paths remain in the stored text
+ * for Hermes, but are replaced in the chat UI with a useful visual reference. */
+export function MessageAttachmentCards({ paths }: { paths: string[] }) {
+  if (paths.length === 0) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {paths.map((path) => {
+        const name = attachmentName(path);
+        const isImage = IMAGE_EXTENSION.test(name);
+        const isPdf = PDF_EXTENSION.test(name);
+        return (
+          <a
+            key={path}
+            href={fileDownloadUrl(path)}
+            download={name}
+            title={`Download ${name}`}
+            className="group flex w-36 overflow-hidden rounded-lg border border-zinc-200 bg-white text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
+          >
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden bg-zinc-100 dark:bg-zinc-800">
+              {isImage ? (
+                <img src={filePreviewUrl(path)} alt="" className="h-full w-full object-cover" />
+              ) : isPdf ? (
+                <FileText size={28} className="text-red-400" />
+              ) : (
+                <ImageIcon size={24} className="text-zinc-400 dark:text-zinc-500" />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col justify-between p-2">
+              <span className="line-clamp-2 text-[11px] font-medium leading-4 text-zinc-700 dark:text-zinc-200">{name}</span>
+              <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-zinc-400 dark:text-zinc-500">
+                <Download size={10} /> {isPdf ? 'PDF' : isImage ? 'Image' : 'File'}
+              </span>
+            </div>
+          </a>
         );
       })}
     </div>

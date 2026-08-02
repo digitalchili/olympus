@@ -34,6 +34,22 @@ export function formatBytes(value: number | null): string {
   return `${size >= 10 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+/**
+ * Splits the file-path footer that is retained in a user message for Hermes.
+ * The UI renders those paths as attachment cards instead of exposing them.
+ */
+export function splitAttachmentMessage(content: string): { text: string; filePaths: string[] } {
+  const match = /\n\n\[Attached files:\n([\s\S]*?)\]$/.exec(content);
+  if (!match) return { text: content, filePaths: [] };
+
+  const filePaths = match[1]
+    .split('\n')
+    .map((line) => line.startsWith('- ') ? line.slice(2).trim() : '')
+    .filter(Boolean);
+  const text = content.slice(0, match.index).trim();
+  return { text: text === 'Please review these files.' ? '' : text, filePaths };
+}
+
 /** Appends uploaded file paths to a chat message so the agent can read them from disk. */
 export function attachmentMessage(text: string, filePaths: string[]): string {
   if (filePaths.length === 0) return text;
