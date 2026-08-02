@@ -1,6 +1,5 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
-import cors from 'cors';
 import { tasksRouter } from './routes/tasks.js';
 import { chatRouter } from './routes/chat.js';
 import { createAgentRouter, createTaskAgentSettingsRouter } from './routes/agent.js';
@@ -18,8 +17,6 @@ import { getRunStatuses } from './live-chat.js';
 import { getAppVersion } from './version.js';
 
 const app = express();
-
-app.use(cors());
 
 const adapter = new HermesWorkerAdapter();
 

@@ -21,7 +21,7 @@ services:
     # The sole listener is explicitly bound to the host's Tailscale address.
     # No Traefik domain or public host-port is configured for this private UI.
     ports:
-      - "${OLYMPUS_DISPATCH_BIND_ADDRESS:?set OLYMPUS_DISPATCH_BIND_ADDRESS}:${OLYMPUS_DISPATCH_PORT:-19696}:6969"
+      - "${OLYMPUS_DISPATCH_BIND_ADDRESS:?set OLYMPUS_DISPATCH_BIND_ADDRESS}:${OLYMPUS_DISPATCH_PORT:-6969}:6969"
     volumes:
       # Olympus state is separate from Dokploy's regenerable code/ checkout.
       - olympus_dispatch_state:/opt/data/olympus-dispatch
