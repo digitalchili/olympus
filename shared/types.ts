@@ -20,11 +20,32 @@ export interface AgentRunSettings {
   mode?: ChatRunMode;
 }
 
+export const DEFAULT_PROFILE_NAME = 'default';
+export const SOM_WINE_PROFILE_NAME = 'som-spirithouse-wine';
+
+export const TASK_HANDOFF_STATES = ['created', 'running', 'completed', 'failed', 'cancelled'] as const;
+export type TaskHandoffState = (typeof TASK_HANDOFF_STATES)[number];
+export const TASK_ROUTING_SOURCES = ['manual', 'automatic'] as const;
+export type TaskRoutingSource = (typeof TASK_ROUTING_SOURCES)[number];
+
+export type RemoteProfileId = 'som' | 'somchai' | 'somboon';
+
+export interface RemoteProfilePublic {
+  id: RemoteProfileId;
+  label: string;
+  description: string;
+  icon: string;
+  available: boolean;
+  remoteProfile: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   description: string | null;
   status: TaskStatus;
+  profile_name: string | null;
+  routing_source: TaskRoutingSource | null;
   agent_model: string | null;
   agent_provider: string | null;
   reasoning_effort: ReasoningEffort | null;
@@ -35,6 +56,25 @@ export interface Task {
   last_viewed_at: number | null;
   last_context_used_tokens: number | null;
   last_context_window_tokens: number | null;
+  handoff_parent_task_id?: string | null;
+  handoff_child_task_id?: string | null;
+  handoff_state?: TaskHandoffState | null;
+  handoff_route?: string | null;
+}
+
+export interface TaskHandoff {
+  id: string;
+  parent_task_id: string;
+  child_task_id: string;
+  route: string;
+  state: TaskHandoffState;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TaskHandoffWithTasks extends TaskHandoff {
+  parent_task: Task | null;
+  child_task: Task | null;
 }
 
 export interface TaskMessage {

@@ -1,7 +1,7 @@
 import { Router, type Response } from 'express';
 import { errorCode, isRecord, toErrorMessage } from '../errors.js';
 import type { ScheduledTask, ScheduledTaskInput } from '../../shared/types.js';
-import type { HermesWorkerAdapter } from '../adapters/hermes-worker.js';
+import type { AgentAdapter } from '../adapters/types.js';
 import { listScheduledTaskRuns, getScheduledTaskRunContent } from '../scheduled-tasks/runs.js';
 
 const SCHEDULED_TASKS_LIMIT = 100;
@@ -48,7 +48,7 @@ function workerErrorFallback(error: unknown): string {
   return workerStatus(error) === 400 ? 'Invalid scheduled task' : 'Hermes scheduled tasks worker unavailable';
 }
 
-export function createScheduledTasksRouter(adapter: HermesWorkerAdapter): Router {
+export function createScheduledTasksRouter(adapter: AgentAdapter): Router {
   const router = Router();
 
   router.get('/', async (req, res) => {

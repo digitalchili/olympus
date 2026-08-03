@@ -27,5 +27,7 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 
 ensureColumn('tasks', 'agent_provider', 'TEXT');
 ensureColumn('tasks', 'workdir', 'TEXT');
+ensureColumn('tasks', 'profile_name', 'TEXT');
+ensureColumn('tasks', 'routing_source', 'TEXT');
 
 export default db;

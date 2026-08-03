@@ -12,13 +12,14 @@ import { createUpdatesRouter } from './routes/updates.js';
 import { profilesRouter } from './routes/profiles.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
+import { RoutingAgentAdapter } from './adapters/routing.js';
 import { initSSE, addClient, sendEvent } from './events.js';
 import { getRunStatuses } from './live-chat.js';
 import { getAppVersion } from './version.js';
 
 const app = express();
 
-const adapter = new HermesWorkerAdapter();
+const adapter = new RoutingAgentAdapter(new HermesWorkerAdapter());
 
 app.get('/api/health', async (_req, res) => {
   const hermes = await adapter.healthCheck();

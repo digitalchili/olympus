@@ -5,6 +5,7 @@ import {
   type TaskStatus,
   type ReasoningEffort,
   type ContextUsage,
+  type TaskRoutingSource,
 } from '../../shared/types.js';
 
 const stmtAllTasks = db.prepare('SELECT * FROM tasks ORDER BY updated_at DESC');
@@ -12,12 +13,12 @@ const stmtTasksByStatus = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER
 const stmtGetTask = db.prepare('SELECT * FROM tasks WHERE id = ?');
 const stmtInsertTask = db.prepare(`
   INSERT INTO tasks (
-    id, title, description, status, agent_model, agent_provider, reasoning_effort, workdir,
+    id, title, description, status, profile_name, routing_source, agent_model, agent_provider, reasoning_effort, workdir,
     created_at, updated_at, last_agent_response_at, last_viewed_at,
     last_context_used_tokens, last_context_window_tokens
   )
   VALUES (
-    @id, @title, @description, @status, @agent_model, @agent_provider, @reasoning_effort, @workdir,
+    @id, @title, @description, @status, @profile_name, @routing_source, @agent_model, @agent_provider, @reasoning_effort, @workdir,
     @created_at, @updated_at, @last_agent_response_at, @last_viewed_at,
     @last_context_used_tokens, @last_context_window_tokens
   )
@@ -47,6 +48,8 @@ export function insertTask(task: {
   agent_provider?: string | null;
   reasoning_effort?: ReasoningEffort | null;
   workdir?: string | null;
+  profile_name?: string | null;
+  routing_source?: TaskRoutingSource | null;
   last_agent_response_at?: number | null;
 }): Task {
   const id = uuid();
@@ -56,6 +59,8 @@ export function insertTask(task: {
     title: task.title,
     description: task.description ?? null,
     status: task.status,
+    profile_name: task.profile_name ?? null,
+    routing_source: task.routing_source ?? null,
     agent_model: task.agent_model ?? null,
     agent_provider: task.agent_provider ?? null,
     reasoning_effort: task.reasoning_effort ?? null,
@@ -75,6 +80,8 @@ const ALLOWED_UPDATE_FIELDS = new Set<string>([
   'title',
   'description',
   'status',
+  'profile_name',
+  'routing_source',
   'agent_model',
   'agent_provider',
   'reasoning_effort',
@@ -90,6 +97,8 @@ type TaskUpdateFields = Pick<
   | 'title'
   | 'description'
   | 'status'
+  | 'profile_name'
+  | 'routing_source'
   | 'agent_model'
   | 'agent_provider'
   | 'reasoning_effort'

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
 import { adapter } from '../app.js';
 import { broadcast, initSSE } from '../events.js';
@@ -24,10 +24,19 @@ import {
 import { taskRunSettings, parseRunSettingsBody } from '../agent-settings.js';
 import { TASK_AGENT_SYSTEM_PROMPT } from '../prompts/task-agent.js';
 import { isRecord, toErrorMessage } from '../errors.js';
+import { RemoteHermesUnsupportedError } from '../adapters/routing.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, type ChatRunMode, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
+
+function sendAdapterError(res: Response, error: unknown, fallback: string): void {
+  if (error instanceof RemoteHermesUnsupportedError) {
+    res.status(error.status).json({ error: error.message, code: error.code });
+    return;
+  }
+  res.status(503).json({ error: toErrorMessage(error, fallback) });
+}
 
 function hasNoSession(task: Task): boolean {
   if (task.last_agent_response_at !== null) return false;
@@ -68,7 +77,7 @@ chatRouter.get('/:id/messages', async (req, res) => {
     const messages = await adapter.getMessages(task.id, task.id);
     res.json({ messages, context });
   } catch (error) {
-    res.status(503).json({ error: toErrorMessage(error, 'Hermes session history unavailable') });
+    sendAdapterError(res, error, 'Hermes session history unavailable');
   }
 });
 
@@ -81,7 +90,7 @@ chatRouter.get('/:id/session', async (req, res) => {
     const session = await adapter.getSessionMetadata(task.id);
     res.json({ session });
   } catch (error) {
-    res.status(503).json({ error: toErrorMessage(error, 'Hermes session metadata unavailable') });
+    sendAdapterError(res, error, 'Hermes session metadata unavailable');
   }
 });
 
@@ -331,7 +340,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     try {
       goalState = await adapter.setGoal(sessionId, content);
     } catch (error) {
-      return res.status(503).json({ error: toErrorMessage(error, 'Could not set Hermes goal') });
+      return sendAdapterError(res, error, 'Could not set Hermes goal');
     }
 
     const { snapshot, state } = startGoalRun(runTask.id, sessionId, goalState);
@@ -369,7 +378,7 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
     }
     res.json({ interrupted: true });
   } catch (error) {
-    res.status(503).json({ error: toErrorMessage(error, 'Could not stop Hermes run') });
+    sendAdapterError(res, error, 'Could not stop Hermes run');
   }
 });
 
@@ -392,7 +401,7 @@ chatRouter.post('/:id/steer', async (req, res) => {
     const steered = await adapter.steerChat(task.id, content);
     res.json({ steered, queued: !steered });
   } catch (error) {
-    res.status(503).json({ error: toErrorMessage(error, 'Could not steer Hermes run') });
+    sendAdapterError(res, error, 'Could not steer Hermes run');
   }
 });
 
@@ -434,6 +443,10 @@ chatRouter.post('/:id/compact', async (req, res) => {
   } catch (error) {
     const message = toErrorMessage(error, 'Compaction failed');
     completeTaskRun(task.id, snapshot.runId, 'error', ERROR_SNAPSHOT_TTL_MS, { error: message });
+    if (error instanceof RemoteHermesUnsupportedError) {
+      res.status(error.status).json({ error: error.message, code: error.code });
+      return;
+    }
     res.status(503).json({ error: message });
   }
 });

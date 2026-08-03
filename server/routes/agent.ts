@@ -4,7 +4,12 @@ import { isRecord, toErrorMessage } from '../errors.js';
 import { taskRunSettings } from '../agent-settings.js';
 import { REASONING_EFFORTS } from '../../shared/types.js';
 import type { AgentDefaults, Task, TaskAgentSettings, ReasoningEffort } from '../../shared/types.js';
-import type { HermesWorkerAdapter } from '../adapters/hermes-worker.js';
+
+interface AgentSettingsAdapter {
+  getDefaults(): Promise<AgentDefaults>;
+  setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }): Promise<AgentDefaults>;
+  getModels(): Promise<unknown>;
+}
 
 const FALLBACK_DEFAULTS: AgentDefaults = {
   provider: null,
@@ -15,7 +20,7 @@ const FALLBACK_DEFAULTS: AgentDefaults = {
   showReasoning: true,
 };
 
-async function defaultsForSettings(adapter: HermesWorkerAdapter): Promise<AgentDefaults> {
+async function defaultsForSettings(adapter: AgentSettingsAdapter): Promise<AgentDefaults> {
   try {
     return await adapter.getDefaults();
   } catch {
@@ -40,7 +45,7 @@ function buildTaskSettings(task: Task, defaults: AgentDefaults): TaskAgentSettin
   };
 }
 
-export function createAgentRouter(adapter: HermesWorkerAdapter): Router {
+export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
 
   router.get('/defaults', async (_req, res) => {
@@ -101,7 +106,7 @@ export function createAgentRouter(adapter: HermesWorkerAdapter): Router {
   return router;
 }
 
-export function createTaskAgentSettingsRouter(adapter: HermesWorkerAdapter): Router {
+export function createTaskAgentSettingsRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
 
   router.get('/:id/agent-settings', async (req, res) => {

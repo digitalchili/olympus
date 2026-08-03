@@ -6,6 +6,7 @@ import type { Task, TaskRunState } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
 import { isActiveRun } from '../lib/store';
 import { hasUnseenAgentResponse } from '../lib/taskState';
+import { taskRoutingLabel } from '../lib/remoteProfiles';
 import { TaskContextMenu } from './TaskContextMenu';
 import { RenameTitle } from './RenameTitle';
 
@@ -18,6 +19,7 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
   const compactGoalLabel = isGoalRun ? goalTurnLabel(run.goal?.turnsUsed ?? 0, run.goal?.maxTurns ?? 0, true) : null;
   const busyLabel = (run?.kind && BUSY_LABELS[run.kind]) || 'Working...';
   const showBusyState = isBusy && !isGoalRun;
+  const routingLabel = taskRoutingLabel(task);
   const timeRowClass = showBusyState
     ? 'font-semibold text-zinc-600 dark:text-zinc-300'
     : isUnseen
@@ -68,6 +70,11 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
           </span>
         )}
       </div>
+      {routingLabel && (
+        <p className="mt-2 truncate text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+          {routingLabel}
+        </p>
+      )}
     </div>
   );
 }

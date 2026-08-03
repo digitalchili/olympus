@@ -27,6 +27,7 @@ import type {
   SkillInstallResult,
   ClawHubSkillSummary,
   ClawHubScanResult,
+  RemoteProfilePublic,
 } from '@shared/types';
 
 export type { SkillMeta, SkillInstallResult };
@@ -100,10 +101,11 @@ export function createTask(
   description: string,
   title?: string,
   workdir?: string | null,
+  requestedProfileName?: string | null,
 ) {
   return request<{ task: Task }>('/tasks', {
     method: 'POST',
-    body: JSON.stringify({ description, title, workdir }),
+    body: JSON.stringify({ description, title, workdir, requestedProfileName }),
   });
 }
 
@@ -151,17 +153,7 @@ export function updateInstallationName(name: string) {
   });
 }
 
-export interface HermesProfile {
-  name: string;
-  active: boolean;
-  description: string;
-  model: string | null;
-  provider: string | null;
-  skillCount: number;
-  skills: string[];
-  hasSoul: boolean;
-  soulPreview: string | null;
-}
+export type HermesProfile = RemoteProfilePublic;
 
 export function fetchHermesProfiles() {
   return request<{ profiles: HermesProfile[] }>('/profiles');

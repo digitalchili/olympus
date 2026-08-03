@@ -5,6 +5,7 @@ import { adapter } from '../app.js';
 import { TASK_STATUSES } from '../../shared/types.js';
 import type { TaskStatus } from '../../shared/types.js';
 import { validateProjectWorkdir } from '../project-folders.js';
+import { RemoteProfileRoutingError, remoteProfileRegistry, resolveTaskRouting } from '../remote-profiles.js';
 
 export const tasksRouter = Router();
 
@@ -64,16 +65,30 @@ tasksRouter.post('/', async (req, res) => {
 
   const userTitle = typeof title === 'string' ? title.trim() : '';
   const resolvedTitle = userTitle || generateTitle(description);
+  let routing: ReturnType<typeof resolveTaskRouting>;
+  try {
+    routing = resolveTaskRouting(remoteProfileRegistry, {
+      requestedProfileName: req.body.requestedProfileName,
+      description,
+    });
+  } catch (error) {
+    if (error instanceof RemoteProfileRoutingError) {
+      return res.status(error.status).json({ error: error.message, code: 'REMOTE_PROFILE_ROUTING_ERROR' });
+    }
+    return res.status(500).json({ error: 'Could not resolve remote profile routing' });
+  }
   const task = insertTask({
     title: resolvedTitle,
     description,
     status: 'in_progress',
     workdir,
+    profile_name: routing.profileName,
+    routing_source: routing.routingSource,
   });
   broadcast({ type: 'task_created', task });
   res.status(201).json({ task });
 
-  if (!userTitle) {
+  if (!userTitle && task.profile_name === null) {
     void enrichTaskTitle(task.id, resolvedTitle, description);
   }
 });

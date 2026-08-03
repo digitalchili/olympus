@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   title             TEXT NOT NULL,
   description       TEXT,
   status            TEXT NOT NULL DEFAULT 'in_progress',
+  profile_name      TEXT,
+  routing_source    TEXT,
   agent_model       TEXT,
   agent_provider    TEXT,
   reasoning_effort  TEXT,

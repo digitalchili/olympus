@@ -12,6 +12,7 @@ import { timeAgo } from '../lib/format';
 import { isEditableTarget } from '../lib/keyboard';
 import { TaskChat } from './TaskChat';
 import { RenameReveal, useRenameAnimation } from './RenameTitle';
+import { taskRoutingLabel } from '../lib/remoteProfiles';
 import type { AgentRunSettings } from '../lib/api';
 import type { TaskStatus } from '@shared/types';
 
@@ -159,6 +160,7 @@ export function TaskDetailPage() {
   }
 
   const statusMeta = STATUS_META[task.status];
+  const routingLabel = taskRoutingLabel(task);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -209,6 +211,11 @@ export function TaskDetailPage() {
                 <Pencil size={15} />
               </button>
             </div>
+            {routingLabel && (
+              <p className="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                {routingLabel}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center justify-between gap-2.5 sm:shrink-0 sm:justify-start sm:pt-1.5">
