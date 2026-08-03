@@ -2,11 +2,13 @@ import 'dotenv/config';
 import './logging.js';
 import './db/index.js';
 import { createServer, type Server } from 'node:http';
-import app, { adapter } from './app.js';
+import app, { adapter, drainController } from './app.js';
 import { mountFrontend, type FrontendCleanup } from './frontend.js';
+import { closeClientsForRestart } from './events.js';
+import { closeSubscribersForRestart } from './live-chat.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
-const PORT_FALLBACK_ATTEMPTS = 20;
+const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
 
 const httpServer = createServer(app);
 let closeFrontend: FrontendCleanup = () => {};
@@ -75,7 +77,6 @@ function closeHttpServer(): Promise<void> {
       else resolveClose();
     });
 
-    httpServer.closeAllConnections();
   });
 }
 
@@ -86,10 +87,18 @@ async function shutdown(reason: ShutdownReason, exitCode = 0): Promise<void> {
   }
   shuttingDown = true;
 
+  drainController.begin();
+  const drainTimeoutMs = Number.parseInt(process.env.OLYMPUS_DRAIN_TIMEOUT_MS || '120000', 10);
+  const idle = await drainController.waitForIdle(drainTimeoutMs);
+  if (!idle) console.error(`Drain timed out after ${drainTimeoutMs}ms; stopping with active work.`);
+  closeClientsForRestart();
+  closeSubscribersForRestart();
+
   const forceExit = setTimeout(() => {
     console.error(`Forced shutdown after ${reason}`);
+    httpServer.closeAllConnections();
     process.exit(1);
-  }, 5000);
+  }, 10_000);
   forceExit.unref();
 
   const results = await Promise.allSettled([

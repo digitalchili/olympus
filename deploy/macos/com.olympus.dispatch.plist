@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>@@LABEL@@</string>
+<key>ProgramArguments</key><array><string>@@NODE@@</string><string>@@ROOT@@/dist/server/server/index.js</string></array>
+<key>WorkingDirectory</key><string>@@ROOT@@</string>
+<key>EnvironmentVariables</key><dict><key>NODE_ENV</key><string>production</string><key>PORT</key><string>@@PORT@@</string>
+<key>OLYMPUS_STRICT_PORT</key><string>1</string><key>HERMES_PYTHON</key><string>@@PYTHON@@</string><key>OLYMPUS_DISPATCH_HOME</key><string>@@STATE_HOME@@</string><key>DB_PATH</key><string>@@STATE_HOME@@/data/olympus-dispatch.db</string><key>OLYMPUS_MAINTENANCE_TOKEN</key><string>@@TOKEN@@</string></dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>@@STATE_HOME@@/logs/stdout.log</string><key>StandardErrorPath</key><string>@@STATE_HOME@@/logs/stderr.log</string>
+</dict></plist>

@@ -1,7 +1,7 @@
 import { useDroppable } from '@dnd-kit/core';
 import { MoreHorizontal, Plus } from 'lucide-react';
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { Task, TaskRunState, TaskStatus } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { ColumnActionsMenu } from './ColumnActionsMenu';

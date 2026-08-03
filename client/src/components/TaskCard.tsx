@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { Loader2, MoreHorizontal, Target } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { Task, TaskRunState } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
 import { isActiveRun } from '../lib/store';

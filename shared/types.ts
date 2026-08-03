@@ -28,10 +28,8 @@ export type TaskHandoffState = (typeof TASK_HANDOFF_STATES)[number];
 export const TASK_ROUTING_SOURCES = ['manual', 'automatic'] as const;
 export type TaskRoutingSource = (typeof TASK_ROUTING_SOURCES)[number];
 
-export type RemoteProfileId = 'som' | 'somchai' | 'somboon';
-
 export interface RemoteProfilePublic {
-  id: RemoteProfileId;
+  id: string;
   label: string;
   description: string;
   icon: string;

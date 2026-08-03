@@ -52,3 +52,20 @@ export function broadcast(event: BoardEvent) {
     if (!writeEvent(client, event)) clients.delete(client);
   }
 }
+
+export function closeClientsForRestart(): void {
+  const event = 'data: {"type":"maintenance_reconnect"}\n\n';
+  for (const client of clients) {
+    try {
+      client.write(event);
+      client.end();
+    } catch {
+      // The connection is already gone.
+    }
+  }
+  clients.clear();
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}

@@ -327,3 +327,22 @@ export function finishRun(taskId: string, ttlMs: number, runId: string): void {
   timer.unref();
   expiryTimers.set(taskId, timer);
 }
+
+export function closeSubscribersForRestart(): void {
+  const event = 'data: {"type":"maintenance_reconnect"}\n\n';
+  for (const taskSubscribers of subscribers.values()) {
+    for (const subscriber of taskSubscribers) {
+      try {
+        subscriber.write(event);
+        subscriber.end();
+      } catch {
+        // The connection is already gone.
+      }
+    }
+  }
+  subscribers.clear();
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}
