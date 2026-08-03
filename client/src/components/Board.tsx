@@ -10,7 +10,7 @@ import {
 } from '@dnd-kit/core';
 import { AlertTriangle, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { ScheduledTask, Task, TaskStatus } from '@shared/types';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';

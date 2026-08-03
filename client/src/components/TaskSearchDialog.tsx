@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { searchTasks, type TaskSearchResult } from '../lib/api';
 
 function roleLabel(role: TaskSearchResult['role']): string {

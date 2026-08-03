@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router';
 import { useState } from 'react';
 import { Header, HeaderProvider } from './components/Header';
 import { Sidebar } from './components/Sidebar';

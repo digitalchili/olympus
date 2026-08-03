@@ -1,0 +1,59 @@
+x-olympus-slot: &olympus-slot
+  env_file:
+    - path: .env
+      required: false
+  environment: &slot-environment
+    NODE_ENV: production
+    PORT: "6969"
+    OLYMPUS_STRICT_PORT: "1"
+    HOME: /opt/data/home
+    HERMES_HOME: /opt/data
+    HERMES_AGENT_DIR: /opt/hermes
+    HERMES_PYTHON: /opt/hermes/.venv/bin/python
+    HERMES_DISABLE_LAZY_INSTALLS: "1"
+    HERMES_WRITE_SAFE_ROOT: /opt/data
+    OLYMPUS_DISPATCH_HOME: /opt/data/olympus-dispatch
+    DB_PATH: /opt/data/olympus-dispatch/data/olympus-dispatch.db
+  volumes: &slot-volumes
+    - olympus_dispatch_state:/opt/data/olympus-dispatch
+    - hermes_data:/opt/data
+  user: "10000:10000"
+  init: true
+  read_only: true
+  tmpfs:
+    - "/tmp:rw,noexec,nosuid,size=256m,mode=1777"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 150s
+  restart: unless-stopped
+  healthcheck: &slot-health
+    test: [CMD, node, -e, "fetch('http://127.0.0.1:6969/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+    interval: 10s
+    timeout: 5s
+    start_period: 90s
+    retries: 9
+
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    ports: ["${OLYMPUS_DISPATCH_BIND_ADDRESS:-127.0.0.1}:${OLYMPUS_DISPATCH_PORT:-6969}:6969"]
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+    restart: unless-stopped
+  olympus-blue:
+    <<: *olympus-slot
+    image: ${OLYMPUS_BLUE_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+    profiles: [blue]
+  olympus-green:
+    <<: *olympus-slot
+    image: ${OLYMPUS_GREEN_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+    profiles: [green]
+
+volumes:
+  olympus_dispatch_state:
+    external: true
+    name: ${OLYMPUS_DISPATCH_STATE_VOLUME:-olympus-dispatch-state}
+  hermes_data:
+    external: true
+    name: ${HERMES_DATA_VOLUME:?set HERMES_DATA_VOLUME}

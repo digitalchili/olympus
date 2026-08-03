@@ -1,75 +1,50 @@
 # Olympus Dispatch
 
-**Digital Chili's Hermes-first mission control for autonomous work.**
-
-Olympus Dispatch is a private Digital Chili fork of [Minions](https://github.com/agent37-platform/minions), tailored for supervising Hermes agents across projects. It is a local-first Kanban and review cockpit — not a replacement for Codex or an IDE.
-
-## What it does
-
-- Create and supervise autonomous Hermes tasks
-- Move completed agent work into a human review queue
-- Stream visible agent activity and responses live
-- Select a **server-hosted project folder** for each task
-- Route new work to remote Hermes execution profiles
-- Manage recurring Hermes jobs
-- Browse workspace files and installed skills
-- Keep task metadata in local SQLite while Hermes retains session transcripts
-
-## Intended workflow
-
-```text
-Telegram / browser request
-        ↓
-Olympus Dispatch creates and tracks the task
-        ↓
-Hermes performs the work in the chosen workspace
-        ↓
-Human reviews evidence and approves, reopens, or completes
-```
-
-Codex and other coding agents remain the hands-on implementation environment. Olympus Dispatch is the control plane: task visibility, workspace context, run history, and review.
-
-## Remote Hermes routing
-
-Olympus uses the Hermes worker installed on the same machine by default. Remote execution profiles are optional and are loaded from deployment-owned configuration at startup; the application does not contain a fixed list of agents or business-specific routing rules.
-
-Configure a registry with either `OLYMPUS_REMOTE_PROFILES_JSON` or `OLYMPUS_REMOTE_PROFILES_PATH`. Profile IDs, labels, gateway targets, optional default routing, and keyword rules all come from that registry. API keys remain in environment variables named by `apiKeyEnv` and are never returned to the browser.
-
-Routing precedence is explicit profile selection, configured keyword rules, configured default profile, then local Hermes. Explicit remote routes fail closed when unavailable; ordinary unmatched work remains local when no remote default is configured.
-
-See [remote profile configuration](docs/remote-profiles.md) and the [example registry](docs/remote-profiles.example.json).
+Hermes-first task management with a Kanban review UI. Olympus Dispatch keeps task metadata in SQLite and imports Hermes `AIAgent` directly through its Python worker, preserving chat streaming, goals, compaction, model defaults, steering, skills, files, and scheduled tasks.
 
 ## Quick start
 
-**Prerequisites:** Node.js 18+ and [Hermes Agent](https://hermes-agent.nousresearch.com).
+Prerequisites are Node.js 22.22–25 (Node 22 LTS recommended) and an installed Hermes Agent checkout/venv.
+
+### macOS
 
 ```bash
-npm install
-npm run dev
+gh repo clone leakim69/olympus-dispatch
+cd olympus-dispatch
+./scripts/macos/install.sh
 ```
 
-Open [http://localhost:6969](http://localhost:6969).
+The installer discovers Hermes at `~/.hermes/hermes-agent`, builds production assets, installs a per-user LaunchAgent, and checks `/api/ready`. Preview it with `./scripts/macos/install.sh --dry-run`.
 
-The default local state directory is `~/.olympus-dispatch/`:
+### Docker or Dokploy host
 
-- `data/olympus-dispatch.db` — task metadata
-- `logs/` — application logs
-- `workspace/` — default agent workspace
-- `skills/` — Olympus Dispatch-managed skills
+```bash
+gh repo clone leakim69/olympus-dispatch
+cd olympus-dispatch
+./scripts/docker/install.sh
+```
 
-Set `OLYMPUS_DISPATCH_HOME` to relocate this state directory. `DB_PATH` can override the database path independently.
+The installer identifies a sole running named volume mounted at Hermes `/opt/data`, prints only its volume name, asks before reuse, writes a mode-600 `.env`, and verifies readiness. Use `--hermes-volume NAME` when discovery is ambiguous or `--yes` for confirmed automation.
+
+Open `http://127.0.0.1:6969` by default. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately for remote access.
+
+## Remote Hermes routing
+
+Olympus uses the Hermes worker installed on the same machine by default. Optional remote profiles and routing rules are loaded from deployment-owned JSON at startup; they are not compiled into the application.
+
+Routing precedence is explicit profile selection, configured keyword rules, configured default profile, then local Hermes. Explicit remote routes fail closed when their target is unavailable.
+
+See [remote profile configuration](docs/remote-profiles.md) and the [example registry](docs/remote-profiles.example.json).
 
 ## Development
 
 ```bash
-npm run dev      # development server on :6969
-npm run build    # production build
-npm run start    # run the compiled build
-npm test         # worker and TypeScript checks
+npm ci
+npm run dev
+npm test
+npm run build
 ```
 
-## Upstream and licensing
+See [INSTALL.md](INSTALL.md), [Docker operations](docs/docker.md), [Dokploy](docs/dokploy.md), [upgrades](docs/upgrading.md), and [development notes](docs/development.md).
 
-This repository is a private Digital Chili fork of [agent37-platform/minions](https://github.com/agent37-platform/minions), currently based on upstream `v0.1.24`.
-
-The upstream remote is retained as `upstream` so future updates can be reviewed and merged deliberately. Olympus Dispatch retains the upstream MIT license and attribution.
+Olympus Dispatch is based on the MIT-licensed Minions project.
