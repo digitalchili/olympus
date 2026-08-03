@@ -3,6 +3,7 @@ import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText,
 import { InputToolbar, ContextRing } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, MessageAttachmentCards, UploadErrorBar } from './ChatAttachments';
 import { MarkdownContent } from './MarkdownContent';
+import { ReplyCopyButton, shouldShowReplyCopyButton } from './ReplyCopyButton';
 import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
@@ -689,6 +690,11 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
                           )
                         )}
                       </div>
+                      {shouldShowReplyCopyButton(msg.content, isLastAssistant && isStreaming) && (
+                        <div className="mt-1 flex items-center">
+                          <ReplyCopyButton content={msg.content} />
+                        </div>
+                      )}
                     </div>
                   </div>
                 </Fragment>
