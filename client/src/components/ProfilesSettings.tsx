@@ -31,7 +31,7 @@ export function ProfilesSettings() {
         <div>
           <h2 id="profiles-title" className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Remote execution profiles</h2>
           <p className="mt-1 text-sm leading-5 text-zinc-500 dark:text-zinc-400">
-            Olympus routes new tasks to authenticated Hermes gateways on the Somboon VPS.
+            Olympus uses local Hermes by default. Optional remote profiles are loaded from this server's runtime configuration.
           </p>
         </div>
         <button

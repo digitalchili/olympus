@@ -31,27 +31,13 @@ Codex and other coding agents remain the hands-on implementation environment. Ol
 
 ## Remote Hermes routing
 
-Olympus Dispatch source, backend, and frontend run on Michael's M4. New task execution is routed to authenticated Hermes gateway targets on the Somboon VPS:
+Olympus uses the Hermes worker installed on the same machine by default. Remote execution profiles are optional and are loaded from deployment-owned configuration at startup; the application does not contain a fixed list of agents or business-specific routing rules.
 
-- Som → `som-spirithouse-wine`
-- Somchai → `somchai-chili-radio`
-- Somboon → `default`
+Configure a registry with either `OLYMPUS_REMOTE_PROFILES_JSON` or `OLYMPUS_REMOTE_PROFILES_PATH`. Profile IDs, labels, gateway targets, optional default routing, and keyword rules all come from that registry. API keys remain in environment variables named by `apiKeyEnv` and are never returned to the browser.
 
-The browser receives only sanitized labels, descriptions, availability, icons, and remote profile names. Gateway URLs and `API_SERVER_KEY` values stay server-side.
+Routing precedence is explicit profile selection, configured keyword rules, configured default profile, then local Hermes. Explicit remote routes fail closed when unavailable; ordinary unmatched work remains local when no remote default is configured.
 
-Configure the registry with either `OLYMPUS_REMOTE_PROFILES_JSON` or `OLYMPUS_REMOTE_PROFILES_PATH`. Values may reference env vars with `$NAME`; API keys are referenced by env var name:
-
-```json
-{
-  "som": { "baseUrl": "$SOM_HERMES_GATEWAY_PROFILE_URL", "apiKeyEnv": "SOM_API_SERVER_KEY" },
-  "somchai": { "baseUrl": "$SOMCHAI_HERMES_GATEWAY_URL", "apiKeyEnv": "SOMCHAI_API_SERVER_KEY" },
-  "somboon": { "baseUrl": "$SOMBOON_HERMES_GATEWAY_URL", "apiKeyEnv": "SOMBOON_API_SERVER_KEY" }
-}
-```
-
-Hermes 0.19.1 gateway multiplexing selects profiles by URL prefix, not by a JSON body field. Set Som's `baseUrl` to the profile-prefixed gateway URL, for example `https://gateway.example.test/p/som-spirithouse-wine`. Dedicated Somchai endpoints and the default Somboon endpoint may use root gateway URLs such as `https://gateway.example.test`; Olympus appends `/v1/chat/completions` for chat requests. `remoteProfile` is display/routing metadata in Olympus Dispatch and does not switch remote gateway profiles in the request body.
-
-If a target lacks endpoint or key configuration, it is listed as unavailable and routing to it fails closed. Existing legacy tasks with no stored `profile_name` continue to use the local worker; newly created tasks are routed only through the remote registry.
+See [remote profile configuration](docs/remote-profiles.md) and the [example registry](docs/remote-profiles.example.json).
 
 ## Quick start
 

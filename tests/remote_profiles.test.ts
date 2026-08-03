@@ -1,102 +1,129 @@
 import assert from 'node:assert/strict';
 import {
-  REMOTE_PROFILE_IDS,
   RemoteProfileRoutingError,
   buildRemoteProfileRegistry,
   resolveTaskRouting,
 } from '../server/remote-profiles.js';
 
 const env = {
-  SOM_GATEWAY_URL: 'https://som.example.test',
-  SOM_KEY: 'som-secret',
-  SOMCHAI_GATEWAY_URL: 'https://somchai.example.test',
-  SOMCHAI_KEY: 'somchai-secret',
-  SOMBOON_GATEWAY_URL: 'https://somboon.example.test',
-  SOMBOON_KEY: 'somboon-secret',
+  WRITER_GATEWAY_URL: 'https://writer.example.test',
+  WRITER_KEY: 'writer-secret',
 };
+
+const localOnly = buildRemoteProfileRegistry({ env: {}, json: null });
+assert.deepEqual(localOnly.publicProfiles(), []);
+assert.deepEqual(resolveTaskRouting(localOnly, { description: 'Hey' }), {
+  profileName: null,
+  routingSource: null,
+});
+assert.deepEqual(resolveTaskRouting(localOnly, { description: 'Write a wine description' }), {
+  profileName: null,
+  routingSource: null,
+});
 
 const configured = buildRemoteProfileRegistry({
   env,
   json: JSON.stringify({
-    som: { baseUrl: '$SOM_GATEWAY_URL', apiKeyEnv: 'SOM_KEY' },
-    somboon: { baseUrl: '$SOMBOON_GATEWAY_URL', apiKeyEnv: 'SOMBOON_KEY' },
+    profiles: [
+      {
+        id: 'writer',
+        label: 'Writing Agent',
+        description: 'Remote writing profile',
+        icon: 'pen',
+        baseUrl: '$WRITER_GATEWAY_URL',
+        apiKeyEnv: 'WRITER_KEY',
+        remoteProfile: 'writer-production',
+        remotePath: '/srv/writer',
+      },
+      {
+        id: 'reviewer',
+        label: 'Reviewer',
+        baseUrl: '$REVIEWER_GATEWAY_URL',
+        apiKeyEnv: 'REVIEWER_KEY',
+      },
+    ],
+    routingRules: [
+      { profile: 'writer', keywords: ['customer copy', 'landing page'] },
+    ],
   }),
 });
 
-assert.deepEqual(REMOTE_PROFILE_IDS, ['som', 'somchai', 'somboon']);
-
 const publicProfiles = configured.publicProfiles();
-assert.equal(publicProfiles.length, 3);
-assert.equal(publicProfiles.find((profile) => profile.id === 'som')?.available, true);
-assert.equal(publicProfiles.find((profile) => profile.id === 'somchai')?.available, false);
-assert.equal(publicProfiles.find((profile) => profile.id === 'som')?.remoteProfile, 'som-spirithouse-wine');
+assert.equal(publicProfiles.length, 2);
+assert.deepEqual(publicProfiles[0], {
+  id: 'writer',
+  label: 'Writing Agent',
+  description: 'Remote writing profile',
+  icon: 'pen',
+  available: true,
+  remoteProfile: 'writer-production',
+});
+assert.equal(publicProfiles[1]?.id, 'reviewer');
+assert.equal(publicProfiles[1]?.available, false);
 assert.equal(JSON.stringify(publicProfiles).includes('secret'), false);
 assert.equal(JSON.stringify(publicProfiles).includes('example.test'), false);
 
-assert.deepEqual(resolveTaskRouting(configured, { requestedProfileName: 'som', description: 'anything' }), {
-  profileName: 'som',
+assert.deepEqual(resolveTaskRouting(configured, { requestedProfileName: 'writer', description: 'anything' }), {
+  profileName: 'writer',
   routingSource: 'manual',
 });
-
-assert.throws(
-  () => resolveTaskRouting(configured, { requestedProfileName: 'somchai', description: 'anything' }),
-  /unavailable/i,
-);
-
-assert.throws(
-  () => resolveTaskRouting(configured, { requestedProfileName: 'som-spirithouse-wine', description: 'anything' }),
-  /unknown/i,
-);
-
-assert.deepEqual(resolveTaskRouting(configured, { description: 'Please update Spirit House wine inventory' }), {
-  profileName: 'som',
+assert.deepEqual(resolveTaskRouting(configured, { description: 'Please prepare CUSTOMER COPY today' }), {
+  profileName: 'writer',
   routingSource: 'automatic',
 });
-
-assert.deepEqual(resolveTaskRouting(configured, { description: 'General maintenance task' }), {
-  profileName: 'somboon',
-  routingSource: 'automatic',
-});
-
-const somUnavailable = buildRemoteProfileRegistry({
-  env,
-  json: JSON.stringify({
-    somboon: { baseUrl: '$SOMBOON_GATEWAY_URL', apiKeyEnv: 'SOMBOON_KEY' },
-  }),
+assert.deepEqual(resolveTaskRouting(configured, { description: 'Ordinary local task' }), {
+  profileName: null,
+  routingSource: null,
 });
 
 assert.throws(
-  () => resolveTaskRouting(somUnavailable, { description: 'Clear wine request' }),
+  () => resolveTaskRouting(configured, { requestedProfileName: 'reviewer', description: 'anything' }),
   (error) => error instanceof RemoteProfileRoutingError && error.status === 409 && /unavailable/i.test(error.message),
 );
+assert.throws(
+  () => resolveTaskRouting(configured, { requestedProfileName: 'missing', description: 'anything' }),
+  (error) => error instanceof RemoteProfileRoutingError && error.status === 400 && /unknown/i.test(error.message),
+);
 
-const allConfigured = buildRemoteProfileRegistry({
+const configuredDefault = buildRemoteProfileRegistry({
   env,
   json: JSON.stringify({
-    som: { baseUrl: '$SOM_GATEWAY_URL', apiKeyEnv: 'SOM_KEY' },
-    somchai: { baseUrl: '$SOMCHAI_GATEWAY_URL', apiKeyEnv: 'SOMCHAI_KEY' },
-    somboon: { baseUrl: '$SOMBOON_GATEWAY_URL', apiKeyEnv: 'SOMBOON_KEY' },
+    defaultProfile: 'writer',
+    profiles: [
+      {
+        id: 'writer',
+        label: 'Writing Agent',
+        baseUrl: '$WRITER_GATEWAY_URL',
+        apiKeyEnv: 'WRITER_KEY',
+      },
+    ],
   }),
 });
-
-assert.deepEqual(resolveTaskRouting(allConfigured, { description: 'Please work on Chili   Radio scheduling' }), {
-  profileName: 'somchai',
+assert.deepEqual(resolveTaskRouting(configuredDefault, { description: 'Ordinary task' }), {
+  profileName: 'writer',
   routingSource: 'automatic',
 });
 
-assert.deepEqual(resolveTaskRouting(allConfigured, { requestedProfileName: 'somchai', description: 'Write a wine description' }), {
-  profileName: 'somchai',
-  routingSource: 'manual',
-});
-
 assert.throws(
-  () => resolveTaskRouting(configured, { requestedProfileName: 'somchai', description: 'Chili Radio' }),
-  /unavailable/i,
+  () => buildRemoteProfileRegistry({ json: JSON.stringify({ defaultProfile: 'missing', profiles: [] }) }),
+  /default profile.*missing/i,
+);
+assert.throws(
+  () => buildRemoteProfileRegistry({
+    json: JSON.stringify({
+      profiles: [{ id: 'one', label: 'One' }, { id: 'one', label: 'Duplicate' }],
+    }),
+  }),
+  /duplicate remote profile/i,
+);
+assert.throws(
+  () => buildRemoteProfileRegistry({
+    json: JSON.stringify({
+      profiles: [{ id: 'one', label: 'One' }],
+      routingRules: [{ profile: 'missing', keywords: ['anything'] }],
+    }),
+  }),
+  /routing rule.*missing/i,
 );
 
-assert.throws(
-  () => resolveTaskRouting(configured, { description: 'Chili Radio station update' }),
-  (error) => error instanceof RemoteProfileRoutingError && error.status === 409 && /unavailable/i.test(error.message),
-);
-
-console.log('Remote profile routing tests passed');
+console.log('Runtime profile registry tests passed');
