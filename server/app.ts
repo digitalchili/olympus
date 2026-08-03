@@ -13,18 +13,39 @@ import { profilesRouter } from './routes/profiles.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { RoutingAgentAdapter } from './adapters/routing.js';
-import { initSSE, addClient, sendEvent } from './events.js';
-import { getRunStatuses } from './live-chat.js';
+import { initSSE, addClient, sendEvent, closeClientsForRestart } from './events.js';
+import { closeSubscribersForRestart, getRunStatuses } from './live-chat.js';
 import { getAppVersion } from './version.js';
+import { DrainController } from './drain.js';
+import { createDrainRouter, maintenanceGuard } from './drain-http.js';
+import { createActiveRequestTracker } from './active-requests.js';
 
 const app = express();
 
 const adapter = new RoutingAgentAdapter(new HermesWorkerAdapter());
+const activeRequests = createActiveRequestTracker();
+const drainController = new DrainController(() => getRunStatuses().filter((run) =>
+  run.status === 'streaming' || run.status === 'compacting'
+).length + activeRequests.count());
 
 app.get('/api/health', async (_req, res) => {
   const hermes = await adapter.healthCheck();
   res.json({ ok: true, hermes });
 });
+
+app.get('/api/ready', async (_req, res) => {
+  const status = drainController.status();
+  const hermes = status.ready ? await adapter.healthCheck() : false;
+  res.status(status.ready && hermes ? 200 : 503).json({ ...status, hermes });
+});
+
+app.use('/api/maintenance', createDrainRouter(drainController, undefined, () => {
+  closeClientsForRestart();
+  closeSubscribersForRestart();
+}));
+
+app.use(activeRequests.middleware);
+app.use(maintenanceGuard(drainController));
 
 app.get('/api/version', (_req, res) => {
   res.json(getAppVersion());
@@ -60,5 +81,5 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   next(error);
 });
 
-export { adapter };
+export { adapter, drainController };
 export default app;

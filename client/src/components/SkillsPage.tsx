@@ -9,7 +9,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 import {
   AlertCircle,

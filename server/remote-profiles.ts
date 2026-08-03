@@ -167,7 +167,7 @@ function isClearChiliRadioRequest(description: string): boolean {
 export function resolveTaskRouting(
   registry: RemoteProfileRegistry,
   input: { requestedProfileName?: unknown; description: string },
-): { profileName: RemoteProfileId; routingSource: TaskRoutingSource } {
+): { profileName: RemoteProfileId | null; routingSource: TaskRoutingSource | null } {
   const requested = typeof input.requestedProfileName === 'string' ? input.requestedProfileName.trim() : '';
   if (requested) {
     const target = registry.requireAvailable(requested);
@@ -184,6 +184,8 @@ export function resolveTaskRouting(
     return { profileName: 'som', routingSource: 'automatic' };
   }
 
-  registry.requireAvailable('somboon');
-  return { profileName: 'somboon', routingSource: 'automatic' };
+  if (registry.get('somboon')?.available) {
+    return { profileName: 'somboon', routingSource: 'automatic' };
+  }
+  return { profileName: null, routingSource: null };
 }

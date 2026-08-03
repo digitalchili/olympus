@@ -10,3 +10,13 @@ __pycache__/
 
 debug.md
 .gstack/
+
+# Portable Docker runtime state (operator-owned, never commit)
+.olympus-active-slot
+.olympus-slots.env
+.olympus-operation.lock/
+.env.before-update.*
+.olympus-slots.env.before-update.*
+backups/
+deploy/nginx/conf.d/active.conf
+.tmp-olympus-portable-*/

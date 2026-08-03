@@ -14,7 +14,7 @@ Olympus Dispatch is Digital Chili's private Hermes-first task management system 
 
 ## Prerequisites
 
-- Node.js v18+
+- Node.js 22.22–25 (Node 22 LTS recommended)
 - Hermes agent installed with its Python venv (default location: `~/.hermes/hermes-agent/`)
 
 The server spawns a Python worker subprocess that imports Hermes `AIAgent` directly — no `hermes gateway` process or HTTP API is involved. The Python executable is resolved in this order:
@@ -35,6 +35,8 @@ npm test             # Python worker checks + TypeScript component tests
 ```
 
 No linter is configured.
+
+Portable production installs use `scripts/macos/` or `scripts/docker/`. Docker HA updates must follow the repository's single-writer sequence: disposable candidate preflight, authenticated drain to zero active runs, candidate readiness on live volumes, then Nginx reload. Never start both slots as live writers. Portable defaults must remain free of deployment-specific host, volume, network, project, and IP assumptions.
 
 ## Architecture
 

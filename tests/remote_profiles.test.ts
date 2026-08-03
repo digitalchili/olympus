@@ -65,6 +65,12 @@ const somUnavailable = buildRemoteProfileRegistry({
   }),
 });
 
+const localOnly = buildRemoteProfileRegistry({ env: {}, json: '{}' });
+assert.deepEqual(resolveTaskRouting(localOnly, { description: 'Create a portable installation sentinel' }), {
+  profileName: null,
+  routingSource: null,
+});
+
 assert.throws(
   () => resolveTaskRouting(somUnavailable, { description: 'Clear wine request' }),
   (error) => error instanceof RemoteProfileRoutingError && error.status === 409 && /unavailable/i.test(error.message),
