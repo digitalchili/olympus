@@ -4,6 +4,7 @@ import { adapter } from '../app.js';
 import { broadcast, initSSE } from '../events.js';
 import {
   appendSystemMessage,
+  appendSteeredUserMessage,
   appendUserMessage,
   applyEvent,
   broadcast as broadcastLive,
@@ -118,6 +119,7 @@ interface StreamChatTurnResult {
   // Only consumed by the goal loop; the chat path learns it stopped via the
   // `done` event reaching applyEvent (completeOnDone=true sets status 'stopped').
   interrupted: boolean;
+  pendingSteer?: string;
 }
 
 function recordCompletedAgentRun(taskId: string, context: ContextUsage | null): Task | undefined {
@@ -159,6 +161,7 @@ async function streamChatTurn(
   let responseText = '';
   let hadError = false;
   let interrupted = false;
+  let pendingSteer: string | undefined;
 
   try {
     const stream = adapter.chatStream(sessionId, content, {
@@ -175,7 +178,9 @@ async function streamChatTurn(
         sawDone = true;
         doneContext = event.context;
         if (event.interrupted) interrupted = true;
-        if (!options.completeOnDone) {
+        const unappliedSteer = event.pendingSteer?.trim();
+        if (unappliedSteer) pendingSteer = unappliedSteer;
+        if (!options.completeOnDone || pendingSteer) {
           updateRunContext(runTask.id, event.context, event.sessionId);
           continue;
         }
@@ -208,13 +213,20 @@ async function streamChatTurn(
     }
   }
 
-  return { responseText, sawDone, context: doneContext, hadError, interrupted };
+  return { responseText, sawDone, context: doneContext, hadError, interrupted, pendingSteer };
 }
 
 async function consumeChatRun(runTask: Task, sessionId: string, content: string, runId: string): Promise<void> {
-  const result = await streamChatTurn(runTask, sessionId, content, { completeOnDone: true });
+  let turnContent = content;
+  let finalContext: ContextUsage | null | undefined;
+  while (true) {
+    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true });
+    if (result.context !== undefined) finalContext = result.context;
+    if (!result.pendingSteer || result.hadError || result.interrupted) break;
+    turnContent = result.pendingSteer;
+  }
   try {
-    settleRun(runTask.id, runId, result.context ?? null);
+    settleRun(runTask.id, runId, finalContext ?? null);
   } catch {
     finishRun(runTask.id, ERROR_SNAPSHOT_TTL_MS, runId);
   }
@@ -225,6 +237,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
   let hadError = false;
   let wasInterrupted = false;
   let turnContent: string | null = initialContent;
+  let turnAlreadyVisible = false;
   let turnCount = 0;
 
   try {
@@ -233,8 +246,11 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
         appendSystemMessage(runTask.id, 'Goal turn limit reached');
         break;
       }
-      appendUserMessage(runTask.id, turnContent);
-      startAssistantMessage(runTask.id);
+      if (!turnAlreadyVisible) {
+        appendUserMessage(runTask.id, turnContent);
+        startAssistantMessage(runTask.id);
+      }
+      turnAlreadyVisible = false;
 
       const turn = await streamChatTurn(runTask, sessionId, turnContent, {
         completeOnDone: false,
@@ -249,6 +265,11 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
       if (turn.interrupted) {
         wasInterrupted = true;
         break;
+      }
+      if (turn.pendingSteer) {
+        turnContent = turn.pendingSteer;
+        turnAlreadyVisible = true;
+        continue;
       }
 
       const decision = await adapter.evaluateGoal(sessionId, turn.responseText);
@@ -399,6 +420,10 @@ chatRouter.post('/:id/steer', async (req, res) => {
 
   try {
     const steered = await adapter.steerChat(task.id, content);
+    if (steered) {
+      appendSteeredUserMessage(task.id, content);
+      broadcastRunSnapshot(task.id);
+    }
     res.json({ steered, queued: !steered });
   } catch (error) {
     sendAdapterError(res, error, 'Could not steer Hermes run');

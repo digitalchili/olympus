@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "workers"))
 
 import hermes_worker
+import hermes_sessions
 
 PROXY_URL = "https://www.agent37.com/api/openclaw/starter-proxy/v1"
 
@@ -64,6 +65,76 @@ class ResolveModelProviderTest(unittest.TestCase):
         cfg = {"model": {"default": "anthropic/claude-sonnet-5", "provider": "openrouter"}}
         model, provider, _ = hermes_worker._resolve_model_provider("anthropic/claude-sonnet-5", cfg)
         self.assertEqual((model, provider), ("anthropic/claude-sonnet-5", "openrouter"))
+
+    def test_unapplied_steer_is_drained_for_guaranteed_follow_up(self):
+        class FakeAgent:
+            def _drain_pending_steer(self):
+                return "Follow-up that missed the final tool call"
+
+        self.assertEqual(
+            hermes_worker._drain_unapplied_steer(FakeAgent()),
+            "Follow-up that missed the final tool call",
+        )
+
+    def test_applied_steer_is_persisted_as_trusted_display_only_row(self):
+        class FakeAgent:
+            pending = ["Applied steer", "Late steer"]
+
+            def _drain_pending_steer(self):
+                return self.pending.pop(0)
+
+        class FakeSessionDB:
+            appended = []
+
+            def append_message(self, *args, **kwargs):
+                self.appended.append((args, kwargs))
+
+        agent = FakeAgent()
+        session_db = FakeSessionDB()
+        hermes_worker._install_steer_delivery_recorder(agent, session_db, "session-1")
+
+        self.assertEqual(agent._drain_pending_steer(), "Applied steer")
+        self.assertEqual(
+            session_db.appended,
+            [(('session-1', 'user', 'Applied steer'), {
+                'display_kind': 'olympus_steer',
+                'display_metadata': {'source': 'olympus_steer'},
+            })],
+        )
+        self.assertEqual(hermes_worker._drain_unapplied_steer(agent), "Late steer")
+        self.assertEqual(len(session_db.appended), 1)
+
+    def test_display_only_steer_is_not_replayed_to_model(self):
+        history = [
+            {"role": "user", "content": "Initial"},
+            {"role": "user", "content": "Applied steer", "display_kind": "olympus_steer"},
+            {"role": "assistant", "content": "Done"},
+        ]
+        self.assertEqual(
+            hermes_sessions._sanitize_agent_history(history),
+            [
+                {"role": "user", "content": "Initial"},
+                {"role": "assistant", "content": "Done"},
+            ],
+        )
+
+    def test_retired_agent_rejects_late_steer(self):
+        class FakeAgent:
+            def steer(self, _message):
+                return True
+
+        task_key = "late-steer-task"
+        request_id = "late-steer-request"
+        hermes_worker.ACTIVE_TASKS[task_key] = request_id
+        hermes_worker._register_active_agent(task_key, request_id, FakeAgent())
+        hermes_worker._unregister_active_agent(task_key, request_id)
+        try:
+            self.assertEqual(
+                hermes_worker._steer_active_chat({"taskId": task_key, "message": "too late"}),
+                {"steered": False},
+            )
+        finally:
+            hermes_worker._clear_task_active(task_key, request_id)
 
 
 if __name__ == "__main__":

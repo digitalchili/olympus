@@ -33,6 +33,7 @@ export interface StreamEvent {
   label?: string;
   context?: ContextUsage | null;
   interrupted?: boolean;
+  pendingSteer?: string;
 }
 
 export interface AgentAdapter {

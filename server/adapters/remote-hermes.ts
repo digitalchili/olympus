@@ -303,7 +303,9 @@ export class RemoteHermesAdapter implements AgentAdapter {
   }
 
   async steerChat(): Promise<boolean> {
-    throw new RemoteHermesUnsupportedError('Steering remote chat');
+    // Hermes' HTTP gateway has no active-run steer endpoint. Returning false
+    // keeps the follow-up queued so Olympus sends it as the next normal turn.
+    return false;
   }
 
   async getMessages(sessionId: string, taskId: string): Promise<TaskMessage[]> {

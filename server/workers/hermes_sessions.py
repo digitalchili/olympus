@@ -36,6 +36,11 @@ def _sanitize_agent_history(history: Any) -> list[dict[str, Any]]:
     for item in history:
         if not isinstance(item, dict):
             continue
+        if item.get("display_kind") == "olympus_steer":
+            # This trusted display-only row makes an applied steer visible in
+            # Olympus. Hermes already receives the same text in the tool-result
+            # marker, so replaying the row would duplicate the instruction.
+            continue
         role = item.get("role")
         if role not in {"user", "assistant", "system", "tool"}:
             continue

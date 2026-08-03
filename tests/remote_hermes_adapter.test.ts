@@ -326,6 +326,21 @@ try {
     assert.equal(JSON.stringify(events).includes('test-key'), false);
     assert.equal(JSON.stringify(events).includes('secret upstream finish'), false);
   }
+
+  {
+    const adapter = new RemoteHermesAdapter({
+      id: 'somboon',
+      label: 'Somboon',
+      baseUrl: 'https://gateway.example.test',
+      apiKey: 'test-key',
+      remoteProfile: 'default',
+      timeoutMs: 5_000,
+    });
+
+    // The gateway API has no active-run steer endpoint. Returning false keeps
+    // the message queued so Olympus sends it as a guaranteed next turn.
+    assert.equal(await adapter.steerChat('task-123', 'Follow-up'), false);
+  }
 } finally {
   globalThis.fetch = originalFetch;
 }

@@ -101,5 +101,5 @@ export type WorkerEvent =
       duration?: number;
       label?: string | null;
     }
-  | { id: string; type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean }
+  | { id: string; type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; pendingSteer?: string }
   | { id: string; type: 'error'; error: string | WorkerErrorPayload };

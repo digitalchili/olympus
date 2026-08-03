@@ -84,6 +84,7 @@ export interface TaskMessage {
   content: string;
   thinking?: string;
   created_at: number;
+  completed_at?: number;
 }
 
 export interface ToolProgressEvent {

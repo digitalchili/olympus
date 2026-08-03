@@ -194,6 +194,11 @@ export function startAssistantMessage(taskId: string): void {
   appendMessage(taskId, 'assistant', '', { tools: [] });
 }
 
+export function appendSteeredUserMessage(taskId: string, content: string): void {
+  appendUserMessage(taskId, content);
+  startAssistantMessage(taskId);
+}
+
 export function updateRunContext(
   taskId: string,
   context: LiveChatRun['context'],

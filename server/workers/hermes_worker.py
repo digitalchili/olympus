@@ -473,6 +473,13 @@ def _clear_task_active(task_key: str, request_id: str) -> None:
             PENDING_INTERRUPTS.pop(task_key, None)
 
 
+def _unregister_active_agent(task_key: str, request_id: str) -> None:
+    """Stop accepting steer requests while leaving the task run active."""
+    with ACTIVE_TASKS_LOCK:
+        if ACTIVE_TASKS.get(task_key) == request_id:
+            ACTIVE_AGENTS.pop(task_key, None)
+
+
 def _steer_active_chat(request: dict[str, Any]) -> dict[str, bool]:
     task_key = _task_key_for(request)
     message = string_or_none(request.get("message"))
@@ -481,10 +488,51 @@ def _steer_active_chat(request: dict[str, Any]) -> dict[str, bool]:
 
     with ACTIVE_TASKS_LOCK:
         agent = ACTIVE_AGENTS.get(task_key)
+        if agent is None or not hasattr(agent, "steer"):
+            return {"steered": False}
+        # Keep lookup and acceptance atomic with _unregister_active_agent so a
+        # late steer cannot land after the final pending-steer drain.
+        return {"steered": bool(agent.steer(message))}
 
-    if agent is None or not hasattr(agent, "steer"):
-        return {"steered": False}
-    return {"steered": bool(agent.steer(message))}
+
+def _install_steer_delivery_recorder(agent: Any, session_db: Any, session_id: str) -> None:
+    """Persist only genuinely applied steers as trusted display-only rows."""
+    raw_drain = getattr(agent, "_drain_pending_steer", None)
+    if not callable(raw_drain):
+        return
+    setattr(agent, "_olympus_raw_drain_pending_steer", raw_drain)
+
+    def drain_and_record() -> Any:
+        message = raw_drain()
+        text = string_or_none(message)
+        if text:
+            try:
+                session_db.append_message(
+                    session_id,
+                    "user",
+                    text,
+                    display_kind="olympus_steer",
+                    display_metadata={"source": "olympus_steer"},
+                )
+            except Exception:
+                # Display persistence must never break model delivery.
+                pass
+        return message
+
+    setattr(agent, "_drain_pending_steer", drain_and_record)
+
+
+def _drain_unapplied_steer(agent: Any) -> str | None:
+    """Return a steer that was accepted after the final usable tool batch."""
+    drain = getattr(agent, "_olympus_raw_drain_pending_steer", None)
+    if not callable(drain):
+        drain = getattr(agent, "_drain_pending_steer", None)
+    if not callable(drain):
+        return None
+    try:
+        return string_or_none(drain())
+    except Exception:
+        return None
 
 
 def _interrupt_active_chat(request: dict[str, Any]) -> dict[str, bool]:
@@ -1315,6 +1363,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             "tool_progress_callback": on_tool_progress,
         },
     )
+    _install_steer_delivery_recorder(agent, session_db, session_id)
     _register_active_agent(_task_key_for(request), request_id, agent)
     _sync_session_identity(agent, session_id)
     task_id = string_or_none(request.get("taskId")) or session_id
@@ -1347,6 +1396,10 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             except Exception:
                 pass
 
+    # From this point onward no model/tool work can consume another steer.
+    # Retire atomically before inspecting or draining pending steer content.
+    _unregister_active_agent(_task_key_for(request), request_id)
+
     if result.get("interrupted"):
         # User-initiated stop: end the turn cleanly (the partial reply is already
         # streamed and persisted by run_conversation) rather than as an error.
@@ -1377,7 +1430,16 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             "used_tokens": context_used,
             "window_tokens": context_window,
         }
-    _send({"id": request_id, "type": "done", "sessionId": getattr(agent, "session_id", None) or session_id, "context": context})
+    done_event = {
+        "id": request_id,
+        "type": "done",
+        "sessionId": getattr(agent, "session_id", None) or session_id,
+        "context": context,
+    }
+    pending_steer = _drain_unapplied_steer(agent)
+    if pending_steer:
+        done_event["pendingSteer"] = pending_steer
+    _send(done_event)
 
 
 def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) -> None:
