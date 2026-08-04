@@ -43,8 +43,10 @@ export interface HermesProfileHealth {
 
 export interface HermesProfile {
   id: string;
+  displayName: string;
   label: string;
   description: string;
+  active: boolean;
   isDefault: boolean;
   capabilities: HermesProfileCapabilities;
   health: HermesProfileHealth;
@@ -58,6 +60,20 @@ export interface HermesProfileSettings {
   provider: string | null;
   reasoningEffort: ReasoningEffort | null;
   soul: string;
+}
+
+export interface HermesProfileCreateInput extends Omit<HermesProfileSettings, 'id'> {
+  id: string;
+  active?: boolean;
+}
+
+export interface ProfileBuilderSuggestion {
+  displayName: string;
+  description: string;
+  soul: string;
+  model: string | null;
+  provider: string | null;
+  reasoningEffort: ReasoningEffort | null;
 }
 
 export type HermesProfileSettingsUpdate = Partial<Omit<HermesProfileSettings, 'id'>>;

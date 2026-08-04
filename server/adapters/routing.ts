@@ -88,6 +88,11 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return await worker.chat(sessionId, message, options);
   }
 
+  async chatForProfile(profileId: string, sessionId: string, message: string, options?: AgentRunOptions) {
+    const worker = await this.adapterForProfileId(profileId);
+    return await worker.chat(sessionId, message, options);
+  }
+
   async *chatStream(sessionId: string, message: string, options?: AgentRunOptions): AsyncIterable<StreamEvent> {
     const worker = await this.adapterForTaskId(options?.task?.id ?? sessionId);
     yield* worker.chatStream(sessionId, message, options);

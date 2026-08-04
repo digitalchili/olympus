@@ -28,6 +28,7 @@ const stmtInsertTask = db.prepare(`
   )
 `);
 const stmtDeleteTask = db.prepare('DELETE FROM tasks WHERE id = ?');
+const stmtDeleteTasksByProfile = db.prepare('DELETE FROM tasks WHERE profile_name = ?');
 const stmtTouchTask = db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?');
 const stmtMarkTaskViewed = db.prepare(`
   UPDATE tasks
@@ -184,4 +185,10 @@ export function markTaskViewed(id: string): { task: Task | undefined; changed: b
 export function deleteTask(id: string): boolean {
   const result = stmtDeleteTask.run(id);
   return result.changes > 0;
+}
+
+export function deleteTasksForProfile(profileId: string): string[] {
+  const taskIds = (stmtTasksByProfile.all(profileId) as Task[]).map((task) => task.id);
+  stmtDeleteTasksByProfile.run(profileId);
+  return taskIds;
 }

@@ -14,7 +14,7 @@ export function requestProfile(req: Request, registry: LocalProfileRegistry = lo
   const cached = (req as Request & { activeHermesProfile?: LocalProfileTarget }).activeHermesProfile;
   if (cached) return cached;
   const requested = queryString(req.query[PROFILE_QUERY_PARAM]);
-  const profile = requested ? registry.require(requested) : registry.default();
+  const profile = requested ? registry.requireActive(requested) : registry.default();
   (req as Request & { activeHermesProfile?: LocalProfileTarget }).activeHermesProfile = profile;
   return profile;
 }

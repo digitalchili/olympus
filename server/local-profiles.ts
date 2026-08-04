@@ -1,19 +1,38 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { appendFile, chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import {
+  appendFile,
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import type {
   HermesProfile,
+  HermesProfileCreateInput,
   HermesProfileSettings,
   ReasoningEffort,
   TaskRoutingSource,
 } from '../shared/types.js';
 import { DEFAULT_PROFILE_NAME, REASONING_EFFORTS } from '../shared/types.js';
-import { resolveHermesHome, resolveMinionsWorkspaceDir } from './paths.js';
+import {
+  resolveHermesHome,
+  resolveMinionsBackupsDir,
+  resolveMinionsHome,
+  resolveMinionsLogsDir,
+  resolveMinionsWorkspaceDir,
+} from './paths.js';
 
-const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
-const DISPLAY_KEYS = ['display_name', 'displayName', 'name', 'label'] as const;
+const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const DISPLAY_KEYS = ['displayName', 'display_name', 'name', 'label'] as const;
+const MAX_PROFILE_ID = 64;
 const MAX_DISPLAY_NAME = 80;
 const MAX_DESCRIPTION = 500;
 const MAX_MODEL_VALUE = 200;
@@ -92,10 +111,13 @@ function profileHealth(hermesHome: string): HermesProfile['health'] {
 
 function buildTarget(id: string, hermesHome: string, isDefault: boolean, metadata: Record<string, unknown>): LocalProfileTarget {
   const fallbackLabel = isDefault ? 'Default' : id;
+  const displayName = metadataDisplayName(metadata, fallbackLabel);
   return {
     id,
-    label: metadataDisplayName(metadata, fallbackLabel),
+    displayName,
+    label: displayName,
     description: cleanString(metadata.description),
+    active: isDefault || metadata.active !== false,
     isDefault,
     capabilities: profileCapabilities(hermesHome),
     health: profileHealth(hermesHome),
@@ -108,7 +130,7 @@ function buildTarget(id: string, hermesHome: string, isDefault: boolean, metadat
 
 function defaultProfile(hermesHome: string): LocalProfileTarget {
   let metadata: Record<string, unknown> = {};
-  try { metadata = readYamlRecord(join(hermesHome, 'profile.yaml'), true); } catch { /* health reports invalid config only */ }
+  try { metadata = readYamlRecord(join(hermesHome, 'profile.yaml'), true); } catch { /* invalid metadata falls back to Default */ }
   return buildTarget(DEFAULT_PROFILE_NAME, hermesHome, true, metadata);
 }
 
@@ -143,15 +165,97 @@ export function discoverLocalProfileTargets(hermesHome = resolveHermesHome()): L
   return targets;
 }
 
-export function discoverLocalProfiles(hermesHome = resolveHermesHome()): HermesProfile[] {
-  return discoverLocalProfileTargets(hermesHome).map(({ hermesHome: _home, workspaceDir: _workspace, skillsDir: _skills, scheduledOutputDir: _cron, ...profile }) => profile);
+function publicProfile(target: LocalProfileTarget): HermesProfile {
+  const {
+    hermesHome: _home,
+    workspaceDir: _workspace,
+    skillsDir: _skills,
+    scheduledOutputDir: _cron,
+    ...profile
+  } = target;
+  return profile;
+}
+
+export function discoverLocalProfiles(hermesHome = resolveHermesHome(), includeInactive = true): HermesProfile[] {
+  return discoverLocalProfileTargets(hermesHome)
+    .filter((profile) => includeInactive || profile.active)
+    .map(publicProfile);
+}
+
+function validatedText(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== 'string') throw new LocalProfileError(400, `${field} must be a string`, 'INVALID_PROFILE_SETTINGS');
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) throw new LocalProfileError(400, `${field} is too long`, 'INVALID_PROFILE_SETTINGS');
+  if (/\p{Cc}/u.test(trimmed)) throw new LocalProfileError(400, `${field} contains invalid control characters`, 'INVALID_PROFILE_SETTINGS');
+  return trimmed;
+}
+
+function validatedProfileId(value: unknown): string {
+  const id = validatedText(value, 'id', MAX_PROFILE_ID);
+  if (!PROFILE_ID_PATTERN.test(id) || id === DEFAULT_PROFILE_NAME) {
+    throw new LocalProfileError(400, 'id must be a lowercase immutable slug using letters, numbers, dots, dashes, or underscores', 'INVALID_PROFILE_ID');
+  }
+  return id;
+}
+
+function validatedOptionalSetting(value: unknown, field: string): string | null {
+  if (value === null || value === '') return null;
+  return validatedText(value, field, MAX_MODEL_VALUE);
+}
+
+function validatedReasoningEffort(value: unknown): ReasoningEffort | null {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string' || !(REASONING_EFFORTS as readonly string[]).includes(value)) {
+    throw new LocalProfileError(400, `reasoningEffort must be one of: ${REASONING_EFFORTS.join(', ')}`, 'INVALID_PROFILE_SETTINGS');
+  }
+  return value as ReasoningEffort;
+}
+
+function validatedSoul(value: unknown): string {
+  if (typeof value !== 'string') throw new LocalProfileError(400, 'soul must be a string', 'INVALID_PROFILE_SETTINGS');
+  if (Buffer.byteLength(value, 'utf8') > MAX_SOUL_BYTES) {
+    throw new LocalProfileError(413, 'soul is too large', 'INVALID_PROFILE_SETTINGS');
+  }
+  return value;
+}
+
+async function appendAudit(path: string, value: Record<string, unknown>): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, `${JSON.stringify({ at: new Date().toISOString(), ...value })}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+async function appendGlobalLifecycleAudit(lifecycleHome: string, value: Record<string, unknown>): Promise<void> {
+  const logsDir = lifecycleHome === resolveMinionsHome()
+    ? resolveMinionsLogsDir()
+    : join(lifecycleHome, 'logs');
+  await appendAudit(join(logsDir, 'profile-lifecycle.jsonl'), value);
+}
+
+async function atomicWriteWithBackup(target: LocalProfileTarget, fileName: string, content: string): Promise<void> {
+  const path = join(target.hermesHome, fileName);
+  const backupDir = join(target.hermesHome, '.olympus-dispatch-backups');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const temp = join(target.hermesHome, `.${basename(fileName)}.${randomUUID()}.tmp`);
+  await mkdir(target.hermesHome, { recursive: true });
+  await mkdir(backupDir, { recursive: true });
+  if (existsSync(path)) await copyFile(path, join(backupDir, `${timestamp}-${basename(fileName)}`));
+  await writeFile(temp, content, { encoding: 'utf8', mode: 0o600 });
+  await rename(temp, path);
+  await chmod(path, 0o600).catch(() => undefined);
 }
 
 export class LocalProfileRegistry {
-  constructor(private hermesHome = resolveHermesHome()) {}
+  constructor(
+    public readonly hermesHome = resolveHermesHome(),
+    public readonly lifecycleHome = resolveMinionsHome(),
+  ) {}
 
   publicProfiles(): HermesProfile[] {
-    return discoverLocalProfiles(this.hermesHome);
+    return discoverLocalProfiles(this.hermesHome, false);
+  }
+
+  allPublicProfiles(): HermesProfile[] {
+    return discoverLocalProfiles(this.hermesHome, true);
   }
 
   default(): LocalProfileTarget {
@@ -167,6 +271,24 @@ export class LocalProfileRegistry {
     const target = this.get(id);
     if (!target) throw new LocalProfileError(400, `Unknown local Hermes profile: ${id}`, 'UNKNOWN_PROFILE');
     return target;
+  }
+
+  requireActive(id: string): LocalProfileTarget {
+    const target = this.require(id);
+    if (!target.active) throw new LocalProfileError(409, `Hermes profile is inactive: ${id}`, 'INACTIVE_PROFILE');
+    return target;
+  }
+
+  async create(value: unknown): Promise<LocalProfileTarget> {
+    return createLocalProfile(this, value);
+  }
+
+  async setActive(id: string, active: boolean, currentProfileId: string): Promise<LocalProfileTarget> {
+    return setLocalProfileActive(this, id, active, currentProfileId);
+  }
+
+  async delete(id: string, confirmation: unknown, currentProfileId: string, accompanyingData?: unknown): Promise<{ backupDir: string }> {
+    return deleteLocalProfile(this, id, confirmation, currentProfileId, accompanyingData);
   }
 }
 
@@ -185,7 +307,7 @@ export function resolveTaskProfile(
 
   const requested = input.requestedProfileName.trim();
   if (!requested) return { profileName: null, routingSource: null };
-  return { profileName: registry.require(requested).id, routingSource: 'manual' };
+  return { profileName: registry.requireActive(requested).id, routingSource: 'manual' };
 }
 
 function nestedRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -229,32 +351,6 @@ export async function readProfileSettings(target: LocalProfileTarget): Promise<H
   };
 }
 
-function validatedText(value: unknown, field: string, maxLength: number): string {
-  if (typeof value !== 'string') throw new LocalProfileError(400, `${field} must be a string`, 'INVALID_PROFILE_SETTINGS');
-  const trimmed = value.trim();
-  if (trimmed.length > maxLength) throw new LocalProfileError(400, `${field} is too long`, 'INVALID_PROFILE_SETTINGS');
-  if (/\p{Cc}/u.test(trimmed)) throw new LocalProfileError(400, `${field} contains invalid control characters`, 'INVALID_PROFILE_SETTINGS');
-  return trimmed;
-}
-
-function validatedOptionalSetting(value: unknown, field: string): string | null {
-  if (value === null || value === '') return null;
-  return validatedText(value, field, MAX_MODEL_VALUE);
-}
-
-async function atomicWriteWithBackup(target: LocalProfileTarget, fileName: string, content: string): Promise<void> {
-  const path = join(target.hermesHome, fileName);
-  const backupDir = join(target.hermesHome, '.olympus-dispatch-backups');
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const temp = join(target.hermesHome, `.${basename(fileName)}.${randomUUID()}.tmp`);
-  await mkdir(target.hermesHome, { recursive: true });
-  await mkdir(backupDir, { recursive: true });
-  if (existsSync(path)) await copyFile(path, join(backupDir, `${timestamp}-${basename(fileName)}`));
-  await writeFile(temp, content, { encoding: 'utf8', mode: 0o600 });
-  await rename(temp, path);
-  await chmod(path, 0o600).catch(() => undefined);
-}
-
 export async function updateProfileSettings(target: LocalProfileTarget, value: unknown): Promise<HermesProfileSettings> {
   const updates = recordValue(value);
   if (!updates) throw new LocalProfileError(400, 'Request body is required', 'INVALID_PROFILE_SETTINGS');
@@ -271,9 +367,9 @@ export async function updateProfileSettings(target: LocalProfileTarget, value: u
   if ('displayName' in updates || 'description' in updates) {
     if ('displayName' in updates) {
       const displayName = validatedText(updates.displayName, 'displayName', MAX_DISPLAY_NAME);
-      const existingKey = DISPLAY_KEYS.find((key) => Object.prototype.hasOwnProperty.call(metadata, key));
+      if (!displayName) throw new LocalProfileError(400, 'displayName is required', 'INVALID_PROFILE_SETTINGS');
       for (const key of DISPLAY_KEYS) delete metadata[key];
-      metadata[existingKey ?? 'display_name'] = displayName;
+      metadata.displayName = displayName;
     }
     if ('description' in updates) metadata.description = validatedText(updates.description, 'description', MAX_DESCRIPTION);
     await atomicWriteWithBackup(target, 'profile.yaml', stringify(metadata));
@@ -285,33 +381,158 @@ export async function updateProfileSettings(target: LocalProfileTarget, value: u
     const agentConfig = nestedRecord(config, 'agent');
     if ('model' in updates) modelConfig.default = validatedOptionalSetting(updates.model, 'model');
     if ('provider' in updates) modelConfig.provider = validatedOptionalSetting(updates.provider, 'provider');
-    if ('reasoningEffort' in updates) {
-      const effort = updates.reasoningEffort;
-      if (effort !== null && (typeof effort !== 'string' || !(REASONING_EFFORTS as readonly string[]).includes(effort))) {
-        throw new LocalProfileError(400, `reasoningEffort must be one of: ${REASONING_EFFORTS.join(', ')}`, 'INVALID_PROFILE_SETTINGS');
-      }
-      agentConfig.reasoning_effort = effort;
-    }
+    if ('reasoningEffort' in updates) agentConfig.reasoning_effort = validatedReasoningEffort(updates.reasoningEffort);
     await atomicWriteWithBackup(target, 'config.yaml', stringify(config));
     changedFiles.push('config.yaml');
   }
 
   if ('soul' in updates) {
-    if (typeof updates.soul !== 'string') throw new LocalProfileError(400, 'soul must be a string', 'INVALID_PROFILE_SETTINGS');
-    if (Buffer.byteLength(updates.soul, 'utf8') > MAX_SOUL_BYTES) throw new LocalProfileError(413, 'soul is too large', 'INVALID_PROFILE_SETTINGS');
-    await atomicWriteWithBackup(target, 'SOUL.md', updates.soul);
+    await atomicWriteWithBackup(target, 'SOUL.md', validatedSoul(updates.soul));
     changedFiles.push('SOUL.md');
   }
 
   if (changedFiles.length > 0) {
-    const audit = {
-      at: new Date().toISOString(),
+    await appendAudit(join(target.hermesHome, '.olympus-dispatch-audit.jsonl'), {
       action: 'profile.settings.updated',
+      profileId: target.id,
       fields: Object.keys(updates).sort(),
       files: changedFiles,
-    };
-    await appendFile(join(target.hermesHome, '.olympus-dispatch-audit.jsonl'), `${JSON.stringify(audit)}\n`, { encoding: 'utf8', mode: 0o600 });
+    });
   }
 
   return readProfileSettings(target);
+}
+
+export async function createLocalProfile(registry: LocalProfileRegistry, value: unknown): Promise<LocalProfileTarget> {
+  const input = recordValue(value);
+  if (!input) throw new LocalProfileError(400, 'Request body is required', 'INVALID_PROFILE_SETTINGS');
+  const allowed = new Set(['id', 'displayName', 'description', 'model', 'provider', 'reasoningEffort', 'soul', 'active']);
+  const unknown = Object.keys(input).filter((key) => !allowed.has(key));
+  if (unknown.length) throw new LocalProfileError(400, `Unsupported profile setting: ${unknown[0]}`, 'INVALID_PROFILE_SETTINGS');
+
+  const id = validatedProfileId(input.id);
+  const displayName = validatedText(input.displayName, 'displayName', MAX_DISPLAY_NAME);
+  if (!displayName) throw new LocalProfileError(400, 'displayName is required', 'INVALID_PROFILE_SETTINGS');
+  const description = validatedText(input.description ?? '', 'description', MAX_DESCRIPTION);
+  const model = validatedOptionalSetting(input.model ?? null, 'model');
+  const provider = validatedOptionalSetting(input.provider ?? null, 'provider');
+  const reasoningEffort = validatedReasoningEffort(input.reasoningEffort ?? null);
+  const soul = validatedSoul(input.soul ?? '');
+  if (input.active !== undefined && typeof input.active !== 'boolean') {
+    throw new LocalProfileError(400, 'active must be a boolean', 'INVALID_PROFILE_SETTINGS');
+  }
+  const active = input.active !== false;
+
+  const profilesHome = join(registry.hermesHome, 'profiles');
+  const finalHome = join(profilesHome, id);
+  if (registry.get(id) || existsSync(finalHome)) {
+    throw new LocalProfileError(409, `Profile already exists: ${id}`, 'PROFILE_EXISTS');
+  }
+
+  const tempHome = join(profilesHome, `.${id}.${randomUUID()}.tmp`);
+  const metadata = { displayName, description, active };
+  const config: Record<string, unknown> = {};
+  if (model || provider) config.model = { default: model, provider };
+  if (reasoningEffort) config.agent = { reasoning_effort: reasoningEffort };
+
+  await mkdir(join(tempHome, 'workspace'), { recursive: true });
+  await mkdir(join(tempHome, 'skills'), { recursive: true });
+  await mkdir(join(tempHome, 'cron', 'output'), { recursive: true });
+  await Promise.all([
+    writeFile(join(tempHome, 'profile.yaml'), stringify(metadata), { encoding: 'utf8', mode: 0o600 }),
+    writeFile(join(tempHome, 'config.yaml'), stringify(config), { encoding: 'utf8', mode: 0o600 }),
+    writeFile(join(tempHome, 'SOUL.md'), soul, { encoding: 'utf8', mode: 0o600 }),
+  ]);
+  await appendAudit(join(tempHome, '.olympus-dispatch-audit.jsonl'), {
+    action: 'profile.created',
+    profileId: id,
+    fields: (['displayName', 'description', 'model', 'provider', 'reasoningEffort', 'soul', 'active'] satisfies Array<keyof HermesProfileCreateInput>),
+  });
+
+  try {
+    await rename(tempHome, finalHome);
+  } catch (error) {
+    await rm(tempHome, { recursive: true, force: true });
+    throw error;
+  }
+  await appendGlobalLifecycleAudit(registry.lifecycleHome, { action: 'profile.created', profileId: id, active });
+  return registry.require(id);
+}
+
+export async function setLocalProfileActive(
+  registry: LocalProfileRegistry,
+  id: string,
+  active: boolean,
+  currentProfileId: string,
+): Promise<LocalProfileTarget> {
+  const target = registry.require(id);
+  if (!active && target.isDefault) {
+    throw new LocalProfileError(409, 'The default profile cannot be deactivated', 'PROTECTED_PROFILE');
+  }
+  if (!active && target.id === currentProfileId) {
+    throw new LocalProfileError(409, 'The current profile cannot be deactivated', 'CURRENT_PROFILE');
+  }
+  if (target.active === active) return target;
+
+  const metadataPath = join(target.hermesHome, 'profile.yaml');
+  const metadata = existsSync(metadataPath) ? readYamlRecord(metadataPath) : {};
+  metadata.active = active;
+  await atomicWriteWithBackup(target, 'profile.yaml', stringify(metadata));
+  await appendAudit(join(target.hermesHome, '.olympus-dispatch-audit.jsonl'), {
+    action: active ? 'profile.reactivated' : 'profile.deactivated',
+    profileId: target.id,
+  });
+  await appendGlobalLifecycleAudit(registry.lifecycleHome, {
+    action: active ? 'profile.reactivated' : 'profile.deactivated',
+    profileId: target.id,
+  });
+  return registry.require(id);
+}
+
+async function safeResolvedProfileRoot(registry: LocalProfileRegistry, target: LocalProfileTarget): Promise<string> {
+  const profilesHome = await realpath(join(registry.hermesHome, 'profiles'));
+  const resolvedTarget = await realpath(target.hermesHome);
+  if (dirname(resolvedTarget) !== profilesHome || basename(resolvedTarget) !== target.id) {
+    throw new LocalProfileError(409, 'Refusing to delete a profile outside the resolved profiles directory', 'UNSAFE_PROFILE_PATH');
+  }
+  return resolvedTarget;
+}
+
+export async function deleteLocalProfile(
+  registry: LocalProfileRegistry,
+  id: string,
+  confirmation: unknown,
+  currentProfileId: string,
+  accompanyingData?: unknown,
+): Promise<{ backupDir: string }> {
+  const target = registry.require(id);
+  if (target.isDefault) throw new LocalProfileError(409, 'The default profile cannot be deleted', 'PROTECTED_PROFILE');
+  if (target.id === currentProfileId) throw new LocalProfileError(409, 'The current profile cannot be deleted', 'CURRENT_PROFILE');
+  if (confirmation !== target.id) {
+    throw new LocalProfileError(400, `Type the immutable profile ID “${target.id}” to confirm deletion`, 'PROFILE_ID_CONFIRMATION_REQUIRED');
+  }
+
+  const resolvedTarget = await safeResolvedProfileRoot(registry, target);
+  await appendAudit(join(resolvedTarget, '.olympus-dispatch-audit.jsonl'), {
+    action: 'profile.delete.requested',
+    profileId: target.id,
+  });
+
+  const backupsRoot = registry.lifecycleHome === resolveMinionsHome()
+    ? resolveMinionsBackupsDir()
+    : join(registry.lifecycleHome, 'backups');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupDir = join(backupsRoot, 'profiles', `${timestamp}-${target.id}`);
+  await mkdir(dirname(backupDir), { recursive: true });
+  await cp(resolvedTarget, backupDir, { recursive: true, errorOnExist: true, force: false });
+  if (accompanyingData !== undefined) {
+    await writeFile(join(backupDir, 'olympus-profile-data.json'), `${JSON.stringify(accompanyingData, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  }
+  await appendGlobalLifecycleAudit(registry.lifecycleHome, {
+    action: 'profile.deleted',
+    profileId: target.id,
+    backupDir,
+  });
+  await rm(resolvedTarget, { recursive: true, force: false });
+  return { backupDir };
 }

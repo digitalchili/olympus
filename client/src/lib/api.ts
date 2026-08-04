@@ -28,8 +28,10 @@ import type {
   ClawHubSkillSummary,
   ClawHubScanResult,
   HermesProfile,
+  HermesProfileCreateInput,
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
+  ProfileBuilderSuggestion,
 } from '@shared/types';
 import { apiPathWithProfile } from './profileQuery';
 
@@ -159,8 +161,22 @@ export function updateInstallationName(name: string) {
   });
 }
 
-export function fetchHermesProfiles() {
-  return request<{ profiles: HermesProfile[] }>('/profiles');
+export function fetchHermesProfiles(includeInactive = false) {
+  return request<{ profiles: HermesProfile[] }>(includeInactive ? '/profiles?includeInactive=true' : '/profiles');
+}
+
+export function createHermesProfile(input: HermesProfileCreateInput) {
+  return request<{ profile: HermesProfile }>('/profiles', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function draftHermesProfile(description: string) {
+  return request<{ suggestion: ProfileBuilderSuggestion }>('/profiles/draft', {
+    method: 'POST',
+    body: JSON.stringify({ description }),
+  });
 }
 
 export function fetchProfileSettings(profileId: string) {
@@ -171,6 +187,21 @@ export function updateProfileSettings(profileId: string, updates: HermesProfileS
   return request<{ settings: HermesProfileSettings }>(`/profiles/${encodeURIComponent(profileId)}/settings`, {
     method: 'PATCH',
     body: JSON.stringify(updates),
+  });
+}
+
+export function deactivateHermesProfile(profileId: string) {
+  return request<{ profile: HermesProfile }>(`/profiles/${encodeURIComponent(profileId)}/deactivate`, { method: 'POST' });
+}
+
+export function reactivateHermesProfile(profileId: string) {
+  return request<{ profile: HermesProfile }>(`/profiles/${encodeURIComponent(profileId)}/reactivate`, { method: 'POST' });
+}
+
+export function deleteHermesProfile(profileId: string, confirmation: string) {
+  return request<{ ok: true; backupDir: string; deletedTaskCount: number }>(`/profiles/${encodeURIComponent(profileId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation }),
   });
 }
 

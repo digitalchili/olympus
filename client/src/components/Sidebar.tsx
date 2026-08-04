@@ -76,6 +76,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   };
 
   const desktopCollapsed = collapsed;
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId);
 
   return (
     <aside
@@ -94,19 +95,16 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
           </button>
         ) : (
           <div className="flex items-center justify-between w-full gap-2 px-2">
-            <button onClick={() => navigate('/')} className="flex shrink-0 items-center" title={`Home · ${installationName}`} aria-label={`Home · ${installationName}`}>
+            <button onClick={() => navigate('/')} className="flex min-w-0 items-center gap-2" title={`Home · ${installationName}`} aria-label={`Home · ${installationName}`}>
               <img src="/logo-black.png" alt="Olympus Dispatch" className="h-[25px] w-[34px] shrink-0 object-contain dark:hidden" />
               <img src="/logo-white.png" alt="" className="hidden h-[25px] w-[34px] shrink-0 object-contain dark:block" />
+              <span className="truncate text-sm font-semibold tracking-tight text-zinc-800 dark:text-zinc-100">
+                {profilesLoading ? 'Loading…' : activeProfile?.displayName ?? installationName}
+              </span>
             </button>
-            <ProfilePicker
-              profiles={profiles}
-              activeProfileId={activeProfileId}
-              loading={profilesLoading}
-              onChange={setActiveProfileId}
-            />
             <button
               onClick={toggleSidebar}
-              className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors p-1.5 rounded-lg hover:bg-surface dark:hover:bg-zinc-800"
+              className="shrink-0 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors p-1.5 rounded-lg hover:bg-surface dark:hover:bg-zinc-800"
               title="Collapse sidebar"
             >
               <PanelLeftClose size={18} />
@@ -205,6 +203,26 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
         </div>
 
         <nav aria-label="System" className="mt-auto hidden pb-3 sm:block sm:space-y-1">
+          {!desktopCollapsed && (
+            <div className="mb-2 px-1">
+              <ProfilePicker
+                profiles={profiles}
+                activeProfileId={activeProfileId}
+                loading={profilesLoading}
+                onChange={setActiveProfileId}
+              />
+            </div>
+          )}
+          {desktopCollapsed && (
+            <div className="mb-2 flex justify-center">
+              <ProfilePicker
+                profiles={profiles}
+                activeProfileId={activeProfileId}
+                loading={profilesLoading}
+                onChange={setActiveProfileId}
+              />
+            </div>
+          )}
           <SidebarLink
             icon={<Settings size={18} />}
             label="Settings"
