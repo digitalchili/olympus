@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router';
-import { ArrowUp, Loader2, X } from 'lucide-react';
+import { ArrowUp, Loader2 } from 'lucide-react';
 import { InputToolbar } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, UploadErrorBar } from './ChatAttachments';
 import { ProjectFolderPicker } from './ProjectFolderPicker';
@@ -10,9 +10,17 @@ import { useFileAttachments } from '../hooks/useFileAttachments';
 import { isEditableTarget, handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
 import { GOAL_MODE_PLACEHOLDER, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
-import { applyProfileMentionSelection, findActiveProfileMention, type ActiveProfileMention } from '../lib/profileMentions';
+import {
+  addProfileInvite,
+  applyProfileMentionSelection,
+  findActiveProfileMention,
+  numericProfileSelectionIndex,
+  removeProfileInvite,
+  type ActiveProfileMention,
+} from '../lib/profileMentions';
+import { ProfileInviteControls } from './ProfileInviteControls';
 import type { ChatRunMode } from '@shared/types';
-import { useProfileNavigate } from '../contexts/ProfileContext';
+import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 
 type NewTaskLocationState = {
   draft?: string;
@@ -25,6 +33,7 @@ function draftFromLocationState(state: unknown): string {
 
 export function NewTaskPage() {
   const navigate = useProfileNavigate();
+  const { activeProfileId } = useProfile();
   const location = useLocation();
   const initialDraftRef = useRef(draftFromLocationState(location.state));
   const lastAppliedKeyRef = useRef(location.key);
@@ -33,7 +42,7 @@ export function NewTaskPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [workdir, setWorkdir] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
-  const [selectedProfile, setSelectedProfile] = useState<HermesProfile | null>(null);
+  const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
   const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
   const [highlightedProfileIndex, setHighlightedProfileIndex] = useState(0);
   const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig();
@@ -65,7 +74,9 @@ export function NewTaskPage() {
     let cancelled = false;
     fetchHermesProfiles()
       .then(({ profiles: nextProfiles }) => {
-        if (!cancelled) setProfiles(nextProfiles);
+        if (!cancelled) {
+          setProfiles(nextProfiles.filter((profile) => profile.active && profile.id !== activeProfileId));
+        }
       })
       .catch(() => {
         if (!cancelled) setProfiles([]);
@@ -73,7 +84,7 @@ export function NewTaskPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeProfileId]);
 
   const updateInput = useCallback((nextInput: string, cursor?: number | null) => {
     setInput(nextInput);
@@ -103,30 +114,42 @@ export function NewTaskPage() {
     const text = input.trim();
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasFiles) || isCreating || (!defaults && isLoading) || uploadBlocksSend) return;
+    if (runMode === 'goal' && selectedProfiles.length > 0) {
+      setUploadError('Remove invited profiles before starting Goal mode. Collaboration runs in Task mode.');
+      return;
+    }
 
     setIsCreating(true);
     setUploadError(null);
     try {
       const description = text || pendingFiles.map((f) => f.file.name).join(', ');
-      const { task } = await createTask(description, undefined, workdir, selectedProfile?.id ?? null);
+      const { task } = await createTask(description, undefined, workdir);
       const initialMessage = submitWithAttachments(text);
       navigate(`/tasks/${task.id}`, {
         state: {
           initialMessage,
           initialSettings: { model, provider, reasoningEffort, mode: runMode },
+          initialInvitedProfileIds: selectedProfiles.map((profile) => profile.id),
         },
       });
     } catch (err) {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [defaults, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, provider, reasoningEffort, runMode, selectedProfile?.id, submitWithAttachments, setUploadError, workdir]);
+  }, [defaults, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, provider, reasoningEffort, runMode, selectedProfiles, submitWithAttachments, setUploadError, workdir]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
     const next = applyProfileMentionSelection(input, activeMention, profile);
     setInput(next.text);
-    setSelectedProfile(profile);
+    setSelectedProfiles((current) => {
+      if (current.some((item) => item.id === profile.id)) return current;
+      if (current.length >= 9) {
+        setUploadError('You can invite up to 9 profiles.');
+        return current;
+      }
+      return addProfileInvite(current, profile);
+    });
     setActiveMention(null);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
@@ -139,14 +162,24 @@ export function NewTaskPage() {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (activeMention && activeMention.options.length > 0) {
+        const numericIndex = !e.metaKey && !e.ctrlKey && !e.altKey
+          ? numericProfileSelectionIndex(e.key, Math.min(activeMention.options.length, 9))
+          : null;
+        if (numericIndex !== null) {
+          e.preventDefault();
+          const profile = activeMention.options[numericIndex] as HermesProfile | undefined;
+          if (profile) selectMentionProfile(profile);
+          return;
+        }
+        const optionCount = Math.min(activeMention.options.length, 9);
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          setHighlightedProfileIndex((index) => (index + 1) % activeMention.options.length);
+          setHighlightedProfileIndex((index) => (index + 1) % optionCount);
           return;
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          setHighlightedProfileIndex((index) => (index - 1 + activeMention.options.length) % activeMention.options.length);
+          setHighlightedProfileIndex((index) => (index - 1 + optionCount) % optionCount);
           return;
         }
         if (e.key === 'Enter' || e.key === 'Tab') {
@@ -163,10 +196,10 @@ export function NewTaskPage() {
       }
       handleChatKeyDown(e, handleSubmit, {
         onGoalToggle: handleToggleGoalMode,
-        goalToggleDisabled: isCreating,
+        goalToggleDisabled: isCreating || selectedProfiles.length > 0,
       });
     },
-    [activeMention, handleSubmit, handleToggleGoalMode, highlightedProfileIndex, isCreating, selectMentionProfile],
+    [activeMention, handleSubmit, handleToggleGoalMode, highlightedProfileIndex, isCreating, selectMentionProfile, selectedProfiles.length],
   );
 
   return (
@@ -178,22 +211,14 @@ export function NewTaskPage() {
 
       <div className="w-full max-w-2xl">
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 shadow-sm">
-          {selectedProfile && (
-            <div className="flex px-4 pt-3">
-              <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
-                <span className="truncate">{selectedProfile.label}</span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedProfile(null)}
-                  aria-label={`Remove ${selectedProfile.label} route`}
-                  title="Remove route"
-                  className="-mr-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            </div>
-          )}
+          <ProfileInviteControls
+            selected={selectedProfiles}
+            activeMention={null}
+            highlightedIndex={highlightedProfileIndex}
+            showPicker={false}
+            onSelect={selectMentionProfile}
+            onRemove={(profileId) => setSelectedProfiles((current) => removeProfileInvite(current, profileId))}
+          />
           <textarea
             ref={inputRef}
             value={input}
@@ -201,32 +226,18 @@ export function NewTaskPage() {
             onClick={(e) => updateInput(input, e.currentTarget.selectionStart)}
             onKeyDown={handleKeyDown}
             onPaste={isCreating ? undefined : handlePaste}
-            placeholder={runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Describe your task in detail...'}
+            placeholder={runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Describe what you want to accomplish… Type @ to invite profiles'}
             rows={4}
             className="w-full resize-none bg-transparent px-5 pt-4 pb-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none leading-relaxed"
           />
-          {activeMention && activeMention.options.length > 0 && (
-            <div className="mx-4 mb-2 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-              {activeMention.options.map((profile, index) => (
-                <button
-                  key={profile.id}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => selectMentionProfile(profile as HermesProfile)}
-                  className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm ${
-                    index === highlightedProfileIndex
-                      ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100'
-                      : 'text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800'
-                  }`}
-                >
-                  <span className="font-medium">{profile.label}</span>
-                  <span className="truncate text-xs text-zinc-400 dark:text-zinc-500">
-                    {(profile as HermesProfile).description || 'Local Hermes profile'}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+          <ProfileInviteControls
+            selected={selectedProfiles}
+            activeMention={activeMention}
+            highlightedIndex={highlightedProfileIndex}
+            showSelected={false}
+            onSelect={selectMentionProfile}
+            onRemove={() => {}}
+          />
           <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} />
           {uploadError && <UploadErrorBar error={uploadError} onDismiss={() => setUploadError(null)} />}
           <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
@@ -247,7 +258,13 @@ export function NewTaskPage() {
                   setProvider(nextProvider ?? null);
                 }}
                 onReasoningEffortChange={setReasoningEffort}
-                onRunModeChange={setRunMode}
+                onRunModeChange={(nextMode) => {
+                  if (nextMode === 'goal' && selectedProfiles.length > 0) {
+                    setUploadError('Remove invited profiles before starting Goal mode.');
+                    return;
+                  }
+                  setRunMode(nextMode);
+                }}
               />
             </div>
             <button

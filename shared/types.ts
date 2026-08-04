@@ -133,6 +133,50 @@ export interface TaskAttachment {
   size: number;
 }
 
+export const COLLABORATION_RUN_STATUSES = [
+  'gathering',
+  'proposal',
+  'review',
+  'synthesizing',
+  'completed',
+  'completed_with_errors',
+  'failed',
+  'cancelled',
+] as const;
+export type CollaborationRunStatus = (typeof COLLABORATION_RUN_STATUSES)[number];
+
+export type CollaborationContributionPhase = 'proposal' | 'review';
+export type CollaborationContributionStatus = 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
+
+export interface CollaborationContribution {
+  id: string;
+  run_id: string;
+  profile_id: string;
+  profile_label: string;
+  session_id: string;
+  phase: CollaborationContributionPhase;
+  phase_round: 1 | 2;
+  status: CollaborationContributionStatus;
+  content: string | null;
+  error: string | null;
+  started_at: number;
+  completed_at: number | null;
+}
+
+export interface CollaborationRun {
+  id: string;
+  task_id: string;
+  round: number;
+  status: CollaborationRunStatus;
+  question: string;
+  owner_profile_id: string;
+  owner_invited: boolean;
+  created_at: number;
+  contributors_completed_at: number | null;
+  completed_at: number | null;
+  contributions: CollaborationContribution[];
+}
+
 export interface ToolProgressEvent {
   tool: string;
   status: 'running' | 'completed' | 'error';

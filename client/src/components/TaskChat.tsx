@@ -8,22 +8,36 @@ import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
-import { ApiError, compactTask, interruptTask, steerTask, type AgentRunSettings } from '../lib/api';
+import { ApiError, compactTask, fetchHermesProfiles, interruptTask, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
-import type { ChatRunMode, GoalStateSnapshot } from '@shared/types';
+import {
+  addProfileInvite,
+  applyProfileMentionSelection,
+  findActiveProfileMention,
+  numericProfileSelectionIndex,
+  removeProfileInvite,
+  type ActiveProfileMention,
+} from '../lib/profileMentions';
+import { ProfileInviteControls } from './ProfileInviteControls';
+import { useProfile } from '../contexts/ProfileContext';
+import type { ChatRunMode, CollaborationRun, GoalStateSnapshot } from '@shared/types';
+import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility';
 
 interface TaskChatProps {
   taskId: string;
   initialMessage?: string;
   initialSettings?: AgentRunSettings;
+  initialInvitedProfileIds?: string[];
+  collaborationRuns?: CollaborationRun[];
 }
 
 type QueuedMessage = {
   id: string;
   content: string;
   settings: AgentRunSettings;
+  invitedProfileIds: string[];
 };
 
 function ThinkingBlock({ content, isLive }: { content: string; isLive: boolean }) {
@@ -127,6 +141,7 @@ function QueuedMessageBar({
   isSending,
   canRetry,
   waitingLabel,
+  canSteer,
   isSteering,
   onSteer,
   onEdit,
@@ -138,6 +153,7 @@ function QueuedMessageBar({
   isSending: boolean;
   canRetry: boolean;
   waitingLabel: string;
+  canSteer: boolean;
   isSteering: boolean;
   onSteer: () => void;
   onEdit: () => void;
@@ -168,7 +184,7 @@ function QueuedMessageBar({
           <button
             type="button"
             onClick={onSteer}
-            disabled={isSending || isSteering || Boolean(error)}
+            disabled={isSending || isSteering || Boolean(error) || !canSteer}
             className="rounded-md px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-zinc-700"
           >
             {isSteering ? 'Steering…' : 'Steer now'}
@@ -227,10 +243,21 @@ function GoalRunStatus({ goal }: { goal: GoalStateSnapshot | null | undefined })
   );
 }
 
-export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatProps) {
+export function TaskChat({
+  taskId,
+  initialMessage,
+  initialSettings,
+  initialInvitedProfileIds,
+  collaborationRuns = [],
+}: TaskChatProps) {
+  const { activeProfileId } = useProfile();
   const { messages, isStreaming: liveIsStreaming, stopped: runStopped, thinkingContent, activeTools, context, sendMessage, loadMessages } = useChat();
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const [input, setInput] = useState('');
+  const [profiles, setProfiles] = useState<HermesProfile[]>([]);
+  const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
+  const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
+  const [highlightedProfileIndex, setHighlightedProfileIndex] = useState(0);
   const [runMode, setRunMode] = useState<ChatRunMode>(initialSettings?.mode ?? 'task');
   const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
   const [messageLoadError, setMessageLoadError] = useState(false);
@@ -261,9 +288,9 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     dragHandlers,
     handlePaste,
   } = useFileAttachments(taskId);
-  const startupRef = useRef({ taskId, initialMessage, initialSettings });
+  const startupRef = useRef({ taskId, initialMessage, initialSettings, initialInvitedProfileIds });
   if (startupRef.current.taskId !== taskId) {
-    startupRef.current = { taskId, initialMessage, initialSettings };
+    startupRef.current = { taskId, initialMessage, initialSettings, initialInvitedProfileIds };
   }
   const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig(
     taskId,
@@ -294,6 +321,25 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     return null;
   }, [messages]);
 
+  const collaborationAssistantIds = useMemo(
+    () => collaborationAssistantMessageIds(messages, collaborationRuns),
+    [collaborationRuns, messages],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHermesProfiles()
+      .then(({ profiles: nextProfiles }) => {
+        if (!cancelled) {
+          setProfiles(nextProfiles.filter((profile) => profile.active && profile.id !== activeProfileId));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setProfiles([]);
+      });
+    return () => { cancelled = true; };
+  }, [activeProfileId, taskId]);
+
   useEffect(() => {
     queuedMessageRef.current = queuedMessage;
   }, [queuedMessage]);
@@ -321,6 +367,9 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     setCompactDone(false);
     setCompactAfterIndex(-1);
     setQueuedMessage(null);
+    setSelectedProfiles([]);
+    setActiveMention(null);
+    setHighlightedProfileIndex(0);
     setQueuedSendError(null);
     setAutoSendingQueuedId(null);
     setRunMode(startupRef.current.initialSettings?.mode ?? 'task');
@@ -340,11 +389,13 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
         setLoadedTaskId(taskId);
         const firstMessage = startupRef.current.initialMessage;
         if (firstMessage) {
+          const invitedProfileIds = startupRef.current.initialInvitedProfileIds ?? [];
           startupRef.current.initialMessage = undefined;
+          startupRef.current.initialInvitedProfileIds = undefined;
           if (loadedMessages.length === 0) {
             pendingRevealRef.current = true;
             setOutgoingRevealActive(true);
-            sendMessage(taskId, firstMessage, startupRef.current.initialSettings);
+            sendMessage(taskId, firstMessage, startupRef.current.initialSettings, { invitedProfileIds });
           }
         }
       })
@@ -428,7 +479,10 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     setOutgoingRevealActive(true);
     setQueuedSendError(null);
 
-    const result = await sendMessage(taskId, message.content, message.settings, { appendLocalError: false });
+    const result = await sendMessage(taskId, message.content, message.settings, {
+      appendLocalError: false,
+      invitedProfileIds: message.invitedProfileIds,
+    });
     if (result.ok) {
       setQueuedMessage((current) => current?.id === message.id ? null : current);
     } else if (queuedMessageRef.current?.id === message.id) {
@@ -458,30 +512,66 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     return () => clearTimeout(timer);
   }, [interruptInFlight]);
 
+  const updateInput = useCallback((nextInput: string, cursor?: number | null) => {
+    setInput(nextInput);
+    const nextMention = findActiveProfileMention(nextInput, cursor ?? nextInput.length, profiles);
+    setActiveMention(nextMention);
+    setHighlightedProfileIndex(0);
+  }, [profiles]);
+
+  const selectMentionProfile = useCallback((profile: HermesProfile) => {
+    if (!activeMention) return;
+    const next = applyProfileMentionSelection(input, activeMention, profile);
+    setInput(next.text);
+    setSelectedProfiles((current) => {
+      if (current.some((item) => item.id === profile.id)) return current;
+      if (current.length >= 9) {
+        setUploadError('You can invite up to 9 profiles.');
+        return current;
+      }
+      return addProfileInvite(current, profile);
+    });
+    setActiveMention(null);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(next.cursor, next.cursor);
+    });
+  }, [activeMention, input]);
+
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasFiles) || configPending || uploadBlocksSend) return;
     if (queuedMessage) return;
+    if (runMode === 'goal' && selectedProfiles.length > 0) {
+      setUploadError('Remove invited profiles before starting Goal mode. Collaboration runs in Task mode.');
+      return;
+    }
 
     const messageText = submitWithAttachments(text);
-
+    const invitedProfileIds = selectedProfiles.map((profile) => profile.id);
+    const selectedAtSend = selectedProfiles;
     const settings = { model, provider, reasoningEffort, mode: isGoalStreaming ? 'task' : runMode };
     if (taskBusyForQueue) {
       setQueuedMessage({
         id: createUuid(),
         content: messageText,
         settings,
+        invitedProfileIds,
       });
       setQueuedSendError(null);
       setInput('');
+      setSelectedProfiles([]);
+      setActiveMention(null);
       return;
     }
 
     setInput('');
+    setSelectedProfiles([]);
+    setActiveMention(null);
     pendingRevealRef.current = true;
     setOutgoingRevealActive(true);
-    const result = await sendMessage(taskId, messageText, settings);
+    const result = await sendMessage(taskId, messageText, settings, { invitedProfileIds });
     if (!result.ok && result.conflict) {
       pendingRevealRef.current = false;
       setOutgoingRevealActive(false);
@@ -489,8 +579,9 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
       // message (incl. attachment paths) rather than just the typed text —
       // otherwise attachments are silently dropped on a busy-task conflict.
       setInput(messageText);
+      setSelectedProfiles(selectedAtSend);
     }
-  }, [submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId]);
+  }, [submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;
@@ -528,6 +619,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
 
   const handleSteerQueuedMessage = useCallback(async () => {
     if (!queuedMessage || steeringQueuedId || queuedIsSending) return;
+    if (queuedMessage.invitedProfileIds.length > 0) return;
 
     setSteeringQueuedId(queuedMessage.id);
     setQueuedSendError(null);
@@ -552,10 +644,12 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
     setProvider(queuedMessage.settings.provider ?? null);
     setReasoningEffort(queuedMessage.settings.reasoningEffort ?? null);
     setRunMode(queuedMessage.settings.mode ?? 'task');
+    setSelectedProfiles(profiles.filter((profile) => queuedMessage.invitedProfileIds.includes(profile.id)));
+    setActiveMention(null);
     setQueuedMessage(null);
     setQueuedSendError(null);
     window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId]);
+  }, [profiles, queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId]);
 
   const handleRemoveQueuedMessage = useCallback(() => {
     if (queuedIsSending) return;
@@ -570,14 +664,52 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
   }, [configPending, queuedIsSending, queuedMessage, sendQueuedMessage, taskBusyForQueue]);
 
   const goalToggleDisabled = isStreaming || compactionBlocker || queuedMessage !== null;
-  const handleToggleGoalMode = useCallback(() => setRunMode(toggleRunMode), []);
+  const collaborationGoalToggleDisabled = goalToggleDisabled || selectedProfiles.length > 0;
+  const handleToggleGoalMode = useCallback(() => {
+    if (!collaborationGoalToggleDisabled) setRunMode(toggleRunMode);
+  }, [collaborationGoalToggleDisabled]);
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => handleChatKeyDown(e, handleSubmit, {
-      onGoalToggle: handleToggleGoalMode,
-      goalToggleDisabled,
-    }),
-    [goalToggleDisabled, handleSubmit, handleToggleGoalMode],
+    (e: React.KeyboardEvent) => {
+      if (activeMention && activeMention.options.length > 0) {
+        const optionCount = Math.min(activeMention.options.length, 9);
+        const numericIndex = !e.metaKey && !e.ctrlKey && !e.altKey
+          ? numericProfileSelectionIndex(e.key, optionCount)
+          : null;
+        if (numericIndex !== null) {
+          e.preventDefault();
+          const profile = activeMention.options[numericIndex] as HermesProfile | undefined;
+          if (profile) selectMentionProfile(profile);
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setHighlightedProfileIndex((index) => (index + 1) % optionCount);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setHighlightedProfileIndex((index) => (index - 1 + optionCount) % optionCount);
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          const profile = activeMention.options[highlightedProfileIndex] as HermesProfile | undefined;
+          if (profile) selectMentionProfile(profile);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setActiveMention(null);
+          return;
+        }
+      }
+      handleChatKeyDown(e, handleSubmit, {
+        onGoalToggle: handleToggleGoalMode,
+        goalToggleDisabled: collaborationGoalToggleDisabled,
+      });
+    },
+    [activeMention, collaborationGoalToggleDisabled, handleSubmit, handleToggleGoalMode, highlightedProfileIndex, selectMentionProfile],
   );
   const isLoadingMessages = loadedTaskId !== taskId;
 
@@ -650,9 +782,14 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
               }
 
               const isLastAssistant = idx === messages.length - 1 && msg.role === 'assistant';
-              const thinkingToShow = isLastAssistant && isStreaming ? thinkingContent : (msg.thinking || '');
-              const isLiveThinking = isLastAssistant && isStreaming && !!thinkingContent;
-              const toolsToShow = isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
+              const hideCollaborationInternals = collaborationAssistantIds.has(msg.id);
+              const thinkingToShow = hideCollaborationInternals
+                ? ''
+                : isLastAssistant && isStreaming ? thinkingContent : (msg.thinking || '');
+              const isLiveThinking = !hideCollaborationInternals && isLastAssistant && isStreaming && !!thinkingContent;
+              const toolsToShow = hideCollaborationInternals
+                ? []
+                : isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
               const showSpinner = isLastAssistant && isStreaming && !msg.content && !thinkingContent && !activeTools.some(t => t.status === 'running');
               const { text: assistantText } = splitAttachmentMessage(msg.content);
 
@@ -733,16 +870,33 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
+          <ProfileInviteControls
+            selected={selectedProfiles}
+            activeMention={null}
+            highlightedIndex={highlightedProfileIndex}
+            showPicker={false}
+            onSelect={selectMentionProfile}
+            onRemove={(profileId) => setSelectedProfiles((current) => removeProfileInvite(current, profileId))}
+          />
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => updateInput(e.target.value, e.target.selectionStart)}
+            onClick={(e) => updateInput(input, e.currentTarget.selectionStart)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             disabled={configPending}
-            placeholder={runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Message your assistant...'}
+            placeholder={runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Message your assistant… Type @ to invite profiles'}
             rows={2}
             className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-relaxed text-zinc-900 placeholder-zinc-400 focus:outline-none disabled:opacity-60 dark:text-zinc-100 dark:placeholder-zinc-500 sm:px-5 sm:text-sm"
+          />
+          <ProfileInviteControls
+            selected={selectedProfiles}
+            activeMention={activeMention}
+            highlightedIndex={highlightedProfileIndex}
+            showSelected={false}
+            onSelect={selectMentionProfile}
+            onRemove={() => {}}
           />
           <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} />
           {uploadError && <UploadErrorBar error={uploadError} onDismiss={() => setUploadError(null)} />}
@@ -754,6 +908,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
               isSending={queuedIsSending}
               canRetry={!taskBusyForQueue && !configPending && !queuedIsSending}
               waitingLabel={compactionBlocker ? 'Sends after compaction' : 'Sends after current response'}
+              canSteer={queuedMessage.invitedProfileIds.length === 0}
               isSteering={steeringQueuedId === queuedMessage.id}
               onSteer={() => void handleSteerQueuedMessage()}
               onEdit={handleEditQueuedMessage}
@@ -778,7 +933,13 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
                   setProvider(nextProvider ?? null);
                 }}
                 onReasoningEffortChange={setReasoningEffort}
-                onRunModeChange={setRunMode}
+                onRunModeChange={(nextMode) => {
+                  if (nextMode === 'goal' && selectedProfiles.length > 0) {
+                    setUploadError('Remove invited profiles before starting Goal mode.');
+                    return;
+                  }
+                  setRunMode(nextMode);
+                }}
               />
             </div>
             <div className="flex items-center gap-2">

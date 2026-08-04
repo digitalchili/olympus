@@ -1,5 +1,14 @@
 import { Router, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
+import {
+  cancelCollaborationRun,
+  completeCollaborationContribution,
+  createCollaborationRun,
+  getCollaborationRun,
+  listCollaborationRuns,
+  startCollaborationPhase,
+  updateCollaborationRun,
+} from '../db/collaboration.js';
 import { adapter } from '../app.js';
 import { broadcast, initSSE } from '../events.js';
 import {
@@ -26,10 +35,28 @@ import { taskRunSettings, parseRunSettingsBody } from '../agent-settings.js';
 import { TASK_AGENT_SYSTEM_PROMPT } from '../prompts/task-agent.js';
 import { isRecord, toErrorMessage } from '../errors.js';
 import { publishMessageAttachments, publishTaskAttachments } from '../task-artifacts.js';
+import {
+  chairCollaborationContext,
+  collectContributors,
+  contributorSystemMessage,
+  isPrivateCollaborationEvent,
+  reviewContributorMessage,
+  validateCollaborationInvites,
+} from '../collaboration.js';
+import { LocalProfileError } from '../local-profiles.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, type ChatRunMode, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
+
+type ActiveCollaboration = {
+  runId: string;
+  phase: CollaborationContributionPhase | 'synthesizing';
+  cancelled: boolean;
+  settled: boolean;
+};
+
+const activeCollaborations = new Map<string, ActiveCollaboration>();
 
 function sendAdapterError(res: Response, error: unknown, fallback: string): void {
   res.status(503).json({ error: toErrorMessage(error, fallback) });
@@ -76,6 +103,12 @@ chatRouter.get('/:id/messages', async (req, res) => {
   } catch (error) {
     sendAdapterError(res, error, 'Hermes session history unavailable');
   }
+});
+
+chatRouter.get('/:id/collaborations', (req, res) => {
+  const task = getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json({ runs: listCollaborationRuns(task.id) });
 });
 
 chatRouter.get('/:id/session', async (req, res) => {
@@ -141,16 +174,23 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   finishRun(taskId, ttl, runId);
 }
 
-function taskSystemMessage(task: Task): string {
-  if (!task.workdir) return TASK_AGENT_SYSTEM_PROMPT;
-  return `${TASK_AGENT_SYSTEM_PROMPT}\n\n<workspace>\n  <path>${task.workdir}</path>\n  <rule>Use this as the project root. Keep file and terminal work inside it; begin shell commands with cd ${JSON.stringify(task.workdir)} && when needed.</rule>\n</workspace>`;
+function taskSystemMessage(task: Task, supplemental = ''): string {
+  const base = !task.workdir
+    ? TASK_AGENT_SYSTEM_PROMPT
+    : `${TASK_AGENT_SYSTEM_PROMPT}\n\n<workspace>\n  <path>${task.workdir}</path>\n  <rule>Use this as the project root. Keep file and terminal work inside it; begin shell commands with cd ${JSON.stringify(task.workdir)} && when needed.</rule>\n</workspace>`;
+  return `${base}${supplemental}`;
 }
 
 async function streamChatTurn(
   runTask: Task,
   sessionId: string,
   content: string,
-  options: { completeOnDone: boolean; captureResponseText?: boolean },
+  options: {
+    completeOnDone: boolean;
+    captureResponseText?: boolean;
+    supplementalSystemMessage?: string;
+    hideInternalEvents?: boolean;
+  },
 ): Promise<StreamChatTurnResult> {
   let sawDone = false;
   let doneContext: ContextUsage | null | undefined;
@@ -161,13 +201,16 @@ async function streamChatTurn(
 
   try {
     const stream = adapter.chatStream(sessionId, content, {
-      systemMessage: taskSystemMessage(runTask),
+      systemMessage: taskSystemMessage(runTask, options.supplementalSystemMessage),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title },
     });
 
     for await (const rawEvent of stream) {
       let event = rawEvent;
+      if (options.hideInternalEvents && isPrivateCollaborationEvent(event.type)) {
+        continue;
+      }
       if (rawEvent.type === 'done') {
         const run = getRun(runTask.id);
         const assistant = [...(run?.messages ?? [])].reverse().find((message) => message.role === 'assistant');
@@ -232,6 +275,138 @@ async function consumeChatRun(runTask: Task, sessionId: string, content: string,
     settleRun(runTask.id, runId, finalContext ?? null);
   } catch {
     finishRun(runTask.id, ERROR_SNAPSHOT_TTL_MS, runId);
+  }
+}
+
+function visiblePhaseResults(
+  collaboration: CollaborationRun,
+  phase: CollaborationContributionPhase,
+) {
+  return collaboration.contributions
+    .filter((contribution) => contribution.phase === phase)
+    .map((contribution) => ({
+      profileId: contribution.profile_id,
+      label: contribution.profile_label,
+      content: contribution.content,
+      error: contribution.error,
+    }));
+}
+
+async function collectCollaborationPhase(
+  runTask: Task,
+  collaboration: CollaborationRun,
+  phase: CollaborationContributionPhase,
+  active: ActiveCollaboration,
+): Promise<void> {
+  const proposals = visiblePhaseResults(collaboration, 'proposal');
+  const contributions = collaboration.contributions.filter((item) => item.phase === phase && item.status === 'running');
+  await collectContributors(
+    contributions.map((contribution) => ({
+      id: contribution.id,
+      profileId: contribution.profile_id,
+      sessionId: contribution.session_id,
+      message: phase === 'proposal'
+        ? collaboration.question
+        : reviewContributorMessage(collaboration.question, contribution.profile_id, proposals),
+      options: { systemMessage: contributorSystemMessage(runTask.workdir, phase) },
+    })),
+    async (invocation) => adapter.chatForProfile(
+      invocation.profileId,
+      invocation.sessionId,
+      invocation.message,
+      invocation.options,
+    ),
+    (result) => {
+      if (active.cancelled) return;
+      const text = result.text?.trim();
+      completeCollaborationContribution(result.id, text
+        ? { status: 'completed', content: text }
+        : { status: 'error', error: result.error ?? 'Contributor returned no visible recommendation' });
+    },
+  );
+}
+
+async function consumeCollaborationRun(
+  runTask: Task,
+  content: string,
+  liveRunId: string,
+  collaborationRunId: string,
+  active: ActiveCollaboration,
+): Promise<void> {
+  let finalContext: ContextUsage | null | undefined;
+  try {
+    let collaboration = getCollaborationRun(collaborationRunId);
+    if (!collaboration) throw new Error('Collaboration run was not persisted');
+
+    await collectCollaborationPhase(runTask, collaboration, 'proposal', active);
+    if (active.cancelled) return;
+    collaboration = getCollaborationRun(collaborationRunId);
+    if (!collaboration) throw new Error('Collaboration run disappeared');
+
+    const participantCount = new Set(
+      collaboration.contributions
+        .filter((contribution) => contribution.phase === 'proposal')
+        .map((contribution) => contribution.profile_id),
+    ).size;
+    if (participantCount >= 2) {
+      collaboration = startCollaborationPhase(collaborationRunId, 'review');
+      if (!collaboration) throw new Error('Could not start collaboration review phase');
+      active.phase = 'review';
+      await collectCollaborationPhase(runTask, collaboration, 'review', active);
+      if (active.cancelled) return;
+    }
+
+    collaboration = getCollaborationRun(collaborationRunId);
+    if (!collaboration) throw new Error('Collaboration run disappeared');
+    updateCollaborationRun(collaborationRunId, 'synthesizing', { contributorsCompleted: true });
+    active.phase = 'synthesizing';
+    const supplemental = chairCollaborationContext(collaboration.contributions
+      .filter((contribution) => contribution.status === 'completed' || contribution.status === 'error')
+      .map((contribution) => ({
+        profileId: contribution.profile_id,
+        label: contribution.profile_label,
+        phase: contribution.phase,
+        content: contribution.content,
+        error: contribution.error,
+      })));
+
+    const chair = await streamChatTurn(runTask, runTask.id, content, {
+      completeOnDone: true,
+      supplementalSystemMessage: supplemental,
+      hideInternalEvents: true,
+    });
+    if (chair.context !== undefined) finalContext = chair.context;
+    if (active.cancelled || chair.interrupted || getRunStatus(runTask.id)?.status === 'stopped') {
+      cancelCollaborationRun(collaborationRunId);
+      return;
+    }
+    const persisted = getCollaborationRun(collaborationRunId);
+    const contributorErrors = persisted?.contributions.some((result) => result.status === 'error') ?? false;
+    updateCollaborationRun(
+      collaborationRunId,
+      chair.hadError || !chair.sawDone ? 'failed' : contributorErrors ? 'completed_with_errors' : 'completed',
+      { completed: true },
+    );
+  } catch (error) {
+    if (!active.cancelled) {
+      const message = toErrorMessage(error, 'Collaboration run failed');
+      updateCollaborationRun(collaborationRunId, 'failed', { completed: true });
+      if (getRunStatus(runTask.id)?.status === 'streaming') {
+        const event: StreamEvent = { type: 'error', error: message };
+        applyEvent(runTask.id, event);
+        broadcastLive(runTask.id, event);
+      }
+    }
+  } finally {
+    if (activeCollaborations.get(runTask.id) === active) activeCollaborations.delete(runTask.id);
+    if (!active.settled) {
+      try {
+        settleRun(runTask.id, liveRunId, finalContext ?? null);
+      } catch {
+        finishRun(runTask.id, ERROR_SNAPSHOT_TTL_MS, liveRunId);
+      }
+      active.settled = true;
+    }
   }
 }
 
@@ -320,10 +495,21 @@ chatRouter.post('/:id/messages', async (req, res) => {
 
   let runSettings: ReturnType<typeof parseRunSettingsBody>;
   let mode: ChatRunMode;
+  let collaborationInvites: ReturnType<typeof validateCollaborationInvites>;
   try {
     runSettings = parseRunSettingsBody(req.body);
     mode = parseChatRunMode(req.body);
+    collaborationInvites = validateCollaborationInvites(
+      req.body?.invitedProfileIds,
+      task.profile_name ?? 'default',
+    );
+    if ((collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited) && mode === 'goal') {
+      throw new LocalProfileError(400, 'Collaboration is available in task mode, not goal mode', 'COLLABORATION_GOAL_MODE');
+    }
   } catch (error) {
+    if (error instanceof LocalProfileError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     return res.status(400).json({ error: toErrorMessage(error, 'Invalid run settings') });
   }
 
@@ -378,8 +564,38 @@ chatRouter.post('/:id/messages', async (req, res) => {
   const { snapshot, state } = startRun(runTask.id, sessionId, content);
   broadcast({ type: 'task_run_updated', run: state });
   broadcastLive(runTask.id, { type: 'snapshot', run: snapshot });
-  void consumeChatRun(runTask, sessionId, content, snapshot.runId);
 
+  const hasCollaboration = collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited;
+  if (hasCollaboration) {
+    let collaboration;
+    try {
+      collaboration = createCollaborationRun({
+        taskId: runTask.id,
+        question: content,
+        ownerProfileId: runTask.profile_name ?? 'default',
+        ownerInvited: collaborationInvites.ownerInvited,
+        participants: collaborationInvites.participants.map((profile) => ({ id: profile.id, label: profile.label })),
+      });
+    } catch (error) {
+      const message = toErrorMessage(error, 'Could not start collaboration');
+      const event: StreamEvent = { type: 'error', error: message };
+      applyEvent(runTask.id, event);
+      broadcastLive(runTask.id, event);
+      settleRun(runTask.id, snapshot.runId, null);
+      return res.status(500).json({ error: message });
+    }
+    const active: ActiveCollaboration = {
+      runId: collaboration.id,
+      phase: 'proposal',
+      cancelled: false,
+      settled: false,
+    };
+    activeCollaborations.set(runTask.id, active);
+    void consumeCollaborationRun(runTask, content, snapshot.runId, collaboration.id, active);
+    return res.status(202).json({ runId: snapshot.runId, collaborationRunId: collaboration.id });
+  }
+
+  void consumeChatRun(runTask, sessionId, content, snapshot.runId);
   res.status(202).json({ runId: snapshot.runId });
 });
 
@@ -387,13 +603,41 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
   const task = getTask(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
+  const reason = typeof req.body?.reason === 'string' && req.body.reason.trim()
+    ? req.body.reason.trim()
+    : undefined;
+  const collaboration = activeCollaborations.get(task.id);
+  if (collaboration && !collaboration.cancelled && collaboration.phase !== 'synthesizing') {
+    const live = getRunStatus(task.id);
+    const runningContributions = getCollaborationRun(collaboration.runId)?.contributions
+      .filter((contribution) => contribution.status === 'running') ?? [];
+    collaboration.cancelled = true;
+    cancelCollaborationRun(collaboration.runId, reason ?? 'Stopped by user');
+    await Promise.allSettled(runningContributions.map((contribution) => (
+      adapter.interruptChatForProfile(
+        contribution.profile_id,
+        contribution.session_id,
+        reason ?? 'Stopped by user',
+      )
+    )));
+    activeCollaborations.delete(task.id);
+    if (live?.status === 'streaming') {
+      updateRunStatus(task.id, 'stopped');
+      broadcastRunSnapshot(task.id);
+      settleRun(task.id, live.runId, null);
+    }
+    collaboration.settled = true;
+    return res.json({ interrupted: true });
+  }
+
   if (!isInterruptibleRun(getRunStatus(task.id))) {
     return res.status(409).json({ error: 'This task has no active message to stop' });
   }
 
-  const reason = typeof req.body?.reason === 'string' && req.body.reason.trim()
-    ? req.body.reason.trim()
-    : undefined;
+  if (collaboration && collaboration.phase === 'synthesizing') {
+    collaboration.cancelled = true;
+    cancelCollaborationRun(collaboration.runId, reason ?? 'Stopped by user');
+  }
 
   try {
     const interrupted = await adapter.interruptChat(task.id, reason);

@@ -5,25 +5,35 @@ import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { StatusIcon } from './StatusIcon';
 import { useStore, optimisticMoveTask } from '../lib/store';
 import { toast } from 'sonner';
-import { deleteTask, patchTask, moveTask, markTaskViewed } from '../lib/api';
+import { deleteTask, fetchCollaborations, patchTask, moveTask, markTaskViewed } from '../lib/api';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { timeAgo } from '../lib/format';
 import { isEditableTarget } from '../lib/keyboard';
 import { TaskChat } from './TaskChat';
+import {
+  CollaborationLiveBanner,
+  CollaborationPanel,
+  isCollaborationActive,
+} from './CollaborationPanel';
 import { RenameReveal, useRenameAnimation } from './RenameTitle';
 import { taskProfileLabel } from '../lib/profiles';
 import type { AgentRunSettings } from '../lib/api';
-import type { TaskStatus } from '@shared/types';
+import type { CollaborationRun, TaskStatus } from '@shared/types';
 import { useProfileNavigate } from '../contexts/ProfileContext';
 
 export function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useProfileNavigate();
   const location = useLocation();
-  const locationState = location.state as { initialMessage?: string; initialSettings?: AgentRunSettings } | null;
+  const locationState = location.state as {
+    initialMessage?: string;
+    initialSettings?: AgentRunSettings;
+    initialInvitedProfileIds?: string[];
+  } | null;
   const initialMessage = locationState?.initialMessage;
   const initialSettings = locationState?.initialSettings;
+  const initialInvitedProfileIds = locationState?.initialInvitedProfileIds;
   const task = useStore((s) => s.tasks.find((t) => t.id === taskId) ?? null);
   const tasksLoaded = useStore((s) => s.tasksLoaded);
   const upsertTask = useStore((s) => s.upsertTask);
@@ -34,6 +44,8 @@ export function TaskDetailPage() {
   const skipNextTitleSaveRef = useRef(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState<'answer' | 'collaboration'>('answer');
+  const [collaborationRuns, setCollaborationRuns] = useState<CollaborationRun[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
   const markViewedInFlightRef = useRef<string | null>(null);
   const titleAnimation = useRenameAnimation(task?.title ?? '', task?.id ?? null);
@@ -65,10 +77,30 @@ export function TaskDetailPage() {
     // mounts. Keep the navigation state until TaskChat has mounted and captured the
     // initial prompt; otherwise the first message is silently discarded.
     if (!task) return;
-    if (initialMessage || initialSettings) {
+    if (initialMessage || initialSettings || initialInvitedProfileIds) {
       navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [task, taskId, initialMessage, initialSettings, navigate, location.pathname]);
+  }, [task, taskId, initialMessage, initialSettings, initialInvitedProfileIds, navigate, location.pathname]);
+
+  useEffect(() => {
+    if (!taskId) return;
+    let cancelled = false;
+    const refresh = () => {
+      fetchCollaborations(taskId)
+        .then(({ runs }) => {
+          if (!cancelled) setCollaborationRuns(runs);
+        })
+        .catch(() => {});
+    };
+    setCollaborationRuns([]);
+    setActiveTab('answer');
+    refresh();
+    const timer = window.setInterval(refresh, 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [taskId]);
 
   useEffect(() => {
     if (!showMenu) return;
@@ -162,6 +194,10 @@ export function TaskDetailPage() {
 
   const statusMeta = STATUS_META[task.status];
   const routingLabel = taskProfileLabel(task);
+  const latestCollaboration = collaborationRuns[0];
+  const latestContributorCount = latestCollaboration
+    ? new Set(latestCollaboration.contributions.map((item) => item.profile_id)).size
+    : 0;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -291,8 +327,60 @@ export function TaskDetailPage() {
         </div>
       </div>
 
-      <div className="w-full flex-1 flex flex-col min-h-0">
-        <TaskChat taskId={task.id} initialMessage={initialMessage} initialSettings={initialSettings} />
+      <div className="border-b border-zinc-100 px-3 dark:border-zinc-800 sm:px-6">
+        <div className="flex items-center gap-1" role="tablist" aria-label="Task views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'answer'}
+            onClick={() => setActiveTab('answer')}
+            className={`border-b-2 px-3 py-2 text-xs font-semibold transition-colors ${
+              activeTab === 'answer'
+                ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100'
+                : 'border-transparent text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300'
+            }`}
+          >
+            Answer
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'collaboration'}
+            onClick={() => setActiveTab('collaboration')}
+            className={`inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-semibold transition-colors ${
+              activeTab === 'collaboration'
+                ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100'
+                : 'border-transparent text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300'
+            }`}
+          >
+            Collaboration
+            {latestContributorCount > 0 && (
+              <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                {latestContributorCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="relative w-full flex-1 min-h-0">
+        <div className={`absolute inset-0 flex min-h-0 flex-col ${activeTab === 'answer' ? '' : 'invisible pointer-events-none'}`}>
+          {latestCollaboration && isCollaborationActive(latestCollaboration.status) && (
+            <div className="px-3 pt-2 sm:px-6">
+              <CollaborationLiveBanner run={latestCollaboration} onOpen={() => setActiveTab('collaboration')} />
+            </div>
+          )}
+          <TaskChat
+            taskId={task.id}
+            initialMessage={initialMessage}
+            initialSettings={initialSettings}
+            initialInvitedProfileIds={initialInvitedProfileIds}
+            collaborationRuns={collaborationRuns}
+          />
+        </div>
+        <div className={`absolute inset-0 flex min-h-0 flex-col ${activeTab === 'collaboration' ? '' : 'invisible pointer-events-none'}`}>
+          <CollaborationPanel runs={collaborationRuns} />
+        </div>
       </div>
 
       {showDeleteConfirm && (

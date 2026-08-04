@@ -11,7 +11,7 @@ function fakeAdapter(name: string, lifecycle: string[]): AgentAdapter & { start(
     async stop() { lifecycle.push(`stop:${name}`); },
     async chat() { return { text: name, sessionId: name }; },
     async *chatStream(): AsyncIterable<StreamEvent> { yield { type: 'done', sessionId: name }; },
-    async interruptChat() { return true; },
+    async interruptChat(sessionId) { lifecycle.push(`interrupt:${name}:${sessionId}`); return true; },
     async steerChat() { return true; },
     async healthCheck() { return true; },
     async getMessages(_sessionId, taskId) {
@@ -76,12 +76,19 @@ try {
   for await (const event of adapter.chatStream('writer-task', 'stream', streamOptions)) events.push(event);
   assert.deepEqual(events, [{ type: 'done', sessionId: 'writer' }]);
   assert.equal((await adapter.getMessages('writer-task', 'writer-task'))[0]?.content, 'writer');
+  assert.equal(await adapter.interruptChatForProfile('writer', 'collaboration-session', 'Stopped by user'), true);
 
   await assert.rejects(() => adapter.chat('missing-task', 'hello'), /unknown local Hermes profile/i);
   assert.equal(created.length, 1);
 
   await adapter.stop();
-  assert.deepEqual(lifecycle, ['start:default', 'start:writer', 'stop:default', 'stop:writer']);
+  assert.deepEqual(lifecycle, [
+    'start:default',
+    'start:writer',
+    'interrupt:writer:collaboration-session',
+    'stop:default',
+    'stop:writer',
+  ]);
 } finally {
   await rm(hermesHome, { recursive: true, force: true });
 }

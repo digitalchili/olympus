@@ -20,6 +20,7 @@ export type SendMessageResult =
 
 interface SendMessageOptions {
   appendLocalError?: boolean;
+  invitedProfileIds?: string[];
 }
 
 type ChatMessage = Omit<TaskMessage, 'task_id'> & {
@@ -381,6 +382,7 @@ export function useChat() {
         body: JSON.stringify({
           content,
           ...(runSettings ? { settings: runSettings } : {}),
+          ...(options?.invitedProfileIds?.length ? { invitedProfileIds: options.invitedProfileIds } : {}),
         }),
         signal: abort.signal,
       });

@@ -20,7 +20,7 @@ export function findActiveProfileMention(
   profiles: ProfileMentionOption[],
 ): ActiveProfileMention | null {
   const beforeCursor = text.slice(0, cursor);
-  const match = /(?:^|\s)@([a-zA-Z]*)$/.exec(beforeCursor);
+  const match = /(?:^|\s)@([a-zA-Z0-9._-]*)$/.exec(beforeCursor);
   if (!match || match.index === undefined) return null;
   const atOffset = beforeCursor.lastIndexOf('@');
   if (!isBoundary(text[atOffset - 1])) return null;
@@ -41,4 +41,18 @@ export function applyProfileMentionSelection(
   const nextText = [prefix, suffix].filter(Boolean).join(' ');
   const cursor = prefix && suffix ? prefix.length + 1 : prefix.length;
   return { text: nextText, profile, cursor };
+}
+
+export function addProfileInvite<T extends ProfileMentionOption>(selected: T[], profile: T): T[] {
+  return selected.some((item) => item.id === profile.id) ? selected : [...selected, profile];
+}
+
+export function removeProfileInvite<T extends ProfileMentionOption>(selected: T[], profileId: string): T[] {
+  return selected.filter((profile) => profile.id !== profileId);
+}
+
+export function numericProfileSelectionIndex(key: string, optionCount: number): number | null {
+  if (!/^[1-9]$/.test(key)) return null;
+  const index = Number(key) - 1;
+  return index < optionCount ? index : null;
 }

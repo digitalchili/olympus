@@ -27,6 +27,7 @@ import type {
   SkillInstallResult,
   ClawHubSkillSummary,
   ClawHubScanResult,
+  CollaborationRun,
   HermesProfile,
   HermesProfileCreateInput,
   HermesProfileSettings,
@@ -132,6 +133,10 @@ export function searchTasks(query: string) {
 
 export function fetchMessages(taskId: string) {
   return request<{ messages: TaskMessage[]; context?: ContextUsage | null }>(`/tasks/${taskId}/messages`);
+}
+
+export function fetchCollaborations(taskId: string) {
+  return request<{ runs: CollaborationRun[] }>(`/tasks/${taskId}/collaborations`);
 }
 
 export function fetchSession(taskId: string) {

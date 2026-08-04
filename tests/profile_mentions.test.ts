@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {
+  addProfileInvite,
   applyProfileMentionSelection,
   findActiveProfileMention,
+  numericProfileSelectionIndex,
+  removeProfileInvite,
 } from '../client/src/lib/profileMentions.ts';
 
 const profiles = [
@@ -31,5 +34,13 @@ assert.deepEqual(applyProfileMentionSelection('@somchai', { start: 0, end: 8 }, 
   profile: profiles[1],
   cursor: 0,
 });
+
+assert.deepEqual(addProfileInvite([profiles[0]], profiles[1]), [profiles[0], profiles[1]]);
+assert.strictEqual(addProfileInvite([profiles[0]], profiles[0])[0], profiles[0]);
+assert.deepEqual(removeProfileInvite([profiles[0], profiles[1]], 'som'), [profiles[1]]);
+assert.equal(numericProfileSelectionIndex('1', 3), 0);
+assert.equal(numericProfileSelectionIndex('3', 3), 2);
+assert.equal(numericProfileSelectionIndex('4', 3), null);
+assert.equal(numericProfileSelectionIndex('0', 9), null);
 
 console.log('Profile mention parser tests passed');

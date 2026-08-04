@@ -98,6 +98,10 @@ export class ProfileAgentAdapter implements AgentAdapter {
     yield* worker.chatStream(sessionId, message, options);
   }
 
+  async interruptChatForProfile(profileId: string, sessionId: string, reason?: string) {
+    return await (await this.adapterForProfileId(profileId)).interruptChat(sessionId, reason);
+  }
+
   async interruptChat(sessionId: string, reason?: string) {
     return await (await this.adapterForSession(sessionId)).interruptChat(sessionId, reason);
   }
