@@ -10,7 +10,7 @@ export function ChannelSettings() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchHermesChannels()
+    fetchHermesChannels(activeProfileId)
       .then((result) => { if (!cancelled) setChannels(result.channels); })
       .catch(() => { if (!cancelled) setChannels([]); });
     return () => { cancelled = true; };

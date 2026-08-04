@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { pinnedChannelInboxes } from '../client/src/lib/channelInbox.js';
+import {
+  channelMessageAuthor,
+  channelMessagesStatusText,
+  channelThreadsStatusText,
+  pinnedChannelInboxes,
+} from '../client/src/lib/channelInbox.js';
 import type { HermesChannel } from '../shared/types.js';
 
 const channels: HermesChannel[] = [
@@ -14,4 +19,18 @@ const channels: HermesChannel[] = [
 assert.deepEqual(pinnedChannelInboxes(channels), [channels[0]],
   'the UI must reject internal transports even if a server regression returns them as enabled');
 
-console.log('Channel inbox filtering tests passed');
+assert.equal(channelThreadsStatusText({ state: 'awaiting_bridge', threads: [] }),
+  'Local Hermes history is not available yet.');
+assert.equal(channelThreadsStatusText({ state: 'available', threads: [] }), 'No local conversations yet.');
+assert.equal(channelThreadsStatusText({
+  state: 'available',
+  threads: [{ id: 'thread', channelId: 'telegram', title: 'Chat', preview: '', messageCount: 1, createdAt: 1, updatedAt: 2 }],
+}), null);
+assert.equal(channelMessagesStatusText({ state: 'awaiting_bridge', messages: [], truncated: false }),
+  'Local Hermes history is not available yet.');
+assert.equal(channelMessagesStatusText({ state: 'available', messages: [], truncated: false }),
+  'No visible user or assistant messages in this conversation.');
+assert.equal(channelMessageAuthor('inbound'), 'User');
+assert.equal(channelMessageAuthor('outbound'), 'Assistant');
+
+console.log('Channel inbox filtering and display helper tests passed');

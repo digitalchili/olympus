@@ -29,6 +29,8 @@ import type {
   ClawHubScanResult,
   CollaborationRun,
   HermesChannel,
+  HermesChannelMessagesResult,
+  HermesChannelThreadsResult,
   HermesProfile,
   HermesProfileCreateInput,
   HermesProfileSettings,
@@ -171,8 +173,19 @@ export function fetchHermesProfiles(includeInactive = false) {
   return request<{ profiles: HermesProfile[] }>(includeInactive ? '/profiles?includeInactive=true' : '/profiles');
 }
 
-export function fetchHermesChannels() {
-  return request<{ channels: HermesChannel[] }>('/channels');
+export function fetchHermesChannels(profileId?: string) {
+  const path = profileId ? apiPathWithProfile('/channels', profileId) : '/channels';
+  return request<{ channels: HermesChannel[] }>(path);
+}
+
+export function fetchChannelThreads(channelId: string, profileId: string) {
+  const path = `/channels/${encodeURIComponent(channelId)}/threads`;
+  return request<HermesChannelThreadsResult>(apiPathWithProfile(path, profileId));
+}
+
+export function fetchChannelMessages(channelId: string, threadId: string, profileId: string) {
+  const path = `/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(threadId)}/messages`;
+  return request<HermesChannelMessagesResult>(apiPathWithProfile(path, profileId));
 }
 
 export function createHermesProfile(input: HermesProfileCreateInput) {

@@ -10,7 +10,7 @@ import {
 } from '@dnd-kit/core';
 import { AlertTriangle, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { ProfileLink } from '../contexts/ProfileContext';
+import { ProfileLink, useProfile } from '../contexts/ProfileContext';
 import type { HermesChannel, ScheduledTask, Task, TaskStatus } from '@shared/types';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
@@ -93,6 +93,7 @@ function RecurringSummaryStrip({ scheduledTasks }: { scheduledTasks: ScheduledTa
 }
 
 export function Board() {
+  const { activeProfileId } = useProfile();
   const tasks = useStore((s) => s.tasks);
   const taskRuns = useStore((s) => s.taskRuns);
   const upsertTask = useStore((s) => s.upsertTask);
@@ -114,17 +115,18 @@ export function Board() {
 
   useEffect(() => {
     let cancelled = false;
+    setChannels([]);
 
     void fetchScheduledTasks(true)
       .then((result) => { if (!cancelled) setScheduledTasks(result.scheduledTasks); })
       .catch(console.error);
-    void fetchHermesChannels()
+    void fetchHermesChannels(activeProfileId)
       .then((result) => { if (!cancelled) setChannels(result.channels); })
       .catch(console.error);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeProfileId]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -213,6 +215,7 @@ export function Board() {
               tasks={grouped[status]}
               taskRuns={taskRuns}
               channels={status === 'in_progress' ? pinnedChannelInboxes(channels) : []}
+              channelProfileId={activeProfileId}
               isLast={index === TASK_STATUSES.length - 1}
               onRequestDeleteAll={handleRequestDeleteAll}
             />

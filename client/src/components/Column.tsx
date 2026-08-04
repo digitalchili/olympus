@@ -15,11 +15,12 @@ interface ColumnProps {
   tasks: Task[];
   taskRuns: Map<string, TaskRunState>;
   channels?: HermesChannel[];
+  channelProfileId: string;
   isLast?: boolean;
   onRequestDeleteAll: (status: TaskStatus) => void;
 }
 
-export function Column({ status, tasks, taskRuns, channels = [], isLast = false, onRequestDeleteAll }: ColumnProps) {
+export function Column({ status, tasks, taskRuns, channels = [], channelProfileId, isLast = false, onRequestDeleteAll }: ColumnProps) {
   const { label } = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const navigate = useProfileNavigate();
@@ -76,7 +77,11 @@ export function Column({ status, tasks, taskRuns, channels = [], isLast = false,
         }`}
       >
         {channels.map((channel) => (
-          <ChannelInboxCard key={channel.id} channel={channel} />
+          <ChannelInboxCard
+            key={`${channelProfileId}:${channel.id}`}
+            channel={channel}
+            profileId={channelProfileId}
+          />
         ))}
         {tasks.map((task) => (
           <TaskCard

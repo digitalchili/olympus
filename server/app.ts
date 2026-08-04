@@ -11,6 +11,7 @@ import { createInstallationRouter } from './routes/installation.js';
 import { createUpdatesRouter } from './routes/updates.js';
 import { createProfilesRouter } from './routes/profiles.js';
 import { createChannelsRouter } from './routes/channels.js';
+import { createChannelHistoryRouter } from './routes/channel-history.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { getTask } from './db/queries.js';
@@ -75,6 +76,7 @@ app.use('/api/installation', createInstallationRouter());
 app.use('/api/updates', createUpdatesRouter());
 app.use('/api/profiles', createProfilesRouter(adapter));
 app.use('/api/channels', createChannelsRouter());
+app.use('/api/channels', createChannelHistoryRouter());
 app.use('/api/scheduled-tasks', createScheduledTasksRouter(adapter));
 app.use('/api/skills', skillsRouter);
 
