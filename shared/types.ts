@@ -9,6 +9,16 @@ export interface AppVersion {
   version: string;
 }
 
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updateConfigured: boolean;
+  releaseUrl: string | null;
+  checkedAt: number;
+  error?: string;
+}
+
 export const CHAT_RUN_MODES = ['task', 'goal'] as const;
 export type ChatRunMode = (typeof CHAT_RUN_MODES)[number];
 export const MINIONS_GOAL_MAX_TURNS = 20;

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Sun, Moon, Monitor, Info, Volume2, VolumeX, Play } from 'lucide-react';
+import { Sun, Moon, Monitor, Volume2, VolumeX, Play } from 'lucide-react';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { useSoundOnComplete } from '../hooks/useSoundOnComplete';
 import { useAgentConfig } from '../hooks/useAgentConfig';
-import { fetchAppVersion, updateAgentDefaults, updateInstallationName } from '../lib/api';
+import { updateAgentDefaults, updateInstallationName } from '../lib/api';
 import { useStore } from '../lib/store';
-import type { AppVersion } from '@shared/types';
 import { toErrorMessage } from '../lib/format';
 import { ProfilesSettings } from './ProfilesSettings';
 import { ChannelSettings } from './ChannelSettings';
+import { UpdateSettings } from './UpdateSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
 import {
   REASONING_EFFORTS,
@@ -63,25 +63,10 @@ export function SettingsPage() {
   const [savingName, setSavingName] = useState(false);
 
   const { defaults: agentDefaults, modelGroups, isLoading: isLoadingDefaults, replaceDefaults } = useAgentConfig();
-  const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
   const [defaultsError, setDefaultsError] = useState<string | null>(null);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [savedDefaults, setSavedDefaults] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchAppVersion()
-      .then((v) => {
-        if (!cancelled) setAppVersion(v);
-      })
-      .catch(() => {
-        if (!cancelled) setAppVersion({ name: 'olympus-dispatch', version: 'unknown' });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!savedDefaults) return;
@@ -235,16 +220,7 @@ export function SettingsPage() {
           </div>
         </div>
 
-        <div>
-          <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500 mb-2">Version</h2>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-medium text-zinc-900 dark:text-zinc-100">
-            <Info size={14} />
-            Olympus Dispatch
-            <span className="text-zinc-500 dark:text-zinc-400">
-              {appVersion ? `v${appVersion.version}` : '...'}
-            </span>
-          </div>
-        </div>
+        <UpdateSettings />
       </div>
     </div>
   );

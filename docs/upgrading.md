@@ -6,6 +6,8 @@ Run `./scripts/docker/update.sh --dry-run --image ghcr.io/leakim69/olympus-dispa
 
 This is not zero downtime. Existing active runs and HTTP/SSE connections are preserved while draining. During the bounded promotion window new writes receive retryable `503`, `Retry-After: 5`, and `MAINTENANCE_DRAIN`; reads remain available.
 
+Single-service Compose installations must not run the blue/green script against a different topology. Use the [standalone local self-update runner](standalone-self-update.md), which locks to the live Compose project/service labels and communicates with Olympus over a Unix socket rather than exposing Docker or an update listener over the network.
+
 ## macOS
 
 Run `./scripts/macos/update.sh --dry-run`, then `./scripts/macos/update.sh`. It builds/verifies a candidate release without touching running files, drains to `activeRuns=0`, creates and integrity-checks a SQLite/state backup under `~/.olympus-dispatch/backups`, atomically switches `current`, restarts launchd, and verifies readiness. Failure before switching cancels drain; failure after switching restores the old symlink and restarts the old release.

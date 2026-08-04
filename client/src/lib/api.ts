@@ -36,6 +36,7 @@ import type {
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
   ProfileBuilderSuggestion,
+  UpdateStatus,
 } from '@shared/types';
 import { apiPathWithProfile } from './profileQuery';
 
@@ -56,10 +57,10 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, profileScoped = true): Promise<T> {
   const { headers: extraHeaders, ...rest } = init ?? {};
   const isFormDataBody = typeof FormData !== 'undefined' && rest.body instanceof FormData;
-  const res = await fetch(`${BASE}${apiPathWithProfile(path)}`, {
+  const res = await fetch(`${BASE}${profileScoped ? apiPathWithProfile(path) : path}`, {
     headers: isFormDataBody
       ? extraHeaders
       : { 'Content-Type': 'application/json', ...extraHeaders as Record<string, string> },
@@ -152,6 +153,14 @@ export function fetchHealth() {
 
 export function fetchAppVersion() {
   return request<AppVersion>('/version');
+}
+
+export function fetchUpdateStatus(refresh = false) {
+  return request<UpdateStatus>(refresh ? '/updates?refresh=true' : '/updates', undefined, false);
+}
+
+export function applyUpdate() {
+  return request<{ accepted: true }>('/updates/apply', { method: 'POST' }, false);
 }
 
 export interface InstallationSettings {

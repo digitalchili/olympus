@@ -1,19 +1,12 @@
+import { request as httpRequest } from 'node:http';
+import { isAbsolute } from 'node:path';
 import { Router } from 'express';
+import type { UpdateStatus } from '@shared/types';
 import { getAppVersion } from '../version.js';
 
 const GITHUB_API = 'https://api.github.com';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10_000;
-
-type UpdateStatus = {
-  currentVersion: string;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-  updateConfigured: boolean;
-  releaseUrl: string | null;
-  checkedAt: number;
-  error?: string;
-};
 
 let cachedStatus: UpdateStatus | null = null;
 let cachedAt = 0;
@@ -48,15 +41,68 @@ function getRepository(): string | null {
     ?? parseGitHubRepositoryUrl('https://github.com/leakim69/olympus-dispatch.git');
 }
 
-function getUpdateUrl(): string | null {
+type UpdateHook =
+  | { kind: 'socket'; socketPath: string }
+  | { kind: 'url'; url: string };
+
+function getUpdateHook(): UpdateHook | null {
+  const socketPath = process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET?.trim();
+  if (socketPath && isAbsolute(socketPath)) return { kind: 'socket', socketPath };
+
   const value = process.env.OLYMPUS_DISPATCH_UPDATE_URL?.trim();
   if (!value) return null;
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+    const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+    return url.protocol === 'http:' && localHosts.has(url.hostname)
+      ? { kind: 'url', url: url.toString() }
+      : null;
   } catch {
     return null;
   }
+}
+
+function githubHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'olympus-dispatch',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  const token = process.env.OLYMPUS_DISPATCH_GITHUB_TOKEN?.trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function postToSocket(socketPath: string, body: string, token: string | undefined): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string | number> = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const request = httpRequest({ socketPath, path: '/update', method: 'POST', headers }, (response) => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode ?? 502));
+    });
+    request.setTimeout(REQUEST_TIMEOUT_MS, () => request.destroy(new Error('Update hook timed out.')));
+    request.on('error', reject);
+    request.end(body);
+  });
+}
+
+async function postUpdateHook(hook: UpdateHook, body: string, token: string | undefined): Promise<number> {
+  if (hook.kind === 'socket') return postToSocket(hook.socketPath, body, token);
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(hook.url, {
+    method: 'POST',
+    headers,
+    body,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  return response.status;
 }
 
 async function fetchStatus(force = false): Promise<UpdateStatus> {
@@ -69,7 +115,7 @@ async function fetchStatus(force = false): Promise<UpdateStatus> {
     currentVersion,
     latestVersion: null,
     updateAvailable: false,
-    updateConfigured: Boolean(getUpdateUrl()),
+    updateConfigured: Boolean(getUpdateHook()),
     releaseUrl: null,
     checkedAt,
   };
@@ -82,7 +128,7 @@ async function fetchStatus(force = false): Promise<UpdateStatus> {
 
   try {
     const response = await fetch(`${GITHUB_API}/repos/${repository}/releases/latest`, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'olympus-dispatch' },
+      headers: githubHeaders(),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (response.status === 404) {
@@ -115,32 +161,25 @@ export function createUpdatesRouter(): Router {
   });
 
   router.post('/apply', async (_req, res) => {
-    const updateUrl = getUpdateUrl();
+    const updateHook = getUpdateHook();
+    if (!updateHook) {
+      return res.status(503).json({ error: 'No installation-local update hook is configured.' });
+    }
     const status = await fetchStatus(true);
     if (!status.updateAvailable) {
       return res.status(409).json({ error: 'No newer GitHub release is available.' });
     }
-    if (!updateUrl) {
-      return res.status(503).json({ error: 'No external update hook is configured.' });
-    }
 
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const token = process.env.OLYMPUS_DISPATCH_UPDATE_TOKEN?.trim();
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const response = await fetch(updateUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          repository: getRepository(),
-          currentVersion: status.currentVersion,
-          latestVersion: status.latestVersion,
-          releaseUrl: status.releaseUrl,
-        }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        return res.status(502).json({ error: `The deployment hook rejected the update (${response.status}).` });
+      const hookStatus = await postUpdateHook(updateHook, JSON.stringify({
+        repository: getRepository(),
+        currentVersion: status.currentVersion,
+        latestVersion: status.latestVersion,
+        releaseUrl: status.releaseUrl,
+      }), token);
+      if (hookStatus < 200 || hookStatus >= 300) {
+        return res.status(502).json({ error: `The deployment hook rejected the update (${hookStatus}).` });
       }
       return res.status(202).json({ accepted: true });
     } catch {
