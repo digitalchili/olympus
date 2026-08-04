@@ -10,6 +10,7 @@ const task = {
   routing_source: 'manual',
 } as Task;
 assert.equal(taskProfileLabel(task), 'Local profile: writer');
+assert.equal(taskProfileLabel(task, [{ id: 'writer', displayName: 'Writing Desk' } as never]), 'Local profile: Writing Desk');
 assert.equal(taskProfileLabel({ profile_name: null } as Task), null);
 
 console.log('Local profile label tests passed');

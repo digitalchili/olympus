@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { Loader2, MoreHorizontal, Target } from 'lucide-react';
-import { ProfileLink } from '../contexts/ProfileContext';
+import { ProfileLink, useProfile } from '../contexts/ProfileContext';
 import type { Task, TaskRunState } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
 import { isActiveRun } from '../lib/store';
@@ -13,13 +13,14 @@ import { RenameTitle } from './RenameTitle';
 const BUSY_LABELS: Record<string, string> = { compact: 'Compacting...', goal: 'Working toward goal...' };
 
 function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
+  const { profiles } = useProfile();
   const isUnseen = hasUnseenAgentResponse(task);
   const isBusy = !!run && isActiveRun(run);
   const isGoalRun = run?.kind === 'goal' && run.status === 'streaming';
   const compactGoalLabel = isGoalRun ? goalTurnLabel(run.goal?.turnsUsed ?? 0, run.goal?.maxTurns ?? 0, true) : null;
   const busyLabel = (run?.kind && BUSY_LABELS[run.kind]) || 'Working...';
   const showBusyState = isBusy && !isGoalRun;
-  const routingLabel = taskProfileLabel(task);
+  const routingLabel = taskProfileLabel(task, profiles);
   const timeRowClass = showBusyState
     ? 'font-semibold text-zinc-600 dark:text-zinc-300'
     : isUnseen

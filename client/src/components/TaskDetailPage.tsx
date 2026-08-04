@@ -20,11 +20,12 @@ import { RenameReveal, useRenameAnimation } from './RenameTitle';
 import { taskProfileLabel } from '../lib/profiles';
 import type { AgentRunSettings } from '../lib/api';
 import type { CollaborationRun, TaskStatus } from '@shared/types';
-import { useProfileNavigate } from '../contexts/ProfileContext';
+import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 
 export function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useProfileNavigate();
+  const { profiles } = useProfile();
   const location = useLocation();
   const locationState = location.state as {
     initialMessage?: string;
@@ -193,7 +194,7 @@ export function TaskDetailPage() {
   }
 
   const statusMeta = STATUS_META[task.status];
-  const routingLabel = taskProfileLabel(task);
+  const routingLabel = taskProfileLabel(task, profiles);
   const latestCollaboration = collaborationRuns[0];
   const latestContributorCount = latestCollaboration
     ? new Set(latestCollaboration.contributions.map((item) => item.profile_id)).size
