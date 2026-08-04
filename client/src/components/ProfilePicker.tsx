@@ -74,7 +74,7 @@ export function ProfilePicker({ profiles, activeProfileId, loading, onChange }: 
           id={listboxId}
           role="listbox"
           aria-label="Hermes profiles"
-          className="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl shadow-zinc-950/10 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-black/30"
+          className="absolute bottom-[calc(100%+0.5rem)] left-0 z-50 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl shadow-zinc-950/10 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-black/30"
         >
           <div className="px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
             Workspace profile
