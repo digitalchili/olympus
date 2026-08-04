@@ -10,7 +10,7 @@ Paste this into a Hermes conversation:
 
 > Install Olympus Dispatch from https://github.com/digitalchili/olympus on this machine only. Read INSTALL.md first. Run a dry-run, report what will be changed, and wait for approval before installing. Do not connect to or alter any other Hermes installation or host. Preserve Hermes state and credentials, then verify /api/ready.
 
-See the full [installation instructions](INSTALL.md).
+See the full [installation instructions](INSTALL.md) and the repository’s [agent safety rules](AGENTS.md).
 
 ## Quick start
 
