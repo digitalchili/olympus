@@ -1,15 +1,17 @@
 import { useEffect } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router';
+import { useLocation } from 'react-router';
 import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search } from 'lucide-react';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
 import { fetchInstallationSettings } from '../lib/api';
+import { ProfileLink, useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 
 const isMac = /Mac/.test(navigator.userAgent);
 
 export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   const location = useLocation();
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
+  const { profiles, activeProfileId, isLoading: profilesLoading, setActiveProfileId } = useProfile();
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const installationName = useStore((s) => s.installationName);
@@ -91,11 +93,21 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
           </button>
         ) : (
           <div className="flex items-center justify-between w-full gap-2 px-2">
-            <button onClick={() => navigate('/')} className="flex min-w-0 items-center gap-2" title={`Home · ${installationName}`} aria-label={`Home · ${installationName}`}>
+            <button onClick={() => navigate('/')} className="flex shrink-0 items-center" title={`Home · ${installationName}`} aria-label={`Home · ${installationName}`}>
               <img src="/logo-black.png" alt="Olympus Dispatch" className="h-[25px] w-[34px] shrink-0 object-contain dark:hidden" />
               <img src="/logo-white.png" alt="" className="hidden h-[25px] w-[34px] shrink-0 object-contain dark:block" />
-              <span className="max-w-[112px] truncate text-[clamp(0.7rem,1vw,0.875rem)] font-semibold leading-tight text-zinc-700 dark:text-zinc-200">{installationName}</span>
             </button>
+            <select
+              value={activeProfileId}
+              onChange={(event) => setActiveProfileId(event.target.value)}
+              disabled={profilesLoading || profiles.length === 0}
+              aria-label="Active Hermes profile"
+              title="Active Hermes profile"
+              className="h-8 min-w-0 flex-1 truncate rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 outline-none focus:border-zinc-400 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:focus:border-zinc-500"
+            >
+              {profiles.length === 0 && <option value={activeProfileId}>{activeProfileId}</option>}
+              {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+            </select>
             <button
               onClick={toggleSidebar}
               className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors p-1.5 rounded-lg hover:bg-surface dark:hover:bg-zinc-800"
@@ -234,7 +246,7 @@ function SidebarLink({
   subdued?: boolean;
 }) {
   return (
-    <Link
+    <ProfileLink
       to={to}
       title={shortcut ? `${label} (${Array.isArray(shortcut) ? shortcut.join(' then ') : shortcut})` : label}
       className={`group flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none transition-colors sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${
@@ -265,7 +277,7 @@ function SidebarLink({
           </span>
         )
       )}
-    </Link>
+    </ProfileLink>
   );
 }
 

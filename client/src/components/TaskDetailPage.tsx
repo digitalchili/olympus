@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router';
+import { useLocation, useParams } from 'react-router';
 import { MoreHorizontal, Trash2, Loader2, Pencil, Check } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { StatusIcon } from './StatusIcon';
@@ -12,13 +12,14 @@ import { timeAgo } from '../lib/format';
 import { isEditableTarget } from '../lib/keyboard';
 import { TaskChat } from './TaskChat';
 import { RenameReveal, useRenameAnimation } from './RenameTitle';
-import { taskRoutingLabel } from '../lib/remoteProfiles';
+import { taskProfileLabel } from '../lib/profiles';
 import type { AgentRunSettings } from '../lib/api';
 import type { TaskStatus } from '@shared/types';
+import { useProfileNavigate } from '../contexts/ProfileContext';
 
 export function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
   const location = useLocation();
   const locationState = location.state as { initialMessage?: string; initialSettings?: AgentRunSettings } | null;
   const initialMessage = locationState?.initialMessage;
@@ -160,7 +161,7 @@ export function TaskDetailPage() {
   }
 
   const statusMeta = STATUS_META[task.status];
-  const routingLabel = taskRoutingLabel(task);
+  const routingLabel = taskProfileLabel(task);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">

@@ -27,10 +27,13 @@ import type {
   SkillInstallResult,
   ClawHubSkillSummary,
   ClawHubScanResult,
-  RemoteProfilePublic,
+  HermesProfile,
+  HermesProfileSettings,
+  HermesProfileSettingsUpdate,
 } from '@shared/types';
+import { apiPathWithProfile } from './profileQuery';
 
-export type { SkillMeta, SkillInstallResult };
+export type { HermesProfile, SkillMeta, SkillInstallResult };
 
 export type { AgentRunSettings };
 
@@ -50,7 +53,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: extraHeaders, ...rest } = init ?? {};
   const isFormDataBody = typeof FormData !== 'undefined' && rest.body instanceof FormData;
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${BASE}${apiPathWithProfile(path)}`, {
     headers: isFormDataBody
       ? extraHeaders
       : { 'Content-Type': 'application/json', ...extraHeaders as Record<string, string> },
@@ -103,7 +106,10 @@ export function createTask(
   workdir?: string | null,
   requestedProfileName?: string | null,
 ) {
-  return request<{ task: Task }>('/tasks', {
+  const path = requestedProfileName
+    ? apiPathWithProfile('/tasks', requestedProfileName)
+    : '/tasks';
+  return request<{ task: Task }>(path, {
     method: 'POST',
     body: JSON.stringify({ description, title, workdir, requestedProfileName }),
   });
@@ -153,22 +159,18 @@ export function updateInstallationName(name: string) {
   });
 }
 
-export type HermesProfile = RemoteProfilePublic;
-
 export function fetchHermesProfiles() {
   return request<{ profiles: HermesProfile[] }>('/profiles');
 }
 
-export function createHermesProfile(input: { name: string; description?: string }) {
-  return request<{ profile: HermesProfile }>('/profiles', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
+export function fetchProfileSettings(profileId: string) {
+  return request<{ settings: HermesProfileSettings }>(`/profiles/${encodeURIComponent(profileId)}/settings`);
 }
 
-export function deleteHermesProfile(name: string) {
-  return request<{ ok: boolean; name: string }>(`/profiles/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
+export function updateProfileSettings(profileId: string, updates: HermesProfileSettingsUpdate) {
+  return request<{ settings: HermesProfileSettings }>(`/profiles/${encodeURIComponent(profileId)}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
   });
 }
 
@@ -305,11 +307,11 @@ export function readFile(path: string) {
 }
 
 export function fileDownloadUrl(path: string) {
-  return `${BASE}/files/download?path=${encodeURIComponent(path)}`;
+  return `${BASE}${apiPathWithProfile(`/files/download?path=${encodeURIComponent(path)}`)}`;
 }
 
 export function filePreviewUrl(path: string) {
-  return `${BASE}/files/preview?path=${encodeURIComponent(path)}`;
+  return `${BASE}${apiPathWithProfile(`/files/preview?path=${encodeURIComponent(path)}`)}`;
 }
 
 export function writeFile(path: string, content: string, expectedModifiedAt?: number, overwrite = false) {

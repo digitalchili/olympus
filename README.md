@@ -28,13 +28,11 @@ The installer identifies a sole running named volume mounted at Hermes `/opt/dat
 
 Open `http://127.0.0.1:6969` by default. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately for remote access.
 
-## Remote Hermes routing
+## Local Hermes profiles
 
-Olympus uses the Hermes worker installed on the same machine by default. Optional remote profiles and routing rules are loaded from deployment-owned JSON at startup; they are not compiled into the application.
+Olympus discovers the default profile and valid named profiles from the Hermes installation on the same machine. `GET /api/profiles` never reads profile endpoints or configuration belonging to another installation.
 
-Routing precedence is explicit profile selection, configured keyword rules, configured default profile, then local Hermes. Explicit remote routes fail closed when their target is unavailable.
-
-See [remote profile configuration](docs/remote-profiles.md) and the [example registry](docs/remote-profiles.example.json).
+Tasks use the default local Hermes worker unless a local profile is selected explicitly. Each selected named profile runs in its own isolated, lazily started worker with that profile's Hermes home, settings, sessions, and credentials.
 
 ## Development
 

@@ -6,7 +6,8 @@ import type {
   TaskMessage,
   ToolProgressEvent,
 } from '@shared/types';
-import { fetchMessages, BASE } from '../lib/api';
+import { BASE, fetchMessages } from '../lib/api';
+import { apiPathWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
@@ -306,7 +307,7 @@ export function useChat() {
     closeLiveSource();
     taskIdRef.current = taskId;
 
-    const source = new EventSource(`${BASE}/tasks/${encodeURIComponent(taskId)}/live`);
+    const source = new EventSource(`${BASE}${apiPathWithProfile(`/tasks/${encodeURIComponent(taskId)}/live`)}`);
     source.onmessage = (message) => {
       if (taskIdRef.current !== taskId) return;
       try {

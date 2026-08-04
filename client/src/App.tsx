@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Routes, Route } from 'react-router';
+import { BrowserRouter, Routes, Route } from 'react-router';
 import { useState } from 'react';
 import { Header, HeaderProvider } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -13,6 +13,7 @@ import { TaskSearchDialog } from './components/TaskSearchDialog';
 import { Toaster } from 'sonner';
 import { useTasks } from './hooks/useTasks';
 import { useTheme } from './hooks/useTheme';
+import { ProfileNavigate, ProfileProvider, useProfile } from './contexts/ProfileContext';
 
 function AppShell() {
   useTasks();
@@ -29,14 +30,14 @@ function AppShell() {
             <Route path="/" element={<Board />} />
             <Route path="/tasks/new" element={<NewTaskPage />} />
             <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
-            <Route path="/cron" element={<Navigate to="/scheduled-tasks" replace />} />
+            <Route path="/cron" element={<ProfileNavigate to="/scheduled-tasks" replace />} />
             <Route path="/scheduled-tasks" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/new" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/:scheduledTaskId/edit" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/:scheduledTaskId/runs" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/:scheduledTaskId/runs/:runId" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/:scheduledTaskId" element={<ScheduledTasksPage />} />
-            <Route path="/skills" element={<Navigate to="/skills/browse" replace />} />
+            <Route path="/skills" element={<ProfileNavigate to="/skills/browse" replace />} />
             <Route path="/skills/:tab" element={<SkillsPage />} />
             <Route path="/files" element={<FileBrowserPage />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -60,10 +61,17 @@ function AppShell() {
   );
 }
 
+function ProfileAppShell() {
+  const { activeProfileId } = useProfile();
+  return <AppShell key={activeProfileId} />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
-      <AppShell />
+      <ProfileProvider>
+        <ProfileAppShell />
+      </ProfileProvider>
     </BrowserRouter>
   );
 }

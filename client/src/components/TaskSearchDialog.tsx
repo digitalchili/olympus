@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import { useNavigate } from 'react-router';
 import { searchTasks, type TaskSearchResult } from '../lib/api';
+import { useProfileNavigate } from '../contexts/ProfileContext';
 
 function roleLabel(role: TaskSearchResult['role']): string {
   return role === 'task' ? 'Task' : role.charAt(0).toUpperCase() + role.slice(1);
@@ -22,7 +22,7 @@ function HighlightedSnippet({ snippet }: { snippet: string }) {
 }
 
 export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TaskSearchResult[]>([]);

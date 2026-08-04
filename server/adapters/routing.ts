@@ -1,170 +1,200 @@
 import { getTask } from '../db/queries.js';
-import { remoteProfileRegistry, type RemoteProfileTarget } from '../remote-profiles.js';
+import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
 import type { AgentAdapter, AgentRunOptions, StreamEvent } from './types.js';
-import { RemoteHermesAdapter, RemoteHermesUnsupportedError } from './remote-hermes.js';
+import { HermesWorkerAdapter } from './hermes-worker.js';
 import type { AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
 
-export { RemoteHermesUnsupportedError };
+type LifecycleAdapter = AgentAdapter & {
+  start?: () => Promise<void>;
+  stop?: () => Promise<void>;
+};
 
-export class RoutingAgentAdapter implements AgentAdapter {
-  private remotes = new Map<string, RemoteHermesAdapter>();
+interface ProfileAdapterOptions {
+  registry?: LocalProfileRegistry;
+  createAdapter?: (profile: LocalProfileTarget) => AgentAdapter;
+  taskProfile?: (taskId: string) => string | null | undefined;
+}
 
-  constructor(private local: AgentAdapter) {}
+export class ProfileAgentAdapter implements AgentAdapter {
+  private registry: LocalProfileRegistry;
+  private createAdapter: (profile: LocalProfileTarget) => AgentAdapter;
+  private taskProfile: (taskId: string) => string | null | undefined;
+  private workers = new Map<string, LifecycleAdapter>();
+  private starting = new Map<string, Promise<void>>();
+  private started = new Set<string>();
+
+  constructor(private defaultAdapter: LifecycleAdapter, options: ProfileAdapterOptions = {}) {
+    this.registry = options.registry ?? localProfileRegistry;
+    this.createAdapter = options.createAdapter ?? ((profile) => new HermesWorkerAdapter({ hermesHome: profile.hermesHome }));
+    this.taskProfile = options.taskProfile ?? ((taskId) => getTask(taskId)?.profile_name);
+  }
 
   async start(): Promise<void> {
-    const startable = this.local as AgentAdapter & { start?: () => Promise<void> };
-    await startable.start?.();
+    await this.defaultAdapter.start?.();
   }
 
   async stop(): Promise<void> {
-    const stoppable = this.local as AgentAdapter & { stop?: () => Promise<void> };
-    await stoppable.stop?.();
+    const workers = [this.defaultAdapter, ...this.workers.values()];
+    this.workers.clear();
+    this.starting.clear();
+    this.started.clear();
+    await Promise.all(workers.map(async (worker) => worker.stop?.()));
   }
 
-  private remoteForTarget(target: RemoteProfileTarget): RemoteHermesAdapter {
-    let remote = this.remotes.get(target.id);
-    if (!remote) {
-      if (!target.baseUrl || !target.apiKey) throw new Error(`Remote profile ${target.label} is not configured`);
-      remote = new RemoteHermesAdapter({
-        id: target.id,
-        label: target.label,
-        baseUrl: target.baseUrl,
-        apiKey: target.apiKey,
-        remoteProfile: target.remoteProfile,
-        remotePath: target.remotePath,
-      });
-      this.remotes.set(target.id, remote);
+  private async namedAdapter(profileName: string): Promise<LifecycleAdapter> {
+    const profile = this.registry.require(profileName);
+    if (profile.isDefault) return this.defaultAdapter;
+
+    let worker = this.workers.get(profile.id);
+    if (!worker) {
+      worker = this.createAdapter(profile) as LifecycleAdapter;
+      this.workers.set(profile.id, worker);
     }
-    return remote;
+
+    if (worker.start && !this.started.has(profile.id)) {
+      let start = this.starting.get(profile.id);
+      if (!start) {
+        start = worker.start()
+          .then(() => { this.started.add(profile.id); })
+          .catch((error) => {
+            this.workers.delete(profile.id);
+            throw error;
+          })
+          .finally(() => this.starting.delete(profile.id));
+        this.starting.set(profile.id, start);
+      }
+      await start;
+    }
+    return worker;
   }
 
-  private adapterForTaskId(taskId: string | null | undefined): AgentAdapter {
-    const task = taskId ? getTask(taskId) : undefined;
-    if (!task?.profile_name) return this.local;
-    const target = remoteProfileRegistry.requireAvailable(task.profile_name);
-    return this.remoteForTarget(target);
+  private async adapterForProfileId(profileId: string | null | undefined): Promise<LifecycleAdapter> {
+    if (!profileId) return this.defaultAdapter;
+    return await this.namedAdapter(profileId);
   }
 
-  private adapterForSession(sessionId: string): AgentAdapter {
+  private async adapterForTaskId(taskId: string | null | undefined): Promise<AgentAdapter> {
+    const profileName = taskId ? this.taskProfile(taskId) : null;
+    if (!profileName) return this.defaultAdapter;
+    return await this.namedAdapter(profileName);
+  }
+
+  private adapterForSession(sessionId: string): Promise<AgentAdapter> {
     return this.adapterForTaskId(sessionId);
   }
 
-  chat(sessionId: string, message: string, options?: AgentRunOptions) {
-    return this.adapterForTaskId(options?.task?.id ?? sessionId).chat(sessionId, message, options);
+  async chat(sessionId: string, message: string, options?: AgentRunOptions) {
+    const worker = await this.adapterForTaskId(options?.task?.id ?? sessionId);
+    return await worker.chat(sessionId, message, options);
   }
 
-  chatStream(sessionId: string, message: string, options?: AgentRunOptions): AsyncIterable<StreamEvent> {
-    return this.adapterForTaskId(options?.task?.id ?? sessionId).chatStream(sessionId, message, options);
+  async *chatStream(sessionId: string, message: string, options?: AgentRunOptions): AsyncIterable<StreamEvent> {
+    const worker = await this.adapterForTaskId(options?.task?.id ?? sessionId);
+    yield* worker.chatStream(sessionId, message, options);
   }
 
-  interruptChat(sessionId: string, reason?: string) {
-    return this.adapterForSession(sessionId).interruptChat(sessionId, reason);
+  async interruptChat(sessionId: string, reason?: string) {
+    return await (await this.adapterForSession(sessionId)).interruptChat(sessionId, reason);
   }
 
-  steerChat(sessionId: string, message: string) {
-    return this.adapterForSession(sessionId).steerChat(sessionId, message);
+  async steerChat(sessionId: string, message: string) {
+    return await (await this.adapterForSession(sessionId)).steerChat(sessionId, message);
   }
 
   async healthCheck(): Promise<boolean> {
-    const localOk = await this.local.healthCheck();
-    const remoteChecks = await Promise.all(remoteProfileRegistry.publicProfiles().filter((profile) => profile.available).map(async (profile) => {
-      try {
-        const target = remoteProfileRegistry.requireAvailable(profile.id);
-        return await this.remoteForTarget(target).healthCheck();
-      } catch {
-        return false;
-      }
-    }));
-    return localOk || remoteChecks.some(Boolean);
+    return await this.defaultAdapter.healthCheck();
   }
 
-  getMessages(sessionId: string, taskId: string) {
-    return this.adapterForTaskId(taskId).getMessages(sessionId, taskId);
+  async getMessages(sessionId: string, taskId: string) {
+    return await (await this.adapterForTaskId(taskId)).getMessages(sessionId, taskId);
   }
 
-  getSessionMetadata(sessionId: string) {
-    return this.adapterForSession(sessionId).getSessionMetadata(sessionId);
+  async getSessionMetadata(sessionId: string) {
+    return await (await this.adapterForSession(sessionId)).getSessionMetadata(sessionId);
   }
 
   generateTitle(description: string) {
-    return this.local.generateTitle(description);
+    return this.defaultAdapter.generateTitle(description);
   }
 
-  getDefaults(): Promise<AgentDefaults> {
-    return (this.local as AgentAdapter & { getDefaults: () => Promise<AgentDefaults> }).getDefaults();
+  async getDefaults(profileId?: string | null): Promise<AgentDefaults> {
+    const worker = await this.adapterForProfileId(profileId);
+    return (worker as AgentAdapter & { getDefaults: () => Promise<AgentDefaults> }).getDefaults();
   }
 
-  setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }): Promise<AgentDefaults> {
-    return (this.local as AgentAdapter & {
+  async setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }, profileId?: string | null): Promise<AgentDefaults> {
+    const worker = await this.adapterForProfileId(profileId);
+    return (worker as AgentAdapter & {
       setDefaults: (updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }) => Promise<AgentDefaults>;
     }).setDefaults(updates);
   }
 
-  getModels(): Promise<AgentModelsResponse> {
-    return (this.local as AgentAdapter & { getModels: () => Promise<AgentModelsResponse> }).getModels();
+  async getModels(profileId?: string | null): Promise<AgentModelsResponse> {
+    const worker = await this.adapterForProfileId(profileId);
+    return (worker as AgentAdapter & { getModels: () => Promise<AgentModelsResponse> }).getModels();
   }
 
-  compressSession(sessionId: string, options?: Parameters<AgentAdapter['compressSession']>[1]) {
-    return this.adapterForSession(sessionId).compressSession(sessionId, options);
+  async compressSession(sessionId: string, options?: Parameters<AgentAdapter['compressSession']>[1]) {
+    return await (await this.adapterForSession(sessionId)).compressSession(sessionId, options);
   }
 
-  getGoalStatus(sessionId: string) {
-    return this.adapterForSession(sessionId).getGoalStatus(sessionId);
+  async getGoalStatus(sessionId: string) {
+    return await (await this.adapterForSession(sessionId)).getGoalStatus(sessionId);
   }
 
-  setGoal(sessionId: string, goal: string, options?: { maxTurns?: number | null }) {
-    return this.adapterForSession(sessionId).setGoal(sessionId, goal, options);
+  async setGoal(sessionId: string, goal: string, options?: { maxTurns?: number | null }) {
+    return await (await this.adapterForSession(sessionId)).setGoal(sessionId, goal, options);
   }
 
-  pauseGoal(sessionId: string, reason?: string) {
-    return this.adapterForSession(sessionId).pauseGoal(sessionId, reason);
+  async pauseGoal(sessionId: string, reason?: string) {
+    return await (await this.adapterForSession(sessionId)).pauseGoal(sessionId, reason);
   }
 
-  resumeGoal(sessionId: string) {
-    return this.adapterForSession(sessionId).resumeGoal(sessionId);
+  async resumeGoal(sessionId: string) {
+    return await (await this.adapterForSession(sessionId)).resumeGoal(sessionId);
   }
 
-  clearGoal(sessionId: string) {
-    return this.adapterForSession(sessionId).clearGoal(sessionId);
+  async clearGoal(sessionId: string) {
+    return await (await this.adapterForSession(sessionId)).clearGoal(sessionId);
   }
 
-  evaluateGoal(sessionId: string, responseText: string) {
-    return this.adapterForSession(sessionId).evaluateGoal(sessionId, responseText);
+  async evaluateGoal(sessionId: string, responseText: string) {
+    return await (await this.adapterForSession(sessionId)).evaluateGoal(sessionId, responseText);
   }
 
-  listScheduledTasks(includeDisabled?: boolean, limit?: number) {
-    return this.local.listScheduledTasks(includeDisabled, limit);
+  async listScheduledTasks(includeDisabled?: boolean, limit?: number, profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).listScheduledTasks(includeDisabled, limit);
   }
 
-  getScheduledTask(scheduledTaskId: string) {
-    return this.local.getScheduledTask(scheduledTaskId);
+  async getScheduledTask(scheduledTaskId: string, profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).getScheduledTask(scheduledTaskId);
   }
 
-  createScheduledTask(input: Parameters<AgentAdapter['createScheduledTask']>[0]) {
-    return this.local.createScheduledTask(input);
+  async createScheduledTask(input: Parameters<AgentAdapter['createScheduledTask']>[0], profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).createScheduledTask(input);
   }
 
-  updateScheduledTask(scheduledTaskId: string, updates: Parameters<AgentAdapter['updateScheduledTask']>[1]) {
-    return this.local.updateScheduledTask(scheduledTaskId, updates);
+  async updateScheduledTask(scheduledTaskId: string, updates: Parameters<AgentAdapter['updateScheduledTask']>[1], profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).updateScheduledTask(scheduledTaskId, updates);
   }
 
-  pauseScheduledTask(scheduledTaskId: string, reason?: string) {
-    return this.local.pauseScheduledTask(scheduledTaskId, reason);
+  async pauseScheduledTask(scheduledTaskId: string, reason?: string, profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).pauseScheduledTask(scheduledTaskId, reason);
   }
 
-  resumeScheduledTask(scheduledTaskId: string) {
-    return this.local.resumeScheduledTask(scheduledTaskId);
+  async resumeScheduledTask(scheduledTaskId: string, profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).resumeScheduledTask(scheduledTaskId);
   }
 
-  runScheduledTask(scheduledTaskId: string) {
-    return this.local.runScheduledTask(scheduledTaskId);
+  async runScheduledTask(scheduledTaskId: string, profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).runScheduledTask(scheduledTaskId);
   }
 
-  removeScheduledTask(scheduledTaskId: string) {
-    return this.local.removeScheduledTask(scheduledTaskId);
+  async removeScheduledTask(scheduledTaskId: string, profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).removeScheduledTask(scheduledTaskId);
   }
 
-  tickScheduledTasks() {
-    return this.local.tickScheduledTasks();
+  async tickScheduledTasks(profileId?: string | null) {
+    return (await this.adapterForProfileId(profileId)).tickScheduledTasks();
   }
 }

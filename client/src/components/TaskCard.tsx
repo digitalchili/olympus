@@ -1,12 +1,12 @@
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { Loader2, MoreHorizontal, Target } from 'lucide-react';
-import { Link } from 'react-router';
+import { ProfileLink } from '../contexts/ProfileContext';
 import type { Task, TaskRunState } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
 import { isActiveRun } from '../lib/store';
 import { hasUnseenAgentResponse } from '../lib/taskState';
-import { taskRoutingLabel } from '../lib/remoteProfiles';
+import { taskProfileLabel } from '../lib/profiles';
 import { TaskContextMenu } from './TaskContextMenu';
 import { RenameTitle } from './RenameTitle';
 
@@ -19,7 +19,7 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
   const compactGoalLabel = isGoalRun ? goalTurnLabel(run.goal?.turnsUsed ?? 0, run.goal?.maxTurns ?? 0, true) : null;
   const busyLabel = (run?.kind && BUSY_LABELS[run.kind]) || 'Working...';
   const showBusyState = isBusy && !isGoalRun;
-  const routingLabel = taskRoutingLabel(task);
+  const routingLabel = taskProfileLabel(task);
   const timeRowClass = showBusyState
     ? 'font-semibold text-zinc-600 dark:text-zinc-300'
     : isUnseen
@@ -129,7 +129,7 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
                 : 'border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
         }`}
       >
-        <Link
+        <ProfileLink
           to={`/tasks/${task.id}`}
           ref={setActivatorNodeRef}
           {...attributes}
@@ -137,7 +137,7 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
           className="block p-3.5 pr-8 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/60 dark:focus-visible:ring-zinc-500/70"
         >
           <TaskCardBody task={task} run={run} />
-        </Link>
+        </ProfileLink>
         <button
           type="button"
           onPointerDown={stopPropagation}

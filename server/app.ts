@@ -12,7 +12,7 @@ import { createUpdatesRouter } from './routes/updates.js';
 import { profilesRouter } from './routes/profiles.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
-import { RoutingAgentAdapter } from './adapters/routing.js';
+import { ProfileAgentAdapter } from './adapters/routing.js';
 import { initSSE, addClient, sendEvent, closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart, getRunStatuses } from './live-chat.js';
 import { getAppVersion } from './version.js';
@@ -22,7 +22,7 @@ import { createActiveRequestTracker } from './active-requests.js';
 
 const app = express();
 
-const adapter = new RoutingAgentAdapter(new HermesWorkerAdapter());
+const adapter = new ProfileAgentAdapter(new HermesWorkerAdapter());
 const activeRequests = createActiveRequestTracker();
 const drainController = new DrainController(() => getRunStatuses().filter((run) =>
   run.status === 'streaming' || run.status === 'compacting'

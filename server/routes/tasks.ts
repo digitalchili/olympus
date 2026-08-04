@@ -1,20 +1,26 @@
 import { Router } from 'express';
-import { getAllTasks, getTask, insertTask, updateTask, deleteTask, markTaskViewed } from '../db/queries.js';
+import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed } from '../db/queries.js';
 import { broadcast } from '../events.js';
 import { adapter } from '../app.js';
 import { TASK_STATUSES } from '../../shared/types.js';
 import type { TaskStatus } from '../../shared/types.js';
 import { validateProjectWorkdir } from '../project-folders.js';
-import { RemoteProfileRoutingError, remoteProfileRegistry, resolveTaskRouting } from '../remote-profiles.js';
+import { LocalProfileError } from '../local-profiles.js';
+import { requestProfile } from '../profile-context.js';
 
 export const tasksRouter = Router();
 
 const LOW_INFORMATION_TITLES = new Set(['?', 'hi', 'hello', 'hey', 'yo']);
 
 tasksRouter.get('/', (req, res) => {
-  const status = req.query.status as TaskStatus | undefined;
-  const tasks = getAllTasks(status);
-  res.json({ tasks });
+  try {
+    const status = req.query.status as TaskStatus | undefined;
+    const profile = requestProfile(req);
+    res.json({ tasks: getTasksForProfile(profile.id, profile.isDefault, status) });
+  } catch (error) {
+    if (error instanceof LocalProfileError) return res.status(error.status).json({ error: error.message, code: error.code });
+    res.status(500).json({ error: 'Could not load tasks' });
+  }
 });
 
 tasksRouter.get('/:id', (req, res) => {
@@ -65,30 +71,27 @@ tasksRouter.post('/', async (req, res) => {
 
   const userTitle = typeof title === 'string' ? title.trim() : '';
   const resolvedTitle = userTitle || generateTitle(description);
-  let routing: ReturnType<typeof resolveTaskRouting>;
+  let profile;
   try {
-    routing = resolveTaskRouting(remoteProfileRegistry, {
-      requestedProfileName: req.body.requestedProfileName,
-      description,
-    });
+    profile = requestProfile(req);
   } catch (error) {
-    if (error instanceof RemoteProfileRoutingError) {
-      return res.status(error.status).json({ error: error.message, code: 'REMOTE_PROFILE_ROUTING_ERROR' });
+    if (error instanceof LocalProfileError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
     }
-    return res.status(500).json({ error: 'Could not resolve remote profile routing' });
+    return res.status(500).json({ error: 'Could not resolve local Hermes profile' });
   }
   const task = insertTask({
     title: resolvedTitle,
     description,
     status: 'in_progress',
     workdir,
-    profile_name: routing.profileName,
-    routing_source: routing.routingSource,
+    profile_name: profile.id,
+    routing_source: 'manual',
   });
   broadcast({ type: 'task_created', task });
   res.status(201).json({ task });
 
-  if (!userTitle && task.profile_name === null) {
+  if (!userTitle) {
     void enrichTaskTitle(task.id, resolvedTitle, description);
   }
 });

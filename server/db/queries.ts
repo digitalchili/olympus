@@ -10,6 +10,10 @@ import {
 
 const stmtAllTasks = db.prepare('SELECT * FROM tasks ORDER BY updated_at DESC');
 const stmtTasksByStatus = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC');
+const stmtTasksByProfile = db.prepare('SELECT * FROM tasks WHERE profile_name = ? ORDER BY updated_at DESC');
+const stmtTasksByProfileAndStatus = db.prepare('SELECT * FROM tasks WHERE profile_name = ? AND status = ? ORDER BY updated_at DESC');
+const stmtDefaultProfileTasks = db.prepare('SELECT * FROM tasks WHERE (profile_name IS NULL OR profile_name = ?) ORDER BY updated_at DESC');
+const stmtDefaultProfileTasksByStatus = db.prepare('SELECT * FROM tasks WHERE (profile_name IS NULL OR profile_name = ?) AND status = ? ORDER BY updated_at DESC');
 const stmtGetTask = db.prepare('SELECT * FROM tasks WHERE id = ?');
 const stmtInsertTask = db.prepare(`
   INSERT INTO tasks (
@@ -34,6 +38,17 @@ const stmtMarkTaskViewed = db.prepare(`
 `);
 export function getAllTasks(status?: TaskStatus): Task[] {
   return status ? stmtTasksByStatus.all(status) as Task[] : stmtAllTasks.all() as Task[];
+}
+
+export function getTasksForProfile(profileId: string, isDefault: boolean, status?: TaskStatus): Task[] {
+  if (isDefault) {
+    return status
+      ? stmtDefaultProfileTasksByStatus.all(profileId, status) as Task[]
+      : stmtDefaultProfileTasks.all(profileId) as Task[];
+  }
+  return status
+    ? stmtTasksByProfileAndStatus.all(profileId, status) as Task[]
+    : stmtTasksByProfile.all(profileId) as Task[];
 }
 
 export function getTask(id: string): Task | undefined {

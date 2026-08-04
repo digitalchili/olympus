@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { useLocation } from 'react-router';
 import { ArrowUp, Loader2, X } from 'lucide-react';
 import { InputToolbar } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, UploadErrorBar } from './ChatAttachments';
@@ -12,6 +12,7 @@ import { GOAL_MODE_PLACEHOLDER, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import { applyProfileMentionSelection, findActiveProfileMention, type ActiveProfileMention } from '../lib/profileMentions';
 import type { ChatRunMode } from '@shared/types';
+import { useProfileNavigate } from '../contexts/ProfileContext';
 
 type NewTaskLocationState = {
   draft?: string;
@@ -23,7 +24,7 @@ function draftFromLocationState(state: unknown): string {
 }
 
 export function NewTaskPage() {
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
   const location = useLocation();
   const initialDraftRef = useRef(draftFromLocationState(location.state));
   const lastAppliedKeyRef = useRef(location.key);
@@ -64,7 +65,7 @@ export function NewTaskPage() {
     let cancelled = false;
     fetchHermesProfiles()
       .then(({ profiles: nextProfiles }) => {
-        if (!cancelled) setProfiles(nextProfiles.filter((profile) => profile.available));
+        if (!cancelled) setProfiles(nextProfiles);
       })
       .catch(() => {
         if (!cancelled) setProfiles([]);
@@ -219,7 +220,9 @@ export function NewTaskPage() {
                   }`}
                 >
                   <span className="font-medium">{profile.label}</span>
-                  <span className="truncate text-xs text-zinc-400 dark:text-zinc-500">{(profile as HermesProfile).remoteProfile}</span>
+                  <span className="truncate text-xs text-zinc-400 dark:text-zinc-500">
+                    {(profile as HermesProfile).description || 'Local Hermes profile'}
+                  </span>
                 </button>
               ))}
             </div>

@@ -9,7 +9,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { toast } from 'sonner';
 import {
   AlertCircle,
@@ -45,6 +45,7 @@ import type { ClawHubScanResult, ClawHubSkillSummary, ClawHubStats } from '@shar
 import { stripFrontmatter, toErrorMessage } from '../lib/format';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { usePageHeader, type PageHeaderConfig } from './Header';
+import { useProfileNavigate } from '../contexts/ProfileContext';
 import { MarkdownContent } from './MarkdownContent';
 
 type SkillMode = 'browse' | 'installed';
@@ -809,7 +810,7 @@ function SkillPreviewModal({
 }
 
 export function SkillsPage() {
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
   const { tab } = useParams<{ tab?: string }>();
   const mode: SkillMode = isSkillMode(tab) ? tab : 'browse';
   const [query, setQuery] = useState('');

@@ -654,6 +654,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
               const isLiveThinking = isLastAssistant && isStreaming && !!thinkingContent;
               const toolsToShow = isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
               const showSpinner = isLastAssistant && isStreaming && !msg.content && !thinkingContent && !activeTools.some(t => t.status === 'running');
+              const { text: assistantText, filePaths: assistantFilePaths } = splitAttachmentMessage(msg.content);
 
               return (
                 <Fragment key={msg.id}>
@@ -671,8 +672,8 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
                         </div>
                       )}
                       <div className="min-w-0 max-w-full overflow-hidden text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-                        {msg.content ? (
-                          <MarkdownContent content={msg.content} isStreaming={isLastAssistant && isStreaming} />
+                        {assistantText ? (
+                          <MarkdownContent content={assistantText} isStreaming={isLastAssistant && isStreaming} />
                         ) : (
                           showSpinner && (
                             <span className="inline-flex items-center gap-2 text-zinc-400 dark:text-zinc-500">
@@ -689,10 +690,11 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
                             </span>
                           )
                         )}
+                        <MessageAttachmentCards paths={assistantFilePaths} />
                       </div>
-                      {shouldShowReplyCopyButton(msg.content, isLastAssistant && isStreaming) && (
+                      {shouldShowReplyCopyButton(assistantText, isLastAssistant && isStreaming) && (
                         <div className="mt-1 flex items-center">
-                          <ReplyCopyButton content={msg.content} />
+                          <ReplyCopyButton content={assistantText} />
                         </div>
                       )}
                     </div>

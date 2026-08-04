@@ -4,7 +4,8 @@ import { resolveHermesHome } from '../paths.js';
 import type { ScheduledTaskRun, ScheduledTaskRunContent } from '../../shared/types.js';
 
 let _outputDir: string | undefined;
-function resolveOutputDir(): string {
+function resolveOutputDir(hermesHome?: string): string {
+  if (hermesHome) return join(hermesHome, 'cron', 'output');
   return (_outputDir ??= join(resolveHermesHome(), 'cron', 'output'));
 }
 
@@ -59,9 +60,9 @@ async function readHead(path: string, maxBytes = 8192): Promise<string> {
   }
 }
 
-export async function listScheduledTaskRuns(scheduledTaskId: string, limit = 50): Promise<ScheduledTaskRun[]> {
+export async function listScheduledTaskRuns(scheduledTaskId: string, limit = 50, hermesHome?: string): Promise<ScheduledTaskRun[]> {
   if (!isValidSegment(scheduledTaskId)) return [];
-  const dir = join(resolveOutputDir(), scheduledTaskId);
+  const dir = join(resolveOutputDir(hermesHome), scheduledTaskId);
   const safeLimit = Math.max(1, Math.min(limit, 50));
 
   let names: string[];
@@ -85,9 +86,9 @@ export async function listScheduledTaskRuns(scheduledTaskId: string, limit = 50)
   );
 }
 
-export async function getScheduledTaskRunContent(scheduledTaskId: string, runId: string): Promise<ScheduledTaskRunContent | null> {
+export async function getScheduledTaskRunContent(scheduledTaskId: string, runId: string, hermesHome?: string): Promise<ScheduledTaskRunContent | null> {
   if (!isValidSegment(scheduledTaskId) || !isValidSegment(runId)) return null;
-  const path = join(resolveOutputDir(), scheduledTaskId, `${runId}.md`);
+  const path = join(resolveOutputDir(hermesHome), scheduledTaskId, `${runId}.md`);
   let content: string;
   try {
     content = await readFile(path, 'utf8');

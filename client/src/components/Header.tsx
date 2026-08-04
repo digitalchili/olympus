@@ -1,8 +1,9 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Link, useMatch, useLocation } from 'react-router';
+import { useMatch, useLocation } from 'react-router';
 import { ChevronRight } from 'lucide-react';
 import { useStore } from '../lib/store';
 import { RenameTitle } from './RenameTitle';
+import { ProfileLink } from '../contexts/ProfileContext';
 
 export type PageHeaderCrumb = {
   label: string;
@@ -54,9 +55,9 @@ function HeaderCrumbs({ crumbs }: { crumbs: PageHeaderCrumb[] }) {
         <div key={`${crumb.label}:${index}`} className="flex min-w-0 items-center gap-2">
           {index > 0 && <ChevronRight size={14} className="shrink-0 text-zinc-300 dark:text-zinc-700" />}
           {crumb.to ? (
-            <Link to={crumb.to} className="truncate text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
+            <ProfileLink to={crumb.to} className="truncate text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
               {crumb.label}
-            </Link>
+            </ProfileLink>
           ) : (
             <span className="truncate text-zinc-900 dark:text-zinc-100">{crumb.label}</span>
           )}
@@ -113,9 +114,9 @@ export function Header() {
       <div className="flex items-center gap-2 min-w-0">
         {showParent && (
           <>
-            <Link to="/" className="text-sm font-medium text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors shrink-0">
+            <ProfileLink to="/" className="text-sm font-medium text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors shrink-0">
               Tasks
-            </Link>
+            </ProfileLink>
             <ChevronRight size={14} className="text-zinc-300 dark:text-zinc-600 shrink-0" />
           </>
         )}

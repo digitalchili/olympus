@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { useLocation, useParams } from 'react-router';
 import {
   AlertCircle,
   CheckCircle2,
@@ -50,6 +50,7 @@ import { buildScheduledTaskEditDraft, buildScheduledTaskFixDraft, scheduledTaskD
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { usePageHeader, type PageHeaderConfig } from './Header';
+import { useProfileNavigate } from '../contexts/ProfileContext';
 import { ModelPicker } from './InputToolbar';
 import { MarkdownContent } from './MarkdownContent';
 
@@ -1465,7 +1466,7 @@ function ScheduledTaskRunsView({
 }
 
 export function ScheduledTasksPage() {
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
   const location = useLocation();
   const { scheduledTaskId, runId } = useParams<{ scheduledTaskId?: string; runId?: string }>();
   const selectedScheduledTaskId = scheduledTaskId ?? null;

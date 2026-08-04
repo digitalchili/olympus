@@ -10,7 +10,7 @@ import {
 } from '@dnd-kit/core';
 import { AlertTriangle, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { ProfileLink } from '../contexts/ProfileContext';
 import type { ScheduledTask, Task, TaskStatus } from '@shared/types';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
@@ -72,20 +72,20 @@ function RecurringSummaryStrip({ scheduledTasks }: { scheduledTasks: ScheduledTa
         <span className="min-w-0 truncate">{summary}</span>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        <Link
+        <ProfileLink
           to="/tasks/new"
           state={{ draft: buildScheduledTaskFixDraft(attentionTask) }}
           className="inline-flex items-center gap-1 rounded-md bg-rose-700 px-2 py-1 font-semibold text-white transition-colors hover:bg-rose-800 dark:bg-rose-300 dark:text-rose-950 dark:hover:bg-rose-200"
         >
           <Wrench size={13} />
           Fix it
-        </Link>
-        <Link
+        </ProfileLink>
+        <ProfileLink
           to={scheduledTaskRunsPath(attentionTask.id)}
           className="rounded-md px-2 py-1 font-semibold text-rose-800 transition-colors hover:bg-rose-100 dark:text-rose-200 dark:hover:bg-rose-950/40"
         >
           Review →
-        </Link>
+        </ProfileLink>
       </div>
     </div>
   );

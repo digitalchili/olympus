@@ -28,6 +28,28 @@ const portableDefaults = await Promise.all([
 ]);
 for (const content of portableDefaults) {
   assert.doesNotMatch(content, /Somboon|Digital Chili|100\.67\.|som_internal|somboon-vps/i);
+  assert.doesNotMatch(content, /OLYMPUS_REMOTE_PROFILES|remote profile/i);
+}
+
+const removedExternalProfileFiles = [
+  'server/remote-profiles.ts',
+  'server/adapters/remote-hermes.ts',
+  'docs/remote-profiles.md',
+  'docs/remote-profiles.example.json',
+];
+for (const file of removedExternalProfileFiles) {
+  await assert.rejects(access(file), { code: 'ENOENT' });
+}
+
+const localProfileSources = await Promise.all([
+  readFile('server/local-profiles.ts', 'utf8'),
+  readFile('server/adapters/routing.ts', 'utf8'),
+  readFile('server/routes/profiles.ts', 'utf8'),
+  readFile('client/src/components/ProfilesSettings.tsx', 'utf8'),
+  readFile('README.md', 'utf8'),
+]);
+for (const content of localProfileSources) {
+  assert.doesNotMatch(content, /RemoteHermes|remoteProfile|OLYMPUS_REMOTE_PROFILES|remote profile/i);
 }
 
 for (const file of required.filter((file) => file.endsWith('.sh'))) {

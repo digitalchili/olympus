@@ -25,17 +25,12 @@ import {
 import { taskRunSettings, parseRunSettingsBody } from '../agent-settings.js';
 import { TASK_AGENT_SYSTEM_PROMPT } from '../prompts/task-agent.js';
 import { isRecord, toErrorMessage } from '../errors.js';
-import { RemoteHermesUnsupportedError } from '../adapters/routing.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, type ChatRunMode, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
 
 function sendAdapterError(res: Response, error: unknown, fallback: string): void {
-  if (error instanceof RemoteHermesUnsupportedError) {
-    res.status(error.status).json({ error: error.message, code: error.code });
-    return;
-  }
   res.status(503).json({ error: toErrorMessage(error, fallback) });
 }
 
@@ -468,10 +463,6 @@ chatRouter.post('/:id/compact', async (req, res) => {
   } catch (error) {
     const message = toErrorMessage(error, 'Compaction failed');
     completeTaskRun(task.id, snapshot.runId, 'error', ERROR_SNAPSHOT_TTL_MS, { error: message });
-    if (error instanceof RemoteHermesUnsupportedError) {
-      res.status(error.status).json({ error: error.message, code: error.code });
-      return;
-    }
     res.status(503).json({ error: message });
   }
 });

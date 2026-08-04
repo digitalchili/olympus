@@ -1,12 +1,13 @@
 import { useDroppable } from '@dnd-kit/core';
 import { MoreHorizontal, Plus } from 'lucide-react';
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router';
+
 import type { Task, TaskRunState, TaskStatus } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { ColumnActionsMenu } from './ColumnActionsMenu';
 import { StatusIcon } from './StatusIcon';
 import { TaskCard } from './TaskCard';
+import { useProfileNavigate } from '../contexts/ProfileContext';
 
 interface ColumnProps {
   status: TaskStatus;
@@ -19,7 +20,7 @@ interface ColumnProps {
 export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll }: ColumnProps) {
   const { label } = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const navigate = useNavigate();
+  const navigate = useProfileNavigate();
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const showAddButton = status === 'in_progress';
 

@@ -21,21 +21,46 @@ export interface AgentRunSettings {
 }
 
 export const DEFAULT_PROFILE_NAME = 'default';
-export const SOM_WINE_PROFILE_NAME = 'som-spirithouse-wine';
 
 export const TASK_HANDOFF_STATES = ['created', 'running', 'completed', 'failed', 'cancelled'] as const;
 export type TaskHandoffState = (typeof TASK_HANDOFF_STATES)[number];
+// `automatic` remains readable for tasks created by older Olympus versions.
 export const TASK_ROUTING_SOURCES = ['manual', 'automatic'] as const;
 export type TaskRoutingSource = (typeof TASK_ROUTING_SOURCES)[number];
 
-export interface RemoteProfilePublic {
+export interface HermesProfileCapabilities {
+  settings: boolean;
+  soul: boolean;
+  workspace: boolean;
+  skills: boolean;
+  scheduledTasks: boolean;
+}
+
+export interface HermesProfileHealth {
+  status: 'ready' | 'degraded';
+  issues: string[];
+}
+
+export interface HermesProfile {
   id: string;
   label: string;
   description: string;
-  icon: string;
-  available: boolean;
-  remoteProfile: string;
+  isDefault: boolean;
+  capabilities: HermesProfileCapabilities;
+  health: HermesProfileHealth;
 }
+
+export interface HermesProfileSettings {
+  id: string;
+  displayName: string;
+  description: string;
+  model: string | null;
+  provider: string | null;
+  reasoningEffort: ReasoningEffort | null;
+  soul: string;
+}
+
+export type HermesProfileSettingsUpdate = Partial<Omit<HermesProfileSettings, 'id'>>;
 
 export interface Task {
   id: string;

@@ -19,7 +19,7 @@ assert.equal(shouldShowReplyCopyButton('', false), false);
 
 const taskChatSource = await readFile('client/src/components/TaskChat.tsx', 'utf8');
 assert.match(taskChatSource, /import \{ ReplyCopyButton, shouldShowReplyCopyButton \} from ['"]\.\/ReplyCopyButton['"]/);
-assert.match(taskChatSource, /shouldShowReplyCopyButton\(msg\.content, isLastAssistant && isStreaming\)/);
-assert.match(taskChatSource, /<ReplyCopyButton content=\{msg\.content\} \/>/);
+assert.match(taskChatSource, /shouldShowReplyCopyButton\(assistantText, isLastAssistant && isStreaming\)/);
+assert.match(taskChatSource, /<ReplyCopyButton content=\{assistantText\} \/>/);
 
 console.log('Reply copy button tests passed');

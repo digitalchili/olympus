@@ -170,6 +170,8 @@ class HermesWorkerClient {
   private ready = false;
   private readyPromise: Promise<void> | null = null;
 
+  constructor(private hermesHome: string) {}
+
   async start(): Promise<void> {
     this.ensureStarted();
     if (this.ready) return;
@@ -323,6 +325,7 @@ class HermesWorkerClient {
       cwd: workspace,
       env: {
         ...process.env,
+        HERMES_HOME: this.hermesHome,
         HERMES_QUIET: '1',
         HERMES_YOLO_MODE: '1',
       },
@@ -399,7 +402,11 @@ class HermesWorkerClient {
 }
 
 export class HermesWorkerAdapter implements AgentAdapter {
-  private client = new HermesWorkerClient();
+  private client: HermesWorkerClient;
+
+  constructor(options: { hermesHome?: string } = {}) {
+    this.client = new HermesWorkerClient(options.hermesHome ?? resolveHermesHome());
+  }
 
   async start(): Promise<void> {
     await this.client.start();

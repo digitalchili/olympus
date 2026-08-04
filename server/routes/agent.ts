@@ -2,13 +2,15 @@ import { Router } from 'express';
 import { getTask } from '../db/queries.js';
 import { isRecord, toErrorMessage } from '../errors.js';
 import { taskRunSettings } from '../agent-settings.js';
-import { REASONING_EFFORTS } from '../../shared/types.js';
+import { REASONING_EFFORTS, DEFAULT_PROFILE_NAME } from '../../shared/types.js';
+import { requestProfile } from '../profile-context.js';
+import { LocalProfileError } from '../local-profiles.js';
 import type { AgentDefaults, Task, TaskAgentSettings, ReasoningEffort } from '../../shared/types.js';
 
 interface AgentSettingsAdapter {
-  getDefaults(): Promise<AgentDefaults>;
-  setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }): Promise<AgentDefaults>;
-  getModels(): Promise<unknown>;
+  getDefaults(profileId?: string | null): Promise<AgentDefaults>;
+  setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }, profileId?: string | null): Promise<AgentDefaults>;
+  getModels(profileId?: string | null): Promise<unknown>;
 }
 
 const FALLBACK_DEFAULTS: AgentDefaults = {
@@ -20,9 +22,9 @@ const FALLBACK_DEFAULTS: AgentDefaults = {
   showReasoning: true,
 };
 
-async function defaultsForSettings(adapter: AgentSettingsAdapter): Promise<AgentDefaults> {
+async function defaultsForSettings(adapter: AgentSettingsAdapter, profileId: string): Promise<AgentDefaults> {
   try {
-    return await adapter.getDefaults();
+    return await adapter.getDefaults(profileId);
   } catch {
     return FALLBACK_DEFAULTS;
   }
@@ -48,10 +50,11 @@ function buildTaskSettings(task: Task, defaults: AgentDefaults): TaskAgentSettin
 export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
 
-  router.get('/defaults', async (_req, res) => {
+  router.get('/defaults', async (req, res) => {
     try {
-      res.json(await adapter.getDefaults());
+      res.json(await adapter.getDefaults(requestProfile(req).id));
     } catch (error) {
+      if (error instanceof LocalProfileError) return res.status(error.status).json({ error: error.message, code: error.code });
       res.status(503).json({ error: toErrorMessage(error, 'Hermes worker unavailable') });
     }
   });
@@ -88,17 +91,19 @@ export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
     }
 
     try {
-      const defaults = await adapter.setDefaults(updates);
+      const defaults = await adapter.setDefaults(updates, requestProfile(req).id);
       res.json(defaults);
     } catch (error) {
+      if (error instanceof LocalProfileError) return res.status(error.status).json({ error: error.message, code: error.code });
       res.status(503).json({ error: toErrorMessage(error, 'Failed to update defaults') });
     }
   });
 
-  router.get('/models', async (_req, res) => {
+  router.get('/models', async (req, res) => {
     try {
-      res.json(await adapter.getModels());
+      res.json(await adapter.getModels(requestProfile(req).id));
     } catch (error) {
+      if (error instanceof LocalProfileError) return res.status(error.status).json({ error: error.message, code: error.code });
       res.status(503).json({ error: toErrorMessage(error, 'Hermes worker unavailable') });
     }
   });
@@ -113,7 +118,7 @@ export function createTaskAgentSettingsRouter(adapter: AgentSettingsAdapter): Ro
     const task = getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    const defaults = await defaultsForSettings(adapter);
+    const defaults = await defaultsForSettings(adapter, task.profile_name ?? DEFAULT_PROFILE_NAME);
     res.json(buildTaskSettings(task, defaults));
   });
 

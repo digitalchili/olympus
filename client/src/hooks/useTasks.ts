@@ -3,6 +3,7 @@ import type { BoardEvent } from '@shared/types';
 import { useStore } from '../lib/store';
 import { fetchTasks } from '../lib/api';
 import { playCompletionSound } from './useSoundOnComplete';
+import { apiPathWithProfile } from '../lib/profileQuery';
 
 export function useTasks() {
   const setTasks = useStore((s) => s.setTasks);
@@ -13,6 +14,7 @@ export function useTasks() {
   const retryRef = useRef(0);
 
   useEffect(() => {
+    setTasks([]);
     fetchTasks().then((res) => setTasks(res.tasks)).catch(console.error);
   }, [setTasks]);
 
@@ -23,7 +25,7 @@ export function useTasks() {
 
     function connect() {
       if (cancelled) return;
-      es = new EventSource('/api/events');
+      es = new EventSource(`/api${apiPathWithProfile('/events')}`);
 
       es.onopen = () => {
         if (retryRef.current > 0) {
