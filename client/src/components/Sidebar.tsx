@@ -204,7 +204,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
 
         <nav aria-label="System" className="mt-auto hidden pb-3 sm:block sm:space-y-1">
           {!desktopCollapsed && (
-            <div className="mb-2 px-1">
+            <div className="mb-2">
               <ProfilePicker
                 profiles={profiles}
                 activeProfileId={activeProfileId}
