@@ -10,7 +10,7 @@ We try to only add new functionality that is small (that is, simple and few line
 
 ## What This Is
 
-Olympus Dispatch is Digital Chili's private Hermes-first task management system with a Kanban board UI. Users create tasks via a chat interface; each task is a Hermes agent session that autonomously decides how to execute — doing the work itself, spawning child sessions, or creating Hermes cron jobs shown as Scheduled Tasks. Successful agent runs move tasks to review automatically. The user never talks to child sessions directly; recurring work is managed from the Scheduled Tasks page.
+Olympus Dispatch is Digital Chili's local-first, standalone Hermes-first task management system with a Kanban board UI. Users create tasks via a chat interface; each task is a Hermes agent session that autonomously decides how to execute — doing the work itself, spawning child sessions, or creating Hermes cron jobs shown as Scheduled Tasks. Successful agent runs move tasks to review automatically. The user never talks to child sessions directly; recurring work is managed from the Scheduled Tasks page.
 
 ## Prerequisites
 
@@ -178,6 +178,7 @@ The Python worker communicates via JSONL (one JSON object per line) over stdin/s
 | `/skills` | redirect | Redirects to `/skills/browse` |
 | `/skills/:tab` | `SkillsPage` | Browse the ClawHub registry or manage installed skills (`browse` / `installed` tab) |
 | `/files` | `FileBrowserPage` | File manager for workspace directory |
+| `/channels` | `ChannelsPage` | Local, read-only Hermes channel inboxes for the active profile |
 | `/settings` | `SettingsPage` | Theme, default model + reasoning effort |
 
 ## Environment Variables
