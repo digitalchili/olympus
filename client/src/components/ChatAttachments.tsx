@@ -1,8 +1,11 @@
 import { useRef } from 'react';
 import { Download, FileText, Image as ImageIcon, Loader2, Paperclip, RotateCcw, X } from 'lucide-react';
 import { fileDownloadUrl, filePreviewUrl } from '../lib/api';
+import { BASE } from '../lib/api';
+import { apiPathWithProfile } from '../lib/profileQuery';
 import { formatBytes } from '../lib/format';
 import type { PendingFile } from '../hooks/useFileAttachments';
+import type { TaskAttachment } from '@shared/types';
 
 export function AttachmentTray({
   files,
@@ -83,25 +86,39 @@ function attachmentName(path: string): string {
 
 /** Attachment cards for persisted messages. File paths remain in the stored text
  * for Hermes, but are replaced in the chat UI with a useful visual reference. */
-export function MessageAttachmentCards({ paths }: { paths: string[] }) {
-  if (paths.length === 0) return null;
+export function MessageAttachmentCards({
+  paths = [],
+  taskId,
+  attachments = [],
+}: {
+  paths?: string[];
+  taskId?: string;
+  attachments?: TaskAttachment[];
+}) {
+  const items = attachments.length > 0
+    ? attachments
+    : paths.map((path) => ({ path, name: attachmentName(path), size: 0 }));
+  if (items.length === 0) return null;
 
   return (
     <div className="mt-2 flex flex-wrap gap-2">
-      {paths.map((path) => {
-        const name = attachmentName(path);
+      {items.map((attachment) => {
+        const { path, name } = attachment;
         const isImage = IMAGE_EXTENSION.test(name);
         const isPdf = PDF_EXTENSION.test(name);
+        const downloadUrl = taskId
+          ? `${BASE}${apiPathWithProfile(`/tasks/${encodeURIComponent(taskId)}/artifacts/download?path=${encodeURIComponent(path)}`)}`
+          : fileDownloadUrl(path);
         return (
           <a
             key={path}
-            href={fileDownloadUrl(path)}
+            href={downloadUrl}
             download={name}
             title={`Download ${name}`}
             className="group flex w-36 overflow-hidden rounded-lg border border-zinc-200 bg-white text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
           >
             <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden bg-zinc-100 dark:bg-zinc-800">
-              {isImage ? (
+              {isImage && !taskId ? (
                 <img src={filePreviewUrl(path)} alt="" className="h-full w-full object-cover" />
               ) : isPdf ? (
                 <FileText size={28} className="text-red-400" />

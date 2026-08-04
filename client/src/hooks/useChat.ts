@@ -38,7 +38,7 @@ type LiveEvent =
       duration?: number;
       label?: string;
     }
-  | { type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean }
+  | { type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; attachments?: TaskMessage['attachments'] }
   | { type: 'error'; error?: string };
 
 function compactSettings(settings?: AgentRunSettings): AgentRunSettings | undefined {
@@ -100,6 +100,7 @@ function snapshotMessages(messages: LiveChatMessage[]): ChatMessage[] {
   return messages.map((msg) => ({
     ...msg,
     tools: msg.tools ? msg.tools.map((t) => ({ ...t })) : undefined,
+    attachments: msg.attachments ? msg.attachments.map((attachment) => ({ ...attachment })) : undefined,
   }));
 }
 
@@ -283,6 +284,7 @@ export function useChat() {
     }
 
     if (event.type === 'done') {
+      if (event.attachments) ensureAssistant(run).attachments = event.attachments.map((attachment) => ({ ...attachment }));
       if (event.sessionId) run.sessionId = event.sessionId;
       if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
       if (event.context !== undefined) {

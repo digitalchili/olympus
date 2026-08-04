@@ -45,7 +45,7 @@ import type { ClawHubScanResult, ClawHubSkillSummary, ClawHubStats } from '@shar
 import { stripFrontmatter, toErrorMessage } from '../lib/format';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { usePageHeader, type PageHeaderConfig } from './Header';
-import { useProfileNavigate } from '../contexts/ProfileContext';
+import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { MarkdownContent } from './MarkdownContent';
 
 type SkillMode = 'browse' | 'installed';
@@ -452,10 +452,12 @@ function InstalledSkillCard({
 
 function AddSkillModal({
   open,
+  profileId,
   onClose,
   onImported,
 }: {
   open: boolean;
+  profileId: string;
   onClose: () => void;
   onImported: (skill: SkillMeta) => void;
 }) {
@@ -519,7 +521,7 @@ function AddSkillModal({
     setImporting(true);
     setError(null);
     try {
-      const result = await importSkillFiles(files, resolveRelativePath);
+      const result = await importSkillFiles(files, resolveRelativePath, profileId);
       toast('Skill imported');
       onImported(result.skill);
       onClose();
@@ -811,6 +813,7 @@ function SkillPreviewModal({
 
 export function SkillsPage() {
   const navigate = useProfileNavigate();
+  const { activeProfile, activeProfileId } = useProfile();
   const { tab } = useParams<{ tab?: string }>();
   const mode: SkillMode = isSkillMode(tab) ? tab : 'browse';
   const [query, setQuery] = useState('');
@@ -834,6 +837,7 @@ export function SkillsPage() {
   const [skillToDelete, setSkillToDelete] = useState<SkillMeta | null>(null);
   const [deletingSkillId, setDeletingSkillId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const installedRequestRef = useRef(0);
   const registryRequestRef = useRef(0);
 
   const setMode = useCallback((nextMode: SkillMode) => {
@@ -878,19 +882,23 @@ export function SkillsPage() {
   }, [installedSkills, query]);
 
   const loadInstalledSkills = useCallback(async (): Promise<SkillMeta[]> => {
+    const requestId = installedRequestRef.current + 1;
+    installedRequestRef.current = requestId;
     setLoadingInstalled(true);
     try {
-      const { skills } = await fetchSkills();
+      const { skills } = await fetchSkills(activeProfileId);
+      if (installedRequestRef.current !== requestId) return [];
       setInstalledSkills(skills);
       setInstalledError(null);
       return skills;
     } catch (err) {
+      if (installedRequestRef.current !== requestId) return [];
       setInstalledError(toErrorMessage(err, 'Failed to load installed skills'));
       return [];
     } finally {
-      setLoadingInstalled(false);
+      if (installedRequestRef.current === requestId) setLoadingInstalled(false);
     }
-  }, []);
+  }, [activeProfileId]);
 
   const loadRegistrySkills = useCallback(async (search: string): Promise<void> => {
     const requestId = registryRequestRef.current + 1;
@@ -915,8 +923,12 @@ export function SkillsPage() {
   }, []);
 
   useEffect(() => {
+    setInstalledSkills([]);
+    setPreview(null);
+    setSkillToDelete(null);
+    setAddModalOpen(false);
     void loadInstalledSkills();
-  }, [loadInstalledSkills]);
+  }, [activeProfileId, loadInstalledSkills]);
 
   useEffect(() => {
     if (!isSkillMode(tab)) navigate('/skills/browse', { replace: true });
@@ -962,7 +974,7 @@ export function SkillsPage() {
           if (!cancelled) setPreviewLoading(false);
         });
     } else {
-      fetchSkillContent(preview.skill.id)
+      fetchSkillContent(preview.skill.id, activeProfileId)
         .then(({ content }) => {
           if (!cancelled) setPreviewContent(content);
         })
@@ -975,14 +987,14 @@ export function SkillsPage() {
     }
 
     return () => { cancelled = true; };
-  }, [preview]);
+  }, [activeProfileId, preview]);
 
   async function handleInstall(skill: ClawHubSkillSummary, options: { openInstalledPreview?: boolean } = {}) {
     if (installingKey) return;
     const { openInstalledPreview = true } = options;
     setInstallingKey(registrySkillKey(skill.slug, skill.ownerHandle));
     try {
-      const result = await installSkill({ provider: 'clawhub', slug: skill.slug, ownerHandle: skill.ownerHandle, version: 'latest' });
+      const result = await installSkill({ provider: 'clawhub', slug: skill.slug, ownerHandle: skill.ownerHandle, version: 'latest' }, activeProfileId);
       toast(result.alreadyInstalled ? 'Skill already installed' : 'Skill installed');
       await loadInstalledSkills();
       if (openInstalledPreview) {
@@ -1008,7 +1020,7 @@ export function SkillsPage() {
     setDeleteError(null);
     try {
       const deletedId = skillToDelete.id;
-      await deleteSkill(deletedId);
+      await deleteSkill(deletedId, activeProfileId);
       toast('Skill deleted');
       setSkillToDelete(null);
       if (preview?.type === 'installed' && preview.skill.id === deletedId) {
@@ -1105,6 +1117,7 @@ export function SkillsPage() {
 
       <AddSkillModal
         open={addModalOpen}
+        profileId={activeProfileId}
         onClose={() => setAddModalOpen(false)}
         onImported={handleImported}
       />
@@ -1128,7 +1141,7 @@ export function SkillsPage() {
       {skillToDelete && (
         <DeleteConfirmModal
           title="Delete skill"
-          body={`This removes "${skillToDelete.name}" from ~/.hermes/skills. Future Hermes agent runs will no longer include it.`}
+          body={`This removes "${skillToDelete.name}" from ${activeProfile?.label ?? 'the selected Hermes profile'}. Future agent runs for this profile will no longer include it.`}
           confirmLabel="Delete skill"
           isConfirming={deletingSkillId === skillToDelete.id}
           error={deleteError}

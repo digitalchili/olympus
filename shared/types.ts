@@ -108,6 +108,13 @@ export interface TaskMessage {
   thinking?: string;
   created_at: number;
   completed_at?: number;
+  attachments?: TaskAttachment[];
+}
+
+export interface TaskAttachment {
+  path: string;
+  name: string;
+  size: number;
 }
 
 export interface ToolProgressEvent {

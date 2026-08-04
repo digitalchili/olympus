@@ -7,7 +7,7 @@ import multer from 'multer';
 import yauzl from 'yauzl';
 import { Router, type Request, type Response } from 'express';
 import type { ClawHubSkillSummary, ClawHubStats, SkillMeta } from '../../shared/types.js';
-import { resolveHermesSkillsDir } from '../paths.js';
+import { requestProfile, sendProfileError } from '../profile-context.js';
 
 const CLAWHUB_API_BASE = 'https://clawhub.ai/api/v1';
 const SIDECAR_FILENAME = '.olympus-dispatch-skill.json';
@@ -73,6 +73,11 @@ class RouteError extends Error {
 }
 
 function sendError(res: Response, error: unknown, fallback: string): void {
+  const profileError = sendProfileError(error);
+  if (profileError) {
+    res.status(profileError.status).json(profileError.body);
+    return;
+  }
   if (error instanceof RouteError) {
     res.status(error.status).json({ error: error.message, code: error.code });
     return;
@@ -264,7 +269,7 @@ function skillIdFromFile(root: string, skillFile: string): string {
   return relative(root, dirname(skillFile)).split(sep).join('/');
 }
 
-async function readInstalledSkill(skillFile: string, root = resolveHermesSkillsDir()): Promise<SkillMeta> {
+async function readInstalledSkill(skillFile: string, root: string): Promise<SkillMeta> {
   const content = await readFile(skillFile, 'utf8');
   const frontmatter = parseFrontmatter(content);
   const skillDir = dirname(skillFile);
@@ -314,8 +319,7 @@ async function findSkillFiles(dir: string, found: string[] = []): Promise<string
   return found;
 }
 
-async function listInstalledSkills(): Promise<SkillMeta[]> {
-  const root = resolveHermesSkillsDir();
+export async function listInstalledSkills(root: string): Promise<SkillMeta[]> {
   await mkdir(root, { recursive: true });
   const files = await findSkillFiles(root);
   const skills = await Promise.all(files.map((file) => readInstalledSkill(file, root)));
@@ -326,17 +330,15 @@ async function listInstalledSkills(): Promise<SkillMeta[]> {
   ));
 }
 
-function resolveInstalledSkillFile(id: string): string {
-  const root = resolveHermesSkillsDir();
+function resolveInstalledSkillFile(id: string, root: string): string {
   const relId = normalizeSkillId(id);
   const skillFile = resolve(root, relId, 'SKILL.md');
   ensureInside(root, skillFile);
   return skillFile;
 }
 
-async function deleteInstalledSkill(id: string): Promise<SkillMeta> {
-  const root = resolveHermesSkillsDir();
-  const skillFile = resolveInstalledSkillFile(id);
+export async function deleteInstalledSkill(id: string, root: string): Promise<SkillMeta> {
+  const skillFile = resolveInstalledSkillFile(id, root);
   if (!await pathExists(skillFile)) {
     throw new RouteError(404, `Skill '${id}' is not installed`, 'SKILL_NOT_FOUND');
   }
@@ -705,12 +707,11 @@ async function writeSkillFiles(destination: string, files: Map<string, Buffer>, 
   }
 }
 
-async function installClawHubSkill(slug: string, ownerHandle: string | undefined, requestedVersion: string | undefined, force: boolean): Promise<{
+async function installClawHubSkill(skillsRoot: string, slug: string, ownerHandle: string | undefined, requestedVersion: string | undefined, force: boolean): Promise<{
   skill: SkillMeta;
   installed: boolean;
   alreadyInstalled: boolean;
 }> {
-  const skillsRoot = resolveHermesSkillsDir();
   const destination = ownerHandle
     ? resolve(skillsRoot, 'clawhub', ownerHandle, slug)
     : resolve(skillsRoot, 'clawhub', slug);
@@ -766,7 +767,7 @@ function parseSkillImportRequest(value: unknown, fileCount: number): { relativeP
   return { relativePaths };
 }
 
-async function importLocalSkill(uploadedFiles: Express.Multer.File[], relativePaths: string[]): Promise<{
+async function importLocalSkill(skillsRoot: string, uploadedFiles: Express.Multer.File[], relativePaths: string[]): Promise<{
   skill: SkillMeta;
   imported: boolean;
 }> {
@@ -779,7 +780,6 @@ async function importLocalSkill(uploadedFiles: Express.Multer.File[], relativePa
   const frontmatter = parseFrontmatter(skillContent.toString('utf8'));
   const displayName = frontmatter.name || prepared.rootName || 'Local skill';
   const summary = frontmatter.description || '';
-  const skillsRoot = resolveHermesSkillsDir();
   const baseSlug = slugifySkillDirectoryName(displayName, 'skill');
   const destination = await uniqueLocalSkillDestination(skillsRoot, baseSlug);
 
@@ -808,7 +808,7 @@ async function handleSkillImportRequest(req: Request, res: Response): Promise<vo
     }
 
     const { relativePaths } = parseSkillImportRequest(req.body, uploadedFiles.length);
-    const result = await importLocalSkill(uploadedFiles, relativePaths);
+    const result = await importLocalSkill(requestProfile(req).skillsDir, uploadedFiles, relativePaths);
 
     res.status(201).json({
       skill: result.skill,
@@ -822,9 +822,9 @@ async function handleSkillImportRequest(req: Request, res: Response): Promise<vo
   }
 }
 
-skillsRouter.get('/', async (_req, res) => {
+skillsRouter.get('/', async (req, res) => {
   try {
-    res.json({ skills: await listInstalledSkills() });
+    res.json({ skills: await listInstalledSkills(requestProfile(req).skillsDir) });
   } catch (error) {
     sendError(res, error, 'Failed to list skills');
   }
@@ -903,7 +903,7 @@ skillsRouter.post('/install', async (req, res) => {
     const ownerHandle = optionalSafeOwnerHandle(body.ownerHandle);
     const requestedVersion = stringValue(body.version);
     const force = body.force === true;
-    const result = await installClawHubSkill(slug, ownerHandle, requestedVersion, force);
+    const result = await installClawHubSkill(requestProfile(req).skillsDir, slug, ownerHandle, requestedVersion, force);
 
     res.status(result.installed ? 201 : 200).json({
       skill: result.skill,
@@ -917,7 +917,7 @@ skillsRouter.post('/install', async (req, res) => {
 
 skillsRouter.delete('/:id', async (req, res) => {
   try {
-    const skill = await deleteInstalledSkill(req.params.id);
+    const skill = await deleteInstalledSkill(req.params.id, requestProfile(req).skillsDir);
     res.json({ ok: true, skill });
   } catch (error) {
     sendError(res, error, 'Failed to delete skill');
@@ -926,12 +926,12 @@ skillsRouter.delete('/:id', async (req, res) => {
 
 skillsRouter.get('/:id/content', async (req, res) => {
   try {
-    const skillFile = resolveInstalledSkillFile(req.params.id);
+    const root = requestProfile(req).skillsDir;
+    const skillFile = resolveInstalledSkillFile(req.params.id, root);
     if (!await pathExists(skillFile)) {
       throw new RouteError(404, `Skill '${req.params.id}' is not installed`, 'SKILL_NOT_FOUND');
     }
 
-    const root = resolveHermesSkillsDir();
     const [skill, content] = await Promise.all([
       readInstalledSkill(skillFile, root),
       readFile(skillFile, 'utf8'),

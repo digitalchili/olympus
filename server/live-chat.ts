@@ -18,6 +18,7 @@ function cloneRun(run: LiveChatRun): LiveChatRun {
     messages: run.messages.map((message) => ({
       ...message,
       tools: message.tools ? message.tools.map((tool) => ({ ...tool })) : undefined,
+      attachments: message.attachments ? message.attachments.map((attachment) => ({ ...attachment })) : undefined,
     })),
     goal: run.goal ? { ...run.goal } : null,
     context: run.context ? { ...run.context } : null,
@@ -239,6 +240,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     if (event.context !== undefined) {
       run.context = event.context;
     }
+    if (event.attachments) assistant.attachments = event.attachments.map((attachment) => ({ ...attachment }));
   } else if (event.type === 'error') {
     const error = event.error || 'Unknown error';
     run.status = 'error';

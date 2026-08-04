@@ -1,50 +1,31 @@
 import { Bot, Loader2, Pencil, RefreshCw, X } from 'lucide-react';
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   REASONING_EFFORTS,
+  type AgentModelGroup,
   type HermesProfileSettings,
   type HermesProfileSettingsUpdate,
   type ReasoningEffort,
 } from '@shared/types';
 import {
-  fetchHermesProfiles,
+  fetchAgentModels,
   fetchProfileSettings,
   updateProfileSettings,
   type HermesProfile,
 } from '../lib/api';
 import { toErrorMessage } from '../lib/format';
-
-type EditableProfileSettings = HermesProfileSettings & {
-  show_reasoning?: boolean;
-  showReasoning?: boolean;
-};
+import { useProfile } from '../contexts/ProfileContext';
+import { ModelPicker, parseQualifiedModelValue } from './InputToolbar';
 
 export function ProfilesSettings() {
-  const [profiles, setProfiles] = useState<HermesProfile[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { profiles, isLoading, error, refreshProfiles } = useProfile();
   const [editingProfile, setEditingProfile] = useState<HermesProfile | null>(null);
-  const [settings, setSettings] = useState<EditableProfileSettings | null>(null);
+  const [settings, setSettings] = useState<HermesProfileSettings | null>(null);
+  const [initialSettings, setInitialSettings] = useState<HermesProfileSettings | null>(null);
+  const [modelGroups, setModelGroups] = useState<AgentModelGroup[]>([]);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [drawerError, setDrawerError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await fetchHermesProfiles();
-      setProfiles(result.profiles);
-    } catch (cause) {
-      setError(toErrorMessage(cause, 'Could not load local Hermes profiles.'));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   useEffect(() => {
     if (!editingProfile) return;
@@ -58,16 +39,26 @@ export function ProfilesSettings() {
   const openEditor = async (profile: HermesProfile) => {
     setEditingProfile(profile);
     setSettings(null);
+    setInitialSettings(null);
+    setModelGroups([]);
     setDrawerError(null);
     setIsLoadingSettings(true);
-    try {
-      const result = await fetchProfileSettings(profile.id);
-      setSettings(result.settings as EditableProfileSettings);
-    } catch (cause) {
-      setDrawerError(toErrorMessage(cause, 'Could not load profile settings.'));
-    } finally {
-      setIsLoadingSettings(false);
+    const [settingsResult, modelsResult] = await Promise.allSettled([
+      fetchProfileSettings(profile.id),
+      fetchAgentModels(profile.id),
+    ]);
+    if (settingsResult.status === 'fulfilled') {
+      setSettings(settingsResult.value.settings);
+      setInitialSettings(settingsResult.value.settings);
+    } else {
+      setDrawerError(toErrorMessage(settingsResult.reason, 'Could not load profile settings.'));
     }
+    if (modelsResult.status === 'fulfilled') {
+      setModelGroups(modelsResult.value.groups);
+    } else if (settingsResult.status === 'fulfilled') {
+      setDrawerError(toErrorMessage(modelsResult.reason, 'Could not load models for this profile.'));
+    }
+    setIsLoadingSettings(false);
   };
 
   const saveSettings = async (event: FormEvent<HTMLFormElement>) => {
@@ -76,22 +67,31 @@ export function ProfilesSettings() {
 
     setIsSaving(true);
     setDrawerError(null);
-    const updates: HermesProfileSettingsUpdate & {
-      show_reasoning?: boolean;
-      showReasoning?: boolean;
-    } = {
-      description: settings.description,
+    const updates: HermesProfileSettingsUpdate = {};
+    const normalized = {
+      ...settings,
+      displayName: settings.displayName.trim(),
+      description: settings.description.trim(),
       provider: settings.provider?.trim() || null,
       model: settings.model?.trim() || null,
-      reasoningEffort: settings.reasoningEffort,
-      soul: settings.soul,
     };
-    if ('show_reasoning' in settings) updates.show_reasoning = Boolean(settings.show_reasoning);
-    else if ('showReasoning' in settings) updates.showReasoning = Boolean(settings.showReasoning);
+    if (!initialSettings || normalized.displayName !== initialSettings.displayName) updates.displayName = normalized.displayName;
+    if (!initialSettings || normalized.description !== initialSettings.description) updates.description = normalized.description;
+    if (!initialSettings || normalized.provider !== initialSettings.provider) updates.provider = normalized.provider;
+    if (!initialSettings || normalized.model !== initialSettings.model) updates.model = normalized.model;
+    if (!initialSettings || normalized.reasoningEffort !== initialSettings.reasoningEffort) updates.reasoningEffort = normalized.reasoningEffort;
+    if (!initialSettings || normalized.soul !== initialSettings.soul) updates.soul = normalized.soul;
+
+    if (Object.keys(updates).length === 0) {
+      setIsSaving(false);
+      setEditingProfile(null);
+      setSettings(null);
+      return;
+    }
 
     try {
       await updateProfileSettings(editingProfile.id, updates);
-      await load();
+      await refreshProfiles();
       setEditingProfile(null);
       setSettings(null);
     } catch (cause) {
@@ -100,11 +100,6 @@ export function ProfilesSettings() {
       setIsSaving(false);
     }
   };
-
-  const hasShowReasoning = settings
-    ? 'show_reasoning' in settings || 'showReasoning' in settings
-    : false;
-  const showReasoning = Boolean(settings?.show_reasoning ?? settings?.showReasoning);
 
   return (
     <>
@@ -118,7 +113,7 @@ export function ProfilesSettings() {
           </div>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => void refreshProfiles()}
             disabled={isLoading}
             title="Refresh profiles"
             aria-label="Refresh profiles"
@@ -205,6 +200,21 @@ export function ProfilesSettings() {
               <form onSubmit={saveSettings} className="flex min-h-0 flex-1 flex-col">
                 <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
                   <label className="block">
+                    <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Display name</span>
+                    <input
+                      type="text"
+                      value={settings.displayName}
+                      onChange={(event) => setSettings({ ...settings, displayName: event.target.value })}
+                      maxLength={80}
+                      disabled={isSaving}
+                      className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-800"
+                    />
+                    <span className="mt-1.5 block text-xs text-zinc-500 dark:text-zinc-400">
+                      Profile ID: <code>{settings.id}</code> · The ID stays unchanged when you rename this profile.
+                    </span>
+                  </label>
+
+                  <label className="block">
                     <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Description</span>
                     <textarea
                       value={settings.description}
@@ -216,31 +226,28 @@ export function ProfilesSettings() {
                     />
                   </label>
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Provider</span>
-                      <input
-                        type="text"
-                        value={settings.provider ?? ''}
-                        onChange={(event) => setSettings({ ...settings, provider: event.target.value })}
-                        maxLength={200}
-                        disabled={isSaving}
-                        placeholder="Use profile default"
-                        className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-800"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Model</span>
-                      <input
-                        type="text"
+                  <div>
+                    <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Provider and model</span>
+                    <div className="mt-1.5">
+                      <ModelPicker
                         value={settings.model ?? ''}
-                        onChange={(event) => setSettings({ ...settings, model: event.target.value })}
-                        maxLength={200}
-                        disabled={isSaving}
-                        placeholder="Use profile default"
-                        className="mt-1.5 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-800"
+                        provider={settings.provider}
+                        modelGroups={modelGroups}
+                        disabled={isSaving || modelGroups.length === 0}
+                        title={settings.model ? `Model: ${settings.model}` : 'Select model'}
+                        onChange={(nextModel, selection) => {
+                          const parsed = parseQualifiedModelValue(nextModel);
+                          setSettings({
+                            ...settings,
+                            model: parsed?.model ?? nextModel,
+                            provider: selection?.provider ?? parsed?.provider ?? null,
+                          });
+                        }}
                       />
-                    </label>
+                    </div>
+                    <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                      Uses this profile's configured provider and model catalog.
+                    </p>
                   </div>
 
                   <label className="block">
@@ -261,24 +268,6 @@ export function ProfilesSettings() {
                     </select>
                   </label>
 
-                  {hasShowReasoning && (
-                    <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
-                      <input
-                        type="checkbox"
-                        checked={showReasoning}
-                        onChange={(event) => {
-                          if ('show_reasoning' in settings) {
-                            setSettings({ ...settings, show_reasoning: event.target.checked });
-                          } else {
-                            setSettings({ ...settings, showReasoning: event.target.checked });
-                          }
-                        }}
-                        disabled={isSaving}
-                        className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-950"
-                      />
-                      <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Show reasoning</span>
-                    </label>
-                  )}
 
                   <label className="block">
                     <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">SOUL.md</span>

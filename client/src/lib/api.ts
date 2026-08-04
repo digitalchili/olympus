@@ -178,8 +178,9 @@ export function fetchAgentDefaults() {
   return request<AgentDefaults>('/agent/defaults');
 }
 
-export function fetchAgentModels() {
-  return request<AgentModelsResponse>('/agent/models');
+export function fetchAgentModels(profileId?: string) {
+  const path = profileId ? apiPathWithProfile('/agent/models', profileId) : '/agent/models';
+  return request<AgentModelsResponse>(path);
 }
 
 export function updateAgentDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: ReasoningEffort | null }) {
@@ -229,22 +230,26 @@ export function createScheduledTask(input: ScheduledTaskInput) {
   });
 }
 
-export function fetchSkills() {
-  return request<{ skills: SkillMeta[] }>('/skills');
+export function fetchSkills(profileId?: string) {
+  const path = profileId ? apiPathWithProfile('/skills', profileId) : '/skills';
+  return request<{ skills: SkillMeta[] }>(path);
 }
 
-export function fetchSkillContent(id: string) {
-  return request<{ skill: SkillMeta; content: string }>(`/skills/${encodeURIComponent(id)}/content`);
+export function fetchSkillContent(id: string, profileId?: string) {
+  const path = `/skills/${encodeURIComponent(id)}/content`;
+  return request<{ skill: SkillMeta; content: string }>(profileId ? apiPathWithProfile(path, profileId) : path);
 }
 
-export function deleteSkill(id: string) {
-  return request<{ ok: boolean; skill: SkillMeta }>(`/skills/${encodeURIComponent(id)}`, {
+export function deleteSkill(id: string, profileId?: string) {
+  const path = `/skills/${encodeURIComponent(id)}`;
+  return request<{ ok: boolean; skill: SkillMeta }>(profileId ? apiPathWithProfile(path, profileId) : path, {
     method: 'DELETE',
   });
 }
 
-export function installSkill(input: { provider?: 'clawhub'; slug: string; ownerHandle?: string | null; version?: string; force?: boolean }) {
-  return request<SkillInstallResult>('/skills/install', {
+export function installSkill(input: { provider?: 'clawhub'; slug: string; ownerHandle?: string | null; version?: string; force?: boolean }, profileId?: string) {
+  const path = profileId ? apiPathWithProfile('/skills/install', profileId) : '/skills/install';
+  return request<SkillInstallResult>(path, {
     method: 'POST',
     body: JSON.stringify(input),
   });
@@ -253,6 +258,7 @@ export function installSkill(input: { provider?: 'clawhub'; slug: string; ownerH
 export function importSkillFiles(
   files: File[],
   relativePathFor: (file: File) => string = fileRelativePath,
+  profileId?: string,
   signal?: AbortSignal,
 ) {
   const formData = new FormData();
@@ -262,7 +268,8 @@ export function importSkillFiles(
     formData.append('relativePaths', relativePathFor(file));
   }
 
-  return request<SkillInstallResult>('/skills/import', {
+  const path = profileId ? apiPathWithProfile('/skills/import', profileId) : '/skills/import';
+  return request<SkillInstallResult>(path, {
     method: 'POST',
     body: formData,
     signal,

@@ -25,10 +25,42 @@ try {
   await writeFile(join(hermesHome, 'profiles', 'not-a-directory'), 'description: ignored\n');
 
   const profiles = discoverLocalProfiles(hermesHome);
+  const unavailableCapabilities = {
+    settings: false,
+    soul: false,
+    workspace: false,
+    skills: false,
+    scheduledTasks: false,
+  };
+  const degradedHealth = {
+    status: 'degraded' as const,
+    issues: ['Configuration could not be read'],
+  };
   assert.deepEqual(profiles, [
-    { id: 'default', label: 'Default', description: 'Default local Hermes profile', isDefault: true },
-    { id: 'researcher', label: 'researcher', description: 'Researches local sources', isDefault: false },
-    { id: 'writer', label: 'writer', description: 'Writes product copy', isDefault: false },
+    {
+      id: 'default',
+      label: 'Default',
+      description: '',
+      isDefault: true,
+      capabilities: unavailableCapabilities,
+      health: degradedHealth,
+    },
+    {
+      id: 'researcher',
+      label: 'researcher',
+      description: 'Researches local sources',
+      isDefault: false,
+      capabilities: unavailableCapabilities,
+      health: degradedHealth,
+    },
+    {
+      id: 'writer',
+      label: 'writer',
+      description: 'Writes product copy',
+      isDefault: false,
+      capabilities: unavailableCapabilities,
+      health: degradedHealth,
+    },
   ]);
   assert.equal(JSON.stringify(profiles).includes(hermesHome), false, 'profile paths must stay server-side');
   assert.equal('baseUrl' in profiles[1], false);

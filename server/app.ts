@@ -11,6 +11,8 @@ import { createInstallationRouter } from './routes/installation.js';
 import { createUpdatesRouter } from './routes/updates.js';
 import { profilesRouter } from './routes/profiles.js';
 import { projectFoldersRouter } from './project-folders.js';
+import { createTaskArtifactsRouter } from './task-artifacts.js';
+import { getTask } from './db/queries.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { ProfileAgentAdapter } from './adapters/routing.js';
 import { initSSE, addClient, sendEvent, closeClientsForRestart } from './events.js';
@@ -64,6 +66,7 @@ app.use('/api/search', searchRouter);
 app.use(express.json());
 
 app.use('/api/tasks', tasksRouter);
+app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));
 app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));

@@ -25,6 +25,7 @@ import {
 import { taskRunSettings, parseRunSettingsBody } from '../agent-settings.js';
 import { TASK_AGENT_SYSTEM_PROMPT } from '../prompts/task-agent.js';
 import { isRecord, toErrorMessage } from '../errors.js';
+import { publishMessageAttachments, publishTaskAttachments } from '../task-artifacts.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, type ChatRunMode, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
 
@@ -70,7 +71,7 @@ chatRouter.get('/:id/messages', async (req, res) => {
   if (hasNoSession(task)) return res.json({ messages: [], context });
 
   try {
-    const messages = await adapter.getMessages(task.id, task.id);
+    const messages = await publishMessageAttachments(task, await adapter.getMessages(task.id, task.id));
     res.json({ messages, context });
   } catch (error) {
     sendAdapterError(res, error, 'Hermes session history unavailable');
@@ -165,7 +166,14 @@ async function streamChatTurn(
       task: { id: runTask.id, title: runTask.title },
     });
 
-    for await (const event of stream) {
+    for await (const rawEvent of stream) {
+      let event = rawEvent;
+      if (rawEvent.type === 'done') {
+        const run = getRun(runTask.id);
+        const assistant = [...(run?.messages ?? [])].reverse().find((message) => message.role === 'assistant');
+        const attachments = assistant ? await publishTaskAttachments(runTask, assistant.content) : [];
+        if (attachments.length > 0) event = { ...rawEvent, attachments };
+      }
       if (options.captureResponseText && event.type === 'text_delta' && event.content) {
         responseText += event.content;
       }

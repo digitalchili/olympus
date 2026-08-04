@@ -39,15 +39,25 @@ export function formatBytes(value: number | null): string {
  * The UI renders those paths as attachment cards instead of exposing them.
  */
 export function splitAttachmentMessage(content: string): { text: string; filePaths: string[] } {
+  const filePaths: string[] = [];
   const match = /\n\n\[Attached files:\n([\s\S]*?)\]$/.exec(content);
-  if (!match) return { text: content, filePaths: [] };
+  let visibleContent = content;
+  if (match) {
+    filePaths.push(...match[1]
+      .split('\n')
+      .map((line) => line.startsWith('- ') ? line.slice(2).trim() : '')
+      .filter(Boolean));
+    visibleContent = content.slice(0, match.index);
+  }
 
-  const filePaths = match[1]
-    .split('\n')
-    .map((line) => line.startsWith('- ') ? line.slice(2).trim() : '')
-    .filter(Boolean);
-  const text = content.slice(0, match.index).trim();
-  return { text: text === 'Please review these files.' ? '' : text, filePaths };
+  const visibleLines = visibleContent.split(/\r?\n/).filter((line) => {
+    const media = /^MEDIA:(.+)$/.exec(line.trim());
+    if (!media) return true;
+    filePaths.push(media[1].trim());
+    return false;
+  });
+  const text = visibleLines.join('\n').trim();
+  return { text: text === 'Please review these files.' ? '' : text, filePaths: [...new Set(filePaths)] };
 }
 
 /** Appends uploaded file paths to a chat message so the agent can read them from disk. */

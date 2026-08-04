@@ -34,6 +34,7 @@ export interface StreamEvent {
   context?: ContextUsage | null;
   interrupted?: boolean;
   pendingSteer?: string;
+  attachments?: TaskMessage['attachments'];
 }
 
 export interface AgentAdapter {

@@ -654,7 +654,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
               const isLiveThinking = isLastAssistant && isStreaming && !!thinkingContent;
               const toolsToShow = isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
               const showSpinner = isLastAssistant && isStreaming && !msg.content && !thinkingContent && !activeTools.some(t => t.status === 'running');
-              const { text: assistantText, filePaths: assistantFilePaths } = splitAttachmentMessage(msg.content);
+              const { text: assistantText } = splitAttachmentMessage(msg.content);
 
               return (
                 <Fragment key={msg.id}>
@@ -690,7 +690,7 @@ export function TaskChat({ taskId, initialMessage, initialSettings }: TaskChatPr
                             </span>
                           )
                         )}
-                        <MessageAttachmentCards paths={assistantFilePaths} />
+                        <MessageAttachmentCards taskId={taskId} attachments={msg.attachments ?? []} />
                       </div>
                       {shouldShowReplyCopyButton(assistantText, isLastAssistant && isStreaming) && (
                         <div className="mt-1 flex items-center">
