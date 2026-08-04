@@ -137,17 +137,30 @@ mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup_name="olympus-dispatch-before-$version-$stamp.db"
-container_backup="/tmp/$backup_name"
+container_backup="/opt/data/olympus-dispatch/data/.$backup_name"
 host_backup_tmp="$BACKUP_DIR/.$backup_name.tmp.$$"
 host_backup="$BACKUP_DIR/$backup_name"
-docker exec "$current_container" node -e '
-  const Database = require("better-sqlite3");
-  const path = process.env.DB_PATH || "/opt/data/olympus-dispatch/data/olympus-dispatch.db";
-  const db = new Database(path, { readonly: true });
-  db.backup(process.argv[1]).then(() => db.close()).catch((error) => {
-    console.error(error.message); process.exit(1);
-  });
-' "$container_backup"
+docker exec -i "$current_container" node - "$container_backup" <<'NODE'
+const Database = require("better-sqlite3");
+const destination = process.argv[2];
+const path = process.env.DB_PATH || "/opt/data/olympus-dispatch/data/olympus-dispatch.db";
+const db = new Database(path, { readonly: true });
+db.backup(destination).then(() => {
+  db.close();
+}).catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+NODE
+backup_ready=0
+for backup_attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if docker exec "$current_container" test -s "$container_backup"; then
+    backup_ready=1
+    break
+  fi
+  sleep 1
+done
+[ "$backup_ready" = 1 ] || { printf 'SQLite backup was not written in time.\n' >&2; exit 1; }
 docker cp "$current_container:$container_backup" "$host_backup_tmp"
 docker exec "$current_container" rm -f "$container_backup"
 [ -s "$host_backup_tmp" ] || { printf 'SQLite backup is empty.\n' >&2; exit 1; }

@@ -55,7 +55,9 @@ class UpdateServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 class UpdateHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
-        print(f"olympus-updater: {self.address_string()} - {format % args}", flush=True)
+        # Unix-domain clients have no host/port address; BaseHTTPRequestHandler's
+        # address_string() assumes an INET tuple and crashes before a response.
+        print(f"olympus-updater: {format % args}", flush=True)
 
     def send_json(self, status_code: int, body: dict[str, Any]) -> None:
         encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
