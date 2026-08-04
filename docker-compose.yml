@@ -1,6 +1,6 @@
 services:
   olympus-dispatch:
-    image: ${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+    image: ${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/digitalchili/olympus:0.3.0}
     build:
       context: .
       dockerfile: Dockerfile

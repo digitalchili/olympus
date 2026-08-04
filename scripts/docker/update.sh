@@ -5,7 +5,7 @@ set -eu
 active=$(active_slot)
 [ "$active" = blue ] && candidate=green || candidate=blue
 active_service=olympus-$active; candidate_service=olympus-$candidate
-requested_image=${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+requested_image=${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/digitalchili/olympus:0.3.0}
 
 if [ "$DRY_RUN" = 1 ]; then
   printf 'dry-run: pull and pin candidate; preflight with disposable Olympus state and read-only Hermes volume\n'

@@ -7,7 +7,7 @@ require_command docker
 require_command openssl
 require_command curl
 
-image=${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+image=${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/digitalchili/olympus:0.3.0}
 state_volume=${OLYMPUS_DISPATCH_STATE_VOLUME:-olympus-dispatch-state}
 [ ! -e "$ACTIVE_SLOT_FILE" ] && [ ! -e "$METADATA_FILE" ] || { printf 'Portable slot metadata already exists; use update or uninstall instead of reinstalling.\n' >&2; exit 1; }
 

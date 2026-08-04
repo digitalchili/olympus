@@ -31,7 +31,7 @@ COPY --chown=10000:10000 package.json ./
 LABEL org.opencontainers.image.title="Olympus Dispatch" \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$REVISION \
-      org.opencontainers.image.source="https://github.com/leakim69/olympus-dispatch"
+      org.opencontainers.image.source="https://github.com/digitalchili/olympus"
 
 # The upstream Hermes image starts its own gateway wrapper by default. Olympus
 # imports the installed AIAgent directly and must not start another gateway.

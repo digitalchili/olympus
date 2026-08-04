@@ -2,7 +2,7 @@
 
 ## Docker
 
-Run `./scripts/docker/update.sh --dry-run --image ghcr.io/leakim69/olympus-dispatch:NEW_VERSION`, then repeat without `--dry-run`. A verified backup after drain and before promotion is automatic and mandatory. The updater resolves the requested tag to an immutable digest and persists both slot pins in `.env` and `.olympus-slots.env`. Verify readiness, history, a new run, SSE, schedules, and files. `./scripts/docker/rollback.sh` drains identically, takes another verified backup, and starts the retained old slot/image pin.
+Run `./scripts/docker/update.sh --dry-run --image ghcr.io/digitalchili/olympus:NEW_VERSION`, then repeat without `--dry-run`. A verified backup after drain and before promotion is automatic and mandatory. The updater resolves the requested tag to an immutable digest and persists both slot pins in `.env` and `.olympus-slots.env`. Verify readiness, history, a new run, SSE, schedules, and files. `./scripts/docker/rollback.sh` drains identically, takes another verified backup, and starts the retained old slot/image pin.
 
 This is not zero downtime. Existing active runs and HTTP/SSE connections are preserved while draining. During the bounded promotion window new writes receive retryable `503`, `Retry-After: 5`, and `MAINTENANCE_DRAIN`; reads remain available.
 

@@ -16,7 +16,7 @@ This is intentionally separate from `scripts/docker/update.sh`, which is only fo
 
 The host needs Python 3, Docker Engine with Compose v2, and access to the private GHCR package. Use three distinct values:
 
-- `OLYMPUS_DISPATCH_GITHUB_TOKEN`: a fine-grained GitHub token or GitHub App installation token with **Metadata: read** and **Contents: read** on `leakim69/olympus-dispatch`. This is passed only to the application and lets the GitHub Releases API see the private repository.
+- `OLYMPUS_DISPATCH_GITHUB_TOKEN`: a fine-grained GitHub token or GitHub App installation token with **Metadata: read** and **Contents: read** on `digitalchili/olympus`. This is passed only to the application and lets the GitHub Releases API see the private repository.
 - A host Docker credential for `ghcr.io` with **Packages: read** (and private-repository access). Authenticate the same OS account that runs the systemd service; the supplied service runs as root:
 
   ```bash
@@ -79,7 +79,7 @@ Add only the following to the existing Olympus service. Keep all existing volume
 services:
   olympus-dispatch:
     environment:
-      OLYMPUS_DISPATCH_GITHUB_REPOSITORY: https://github.com/leakim69/olympus-dispatch.git
+      OLYMPUS_DISPATCH_GITHUB_REPOSITORY: https://github.com/digitalchili/olympus.git
       OLYMPUS_DISPATCH_GITHUB_TOKEN: ${OLYMPUS_DISPATCH_GITHUB_TOKEN}
       OLYMPUS_DISPATCH_UPDATE_SOCKET: /run/olympus-dispatch-updater/update.sock
       OLYMPUS_DISPATCH_UPDATE_TOKEN: ${OLYMPUS_DISPATCH_UPDATE_TOKEN}
@@ -139,8 +139,8 @@ git add package.json package-lock.json
 git commit -m 'release: 0.3.1'
 git tag v0.3.1
 git push origin main v0.3.1
-gh run watch --repo leakim69/olympus-dispatch
-gh release view v0.3.1 --repo leakim69/olympus-dispatch
+gh run watch --repo digitalchili/olympus
+gh release view v0.3.1 --repo digitalchili/olympus
 ```
 
-Choose the actual next version; `v0.3.1` is an example. The release workflow rejects a tag that does not match `package.json`, publishes `ghcr.io/leakim69/olympus-dispatch:VERSION`, and then creates the GitHub Release used by the Settings check.
+Choose the actual next version; `v0.3.1` is an example. The release workflow rejects a tag that does not match `package.json`, publishes `ghcr.io/digitalchili/olympus:VERSION`, and then creates the GitHub Release used by the Settings check.

@@ -9,7 +9,7 @@ Prerequisites are Node.js 22.22–25 (Node 22 LTS recommended) and an installed 
 ### macOS
 
 ```bash
-gh repo clone leakim69/olympus-dispatch
+gh repo clone digitalchili/olympus
 cd olympus-dispatch
 ./scripts/macos/install.sh
 ```
@@ -19,7 +19,7 @@ The installer discovers Hermes at `~/.hermes/hermes-agent`, builds production as
 ### Docker or Dokploy host
 
 ```bash
-gh repo clone leakim69/olympus-dispatch
+gh repo clone digitalchili/olympus
 cd olympus-dispatch
 ./scripts/docker/install.sh
 ```

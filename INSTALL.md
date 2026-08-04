@@ -4,7 +4,7 @@ This private repository and its GHCR package require explicit recipient access; 
 
 ```bash
 gh auth login
-gh repo clone leakim69/olympus-dispatch
+gh repo clone digitalchili/olympus
 cd olympus-dispatch
 ```
 

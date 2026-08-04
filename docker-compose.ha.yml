@@ -43,11 +43,11 @@ services:
     restart: unless-stopped
   olympus-blue:
     <<: *olympus-slot
-    image: ${OLYMPUS_BLUE_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+    image: ${OLYMPUS_BLUE_IMAGE:-ghcr.io/digitalchili/olympus:0.3.0}
     profiles: [blue]
   olympus-green:
     <<: *olympus-slot
-    image: ${OLYMPUS_GREEN_IMAGE:-ghcr.io/leakim69/olympus-dispatch:0.3.0}
+    image: ${OLYMPUS_GREEN_IMAGE:-ghcr.io/digitalchili/olympus:0.3.0}
     profiles: [green]
 
 volumes:

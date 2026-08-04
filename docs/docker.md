@@ -5,8 +5,8 @@
 ```bash
 ./scripts/docker/status.sh
 ./scripts/docker/backup.sh
-./scripts/docker/update.sh --dry-run --image ghcr.io/leakim69/olympus-dispatch:NEW_VERSION
-./scripts/docker/update.sh --image ghcr.io/leakim69/olympus-dispatch:NEW_VERSION
+./scripts/docker/update.sh --dry-run --image ghcr.io/digitalchili/olympus:NEW_VERSION
+./scripts/docker/update.sh --image ghcr.io/digitalchili/olympus:NEW_VERSION
 ./scripts/docker/rollback.sh
 ```
 

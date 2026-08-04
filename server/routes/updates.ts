@@ -38,7 +38,7 @@ export function isVersionNewer(candidate: string, current: string): boolean {
 
 function getRepository(): string | null {
   return parseGitHubRepositoryUrl(process.env.OLYMPUS_DISPATCH_GITHUB_REPOSITORY)
-    ?? parseGitHubRepositoryUrl('https://github.com/leakim69/olympus-dispatch.git');
+    ?? parseGitHubRepositoryUrl('https://github.com/digitalchili/olympus.git');
 }
 
 type UpdateHook =

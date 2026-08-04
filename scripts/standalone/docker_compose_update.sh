@@ -26,8 +26,10 @@ COMPOSE_FILE=${OLYMPUS_UPDATER_COMPOSE_FILE:-docker-compose.yml}
 COMPOSE_PROJECT=${OLYMPUS_UPDATER_COMPOSE_PROJECT:?set OLYMPUS_UPDATER_COMPOSE_PROJECT}
 SERVICE=${OLYMPUS_UPDATER_SERVICE:-olympus-dispatch}
 ENV_FILE=${OLYMPUS_UPDATER_ENV_FILE:-$COMPOSE_DIR/.env}
-IMAGE_REPOSITORY=${OLYMPUS_UPDATER_IMAGE_REPOSITORY:-ghcr.io/leakim69/olympus-dispatch}
-IMAGE_SOURCE=${OLYMPUS_UPDATER_IMAGE_SOURCE:-https://github.com/leakim69/olympus-dispatch}
+IMAGE_REPOSITORY=${OLYMPUS_UPDATER_IMAGE_REPOSITORY:-ghcr.io/digitalchili/olympus}
+IMAGE_SOURCE=${OLYMPUS_UPDATER_IMAGE_SOURCE:-https://github.com/digitalchili/olympus}
+GHCR_USERNAME=${OLYMPUS_UPDATER_GHCR_USERNAME:-}
+GHCR_TOKEN=${OLYMPUS_UPDATER_GHCR_TOKEN:-}
 BACKUP_DIR=${OLYMPUS_UPDATER_BACKUP_DIR:-/var/lib/olympus-dispatch-updater/backups}
 LOCK_DIR=${OLYMPUS_UPDATER_LOCK_DIR:-/run/olympus-dispatch-updater/operation.lock}
 READY_ATTEMPTS=${OLYMPUS_UPDATER_READY_ATTEMPTS:-60}
@@ -48,6 +50,11 @@ fi
 
 cd "$COMPOSE_DIR"
 compose() { docker compose -p "$COMPOSE_PROJECT" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"; }
+
+if [ -n "$GHCR_TOKEN" ]; then
+  [ -n "$GHCR_USERNAME" ] || { printf 'OLYMPUS_UPDATER_GHCR_USERNAME is required when a GHCR token is set.\n' >&2; exit 2; }
+  printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null
+fi
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   printf 'Another standalone Olympus update is already running.\n' >&2
