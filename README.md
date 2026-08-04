@@ -1,6 +1,16 @@
 # Olympus Dispatch
 
-Hermes-first task management with a Kanban review UI. Olympus Dispatch keeps task metadata in SQLite and imports Hermes `AIAgent` directly through its Python worker, preserving chat streaming, goals, compaction, model defaults, steering, skills, files, and scheduled tasks.
+**A local-first, standalone workspace for Hermes Agent.** Olympus Dispatch gives one local Hermes installation a focused control plane for profiles, tasks, channels, skills, files, and safe self-updates. It keeps task metadata in local SQLite and imports Hermes `AIAgent` directly through its Python worker, preserving chat streaming, goals, compaction, model defaults, steering, skills, files, and scheduled tasks.
+
+Olympus never discovers, synchronizes with, or falls back to another host or Hermes installation.
+
+## Install with Hermes Agent
+
+Paste this into a Hermes conversation:
+
+> Install Olympus Dispatch from https://github.com/digitalchili/olympus on this machine only. Read INSTALL.md first. Run a dry-run, report what will be changed, and wait for approval before installing. Do not connect to or alter any other Hermes installation or host. Preserve Hermes state and credentials, then verify /api/ready.
+
+See the full [installation instructions](INSTALL.md).
 
 ## Quick start
 
@@ -9,8 +19,8 @@ Prerequisites are Node.js 22.22–25 (Node 22 LTS recommended) and an installed 
 ### macOS
 
 ```bash
-gh repo clone digitalchili/olympus
-cd olympus-dispatch
+git clone https://github.com/digitalchili/olympus.git
+cd olympus
 ./scripts/macos/install.sh
 ```
 
@@ -19,8 +29,8 @@ The installer discovers Hermes at `~/.hermes/hermes-agent`, builds production as
 ### Docker or Dokploy host
 
 ```bash
-gh repo clone digitalchili/olympus
-cd olympus-dispatch
+git clone https://github.com/digitalchili/olympus.git
+cd olympus
 ./scripts/docker/install.sh
 ```
 
