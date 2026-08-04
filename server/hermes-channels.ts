@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import type { HermesChannel, HermesChannelHealth } from '../shared/types.js';
+import { isHermesMessageChannelId, type HermesChannel, type HermesChannelHealth } from '../shared/types.js';
 
 const CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const HEALTHY_STATES = new Set(['connected', 'running', 'ok']);
 const DEGRADED_STATES = new Set(['disconnected', 'fatal', 'error', 'paused', 'retrying']);
+
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -66,12 +67,14 @@ export async function discoverHermesChannels(hermesHome: string): Promise<Hermes
   const gatewayPlatforms = platformMap(gateway);
   const configPlatforms = platformMap(config);
   const runtimePlatforms = platformMap(runtime);
+  // Only platform maps represent user-facing Hermes channels. Root config keys
+  // such as `api` describe Hermes infrastructure and must never become inboxes.
   const ids = new Set([
     ...Object.keys(legacyPlatforms),
     ...Object.keys(gatewayPlatforms),
     ...Object.keys(configPlatforms),
     ...Object.keys(runtimePlatforms),
-  ].filter((id) => CHANNEL_ID_PATTERN.test(id)));
+  ].filter((id) => CHANNEL_ID_PATTERN.test(id) && isHermesMessageChannelId(id)));
 
   return [...ids].sort().map((id) => {
     let configured: boolean | null = null;

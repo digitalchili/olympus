@@ -10,6 +10,7 @@ try {
   await writeFile(join(hermesHome, 'gateway.json'), JSON.stringify({
     platforms: {
       matrix: { enabled: true, token: 'legacy-secret-token' },
+      api_server: { enabled: true, token: 'never-expose-api-token' },
     },
   }));
   await writeFile(join(hermesHome, 'config.yaml'), `
@@ -36,6 +37,8 @@ discord:
       discord: { state: 'connected' },
       matrix: { state: 'fatal', error_message: 'contains internal details' },
       google_chat: { state: 'disconnected' },
+      api: { state: 'connected' },
+      webhook: { state: 'connected' },
     },
   }));
 
@@ -45,12 +48,12 @@ discord:
     { id: 'google_chat', displayLabel: 'Google Chat', enabled: true, health: 'degraded' },
     { id: 'matrix', displayLabel: 'Matrix', enabled: true, health: 'degraded' },
     { id: 'telegram', displayLabel: 'Telegram', enabled: true, health: 'healthy' },
-    { id: 'webhook', displayLabel: 'Webhook', enabled: true, health: 'unknown' },
   ]);
 
   const serialized = JSON.stringify(channels);
   for (const forbidden of [
     'legacy-secret-token',
+    'never-expose-api-token',
     'never-expose-this',
     'never-expose-webhook-secret',
     'never-expose-discord-token',
@@ -61,6 +64,8 @@ discord:
   }
   assert.equal(serialized.includes(hermesHome), false, 'profile paths must stay server-side');
   assert.equal(serialized.includes('not a safe id'), false, 'unsafe config keys are not channel IDs');
+  assert.equal(channels.some((channel) => ['api', 'api_server', 'webhook'].includes(channel.id)), false,
+    'Hermes infrastructure transports must never become channel inboxes');
 
   await writeFile(join(hermesHome, 'config.yaml'), 'platforms: [invalid');
   await writeFile(join(hermesHome, 'gateway_state.json'), '{invalid');

@@ -13,6 +13,8 @@ assert.equal(timeout, 5_000);
 const journalMode = db.pragma('journal_mode', { simple: true });
 assert.equal(String(journalMode).toLowerCase(), 'wal');
 assert.doesNotThrow(() => db.prepare('SELECT id FROM tasks LIMIT 1').all());
+assert.doesNotThrow(() => db.prepare('SELECT id FROM channel_threads LIMIT 1').all());
+assert.doesNotThrow(() => db.prepare('SELECT id FROM channel_messages LIMIT 1').all());
 db.close();
 
 console.log('Database startup tests passed');

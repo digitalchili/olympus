@@ -60,3 +60,34 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value      TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS channel_threads (
+  id                     TEXT PRIMARY KEY,
+  profile_id             TEXT NOT NULL,
+  channel_id             TEXT NOT NULL,
+  hermes_root_session_id TEXT NOT NULL,
+  hermes_tip_session_id  TEXT NOT NULL,
+  title                  TEXT NOT NULL,
+  preview                TEXT NOT NULL,
+  message_count          INTEGER NOT NULL,
+  created_at             INTEGER NOT NULL,
+  updated_at             INTEGER NOT NULL,
+  UNIQUE(profile_id, channel_id, hermes_root_session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_threads_profile_channel
+  ON channel_threads(profile_id, channel_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS channel_messages (
+  id                  TEXT PRIMARY KEY,
+  thread_id           TEXT NOT NULL REFERENCES channel_threads(id) ON DELETE CASCADE,
+  hermes_message_id   INTEGER NOT NULL,
+  direction           TEXT NOT NULL,
+  content             TEXT NOT NULL,
+  content_truncated   INTEGER NOT NULL DEFAULT 0,
+  created_at          INTEGER NOT NULL,
+  UNIQUE(thread_id, hermes_message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
+  ON channel_messages(thread_id, created_at, hermes_message_id);

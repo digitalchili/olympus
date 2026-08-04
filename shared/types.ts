@@ -64,6 +64,17 @@ export interface HermesProfileSettings {
 
 export type HermesChannelHealth = 'healthy' | 'degraded' | 'inactive' | 'unknown';
 
+export const HERMES_INFRASTRUCTURE_CHANNEL_IDS = [
+  'api',
+  'api-server',
+  'api_server',
+  'webhook',
+] as const;
+
+export function isHermesMessageChannelId(id: string): boolean {
+  return !(HERMES_INFRASTRUCTURE_CHANNEL_IDS as readonly string[]).includes(id);
+}
+
 /** Secret-free projection of one messaging platform owned by Hermes. */
 export interface HermesChannel {
   id: string;
@@ -72,11 +83,37 @@ export interface HermesChannel {
   health: HermesChannelHealth;
 }
 
-/** Reserved mapping shape for a future Hermes-owned gateway event integration. */
-export interface HermesChannelThreadRef {
+export type HermesChannelHistoryState = 'available' | 'awaiting_bridge';
+
+/** Secret-free, profile-scoped projection of one Hermes gateway conversation. */
+export interface HermesChannelThread {
+  id: string;
   channelId: string;
-  externalChatId: string;
-  externalThreadId?: string | null;
+  title: string;
+  preview: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface HermesChannelMessage {
+  id: string;
+  threadId: string;
+  direction: 'inbound' | 'outbound';
+  content: string;
+  contentTruncated: boolean;
+  createdAt: number;
+}
+
+export interface HermesChannelThreadsResult {
+  state: HermesChannelHistoryState;
+  threads: HermesChannelThread[];
+}
+
+export interface HermesChannelMessagesResult {
+  state: HermesChannelHistoryState;
+  messages: HermesChannelMessage[];
+  truncated: boolean;
 }
 
 export interface HermesProfileCreateInput extends Omit<HermesProfileSettings, 'id'> {

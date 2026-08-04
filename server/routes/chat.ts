@@ -37,6 +37,7 @@ import { isRecord, toErrorMessage } from '../errors.js';
 import { publishMessageAttachments, publishTaskAttachments } from '../task-artifacts.js';
 import {
   chairCollaborationContext,
+  collaborationTaskContext,
   collectContributors,
   contributorSystemMessage,
   isPrivateCollaborationEvent,
@@ -297,6 +298,7 @@ async function collectCollaborationPhase(
   collaboration: CollaborationRun,
   phase: CollaborationContributionPhase,
   active: ActiveCollaboration,
+  taskContext: string,
 ): Promise<void> {
   const proposals = visiblePhaseResults(collaboration, 'proposal');
   const contributions = collaboration.contributions.filter((item) => item.phase === phase && item.status === 'running');
@@ -305,9 +307,9 @@ async function collectCollaborationPhase(
       id: contribution.id,
       profileId: contribution.profile_id,
       sessionId: contribution.session_id,
-      message: phase === 'proposal'
-        ? collaboration.question
-        : reviewContributorMessage(collaboration.question, contribution.profile_id, proposals),
+      message: taskContext + (phase === 'proposal'
+        ? `Current collaboration question:\n${collaboration.question}`
+        : reviewContributorMessage(collaboration.question, contribution.profile_id, proposals)),
       options: { systemMessage: contributorSystemMessage(runTask.workdir, phase) },
     })),
     async (invocation) => adapter.chatForProfile(
@@ -337,8 +339,15 @@ async function consumeCollaborationRun(
   try {
     let collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run was not persisted');
+    let taskContext = '';
+    try {
+      taskContext = collaborationTaskContext(await adapter.getMessages(runTask.id, runTask.id));
+    } catch {
+      // A brand-new task may not have a Hermes session yet. Collaboration can
+      // still proceed from the current question without inventing other context.
+    }
 
-    await collectCollaborationPhase(runTask, collaboration, 'proposal', active);
+    await collectCollaborationPhase(runTask, collaboration, 'proposal', active, taskContext);
     if (active.cancelled) return;
     collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run disappeared');
@@ -352,7 +361,7 @@ async function consumeCollaborationRun(
       collaboration = startCollaborationPhase(collaborationRunId, 'review');
       if (!collaboration) throw new Error('Could not start collaboration review phase');
       active.phase = 'review';
-      await collectCollaborationPhase(runTask, collaboration, 'review', active);
+      await collectCollaborationPhase(runTask, collaboration, 'review', active, taskContext);
       if (active.cancelled) return;
     }
 

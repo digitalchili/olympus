@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { TaskMessage } from '../shared/types.js';
 
 const root = await mkdtemp(join(tmpdir(), 'olympus-collaboration-'));
 const hermesHome = join(root, 'hermes');
@@ -17,6 +18,7 @@ try {
   const { LocalProfileError, LocalProfileRegistry } = await import('../server/local-profiles.js');
   const {
     chairCollaborationContext,
+    collaborationTaskContext,
     collectContributors,
     contributorSystemMessage,
     isPrivateCollaborationEvent,
@@ -79,6 +81,38 @@ try {
   assert.equal(isPrivateCollaborationEvent('thinking_delta'), true);
   assert.equal(isPrivateCollaborationEvent('tool_progress'), true);
   assert.equal(isPrivateCollaborationEvent('text_delta'), false);
+
+  const taskContext = collaborationTaskContext([
+    {
+      id: 'visible-user', task_id: 'task', role: 'user', content: 'Earlier visible question', created_at: 1,
+      thinking: 'PROFILE PRIVATE REASONING',
+      attachments: [{ path: '/private/secret.txt', name: 'secret.txt', size: 1 }],
+      profileSessionId: 'PROFILE PRIVATE SESSION',
+      memory: 'PROFILE PRIVATE MEMORY',
+      apiKey: 'PROFILE PRIVATE SECRET',
+    },
+    { id: 'hidden-system', task_id: 'task', role: 'system', content: 'INTERNAL SYSTEM TURN', created_at: 2 },
+    { id: 'visible-assistant', task_id: 'task', role: 'assistant', content: 'Earlier visible answer', created_at: 3 },
+  ] as TaskMessage[]);
+  assert.match(taskContext, /Earlier visible question/);
+  assert.match(taskContext, /Earlier visible answer/);
+  for (const forbidden of [
+    'PROFILE PRIVATE REASONING',
+    '/private/secret.txt',
+    'PROFILE PRIVATE SESSION',
+    'PROFILE PRIVATE MEMORY',
+    'PROFILE PRIVATE SECRET',
+    'INTERNAL SYSTEM TURN',
+  ]) assert.equal(taskContext.includes(forbidden), false, `invited-profile context leaked ${forbidden}`);
+  const boundedContext = collaborationTaskContext(Array.from({ length: 30 }, (_, index) => ({
+    id: `m-${index}`,
+    task_id: 'task',
+    role: index % 2 === 0 ? 'user' : 'assistant',
+    content: `${index}: ${'x'.repeat(1_000)}`,
+    created_at: index,
+  })) as TaskMessage[]);
+  assert.equal(boundedContext.includes('"content":"0: '), false, 'old task turns must fall outside the bounded context');
+  assert.ok(boundedContext.length < 12_500, 'invited-profile task context must stay bounded');
 
   const { insertTask } = await import('../server/db/queries.js');
   const {
