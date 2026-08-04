@@ -8,6 +8,7 @@ import { useStore } from '../lib/store';
 import type { AppVersion } from '@shared/types';
 import { toErrorMessage } from '../lib/format';
 import { ProfilesSettings } from './ProfilesSettings';
+import { ChannelSettings } from './ChannelSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
 import {
   REASONING_EFFORTS,
@@ -208,6 +209,8 @@ export function SettingsPage() {
             </select>
           </div>
         </section>
+
+        <ChannelSettings />
 
         <ProfilesSettings />
 

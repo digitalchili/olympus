@@ -28,6 +28,7 @@ import type {
   ClawHubSkillSummary,
   ClawHubScanResult,
   CollaborationRun,
+  HermesChannel,
   HermesProfile,
   HermesProfileCreateInput,
   HermesProfileSettings,
@@ -168,6 +169,10 @@ export function updateInstallationName(name: string) {
 
 export function fetchHermesProfiles(includeInactive = false) {
   return request<{ profiles: HermesProfile[] }>(includeInactive ? '/profiles?includeInactive=true' : '/profiles');
+}
+
+export function fetchHermesChannels() {
+  return request<{ channels: HermesChannel[] }>('/channels');
 }
 
 export function createHermesProfile(input: HermesProfileCreateInput) {

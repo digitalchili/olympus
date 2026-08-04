@@ -62,6 +62,23 @@ export interface HermesProfileSettings {
   soul: string;
 }
 
+export type HermesChannelHealth = 'healthy' | 'degraded' | 'inactive' | 'unknown';
+
+/** Secret-free projection of one messaging platform owned by Hermes. */
+export interface HermesChannel {
+  id: string;
+  displayLabel: string;
+  enabled: boolean;
+  health: HermesChannelHealth;
+}
+
+/** Reserved mapping shape for a future Hermes-owned gateway event integration. */
+export interface HermesChannelThreadRef {
+  channelId: string;
+  externalChatId: string;
+  externalThreadId?: string | null;
+}
+
 export interface HermesProfileCreateInput extends Omit<HermesProfileSettings, 'id'> {
   id: string;
   active?: boolean;

@@ -11,11 +11,12 @@ import {
 import { AlertTriangle, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ProfileLink } from '../contexts/ProfileContext';
-import type { ScheduledTask, Task, TaskStatus } from '@shared/types';
+import type { HermesChannel, ScheduledTask, Task, TaskStatus } from '@shared/types';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { useStore, optimisticMoveTask } from '../lib/store';
-import { deleteTask, fetchScheduledTasks, moveTask } from '../lib/api';
+import { deleteTask, fetchHermesChannels, fetchScheduledTasks, moveTask } from '../lib/api';
+import { pinnedChannelInboxes } from '../lib/channelInbox';
 import { buildScheduledTaskFixDraft } from '../lib/scheduledTaskFix';
 import { relativeTime } from '../lib/schedule';
 import { Column } from './Column';
@@ -97,6 +98,7 @@ export function Board() {
   const upsertTask = useStore((s) => s.upsertTask);
   const removeTask = useStore((s) => s.removeTask);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [channels, setChannels] = useState<HermesChannel[]>([]);
   const grouped = useMemo(() => {
     const buckets: Record<TaskStatus, Task[]> = { in_progress: [], in_review: [], done: [] };
     for (const t of tasks) {
@@ -113,16 +115,12 @@ export function Board() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadScheduledTasks() {
-      try {
-        const result = await fetchScheduledTasks(true);
-        if (!cancelled) setScheduledTasks(result.scheduledTasks);
-      } catch (error) {
-        console.error(error);
-      }
-    }
-
-    void loadScheduledTasks();
+    void fetchScheduledTasks(true)
+      .then((result) => { if (!cancelled) setScheduledTasks(result.scheduledTasks); })
+      .catch(console.error);
+    void fetchHermesChannels()
+      .then((result) => { if (!cancelled) setChannels(result.channels); })
+      .catch(console.error);
     return () => {
       cancelled = true;
     };
@@ -214,6 +212,7 @@ export function Board() {
               status={status}
               tasks={grouped[status]}
               taskRuns={taskRuns}
+              channels={status === 'in_progress' ? pinnedChannelInboxes(channels) : []}
               isLast={index === TASK_STATUSES.length - 1}
               onRequestDeleteAll={handleRequestDeleteAll}
             />
