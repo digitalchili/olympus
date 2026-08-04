@@ -6,6 +6,7 @@ for the chat UI, and session metadata projection for cost/token displays.
 
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import time
@@ -307,6 +308,259 @@ def project_session_messages(session_id: Any, task_id: Any = None) -> dict[str, 
             projected.append(message)
 
     return {"messages": projected}
+
+
+MESSAGE_PAGE_DEFAULT_LIMIT = 40
+MESSAGE_PAGE_MAX_LIMIT = 100
+MESSAGE_PAGE_MAX_RAW_SCAN = 800
+MESSAGE_PAGE_PREFIX_SCAN = 200
+
+
+def _encode_message_cursor(lineage_index: int, before_offset: int) -> str:
+    payload = json.dumps([lineage_index, before_offset], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_message_cursor(value: Any) -> tuple[int, int] | None:
+    cursor = string_or_none(value)
+    if not cursor:
+        return None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        if (
+            not isinstance(decoded, list)
+            or len(decoded) != 2
+            or isinstance(decoded[0], bool)
+            or isinstance(decoded[1], bool)
+        ):
+            raise ValueError
+        if not isinstance(decoded[0], int) or not isinstance(decoded[1], int):
+            raise ValueError
+        lineage_index = decoded[0]
+        before_offset = decoded[1]
+        if lineage_index < 0 or before_offset < 0:
+            raise ValueError
+        return lineage_index, before_offset
+    except Exception as exc:
+        raise WorkerError("Invalid message cursor.", code="bad_request") from exc
+
+
+def _message_page_limit(value: Any) -> int:
+    if value is None:
+        return MESSAGE_PAGE_DEFAULT_LIMIT
+    if isinstance(value, bool):
+        raise WorkerError("Message page limit must be an integer.", code="bad_request")
+    if isinstance(value, int):
+        limit = value
+    elif isinstance(value, str) and value.isdigit():
+        limit = int(value)
+    else:
+        raise WorkerError("Message page limit must be an integer.", code="bad_request")
+    if limit < 1 or limit > MESSAGE_PAGE_MAX_LIMIT:
+        raise WorkerError(
+            f"Message page limit must be between 1 and {MESSAGE_PAGE_MAX_LIMIT}.",
+            code="bad_request",
+        )
+    return limit
+
+
+def _active_message_counts(session_db: Any, session_ids: list[str]) -> dict[str, int]:
+    if not session_ids:
+        return {}
+    db_path = getattr(session_db, "db_path", None)
+    if not db_path:
+        raise WorkerError("Hermes session database path is unavailable.", code="session_db_unavailable")
+    placeholders = ",".join("?" for _ in session_ids)
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            rows = conn.execute(
+                f"SELECT session_id, COUNT(*) FROM messages "
+                f"WHERE active = 1 AND session_id IN ({placeholders}) GROUP BY session_id",
+                session_ids,
+            ).fetchall()
+    except Exception as exc:
+        raise WorkerError(f"Could not count Hermes session messages: {exc}", code="session_load_error") from exc
+    counts = {session_id: 0 for session_id in session_ids}
+    counts.update({str(row[0]): int(row[1]) for row in rows})
+    return counts
+
+
+def _child_projection_boundary(session_db: Any, session_id: str, count: int) -> tuple[int | None, int | None]:
+    """Find the compaction marker and first visible user without loading the thread."""
+    prefix_limit = min(count, MESSAGE_PAGE_PREFIX_SCAN)
+    if prefix_limit <= 0:
+        return None, None
+    try:
+        rows = session_db.get_messages(session_id, limit=prefix_limit, offset=0)
+    except Exception as exc:
+        raise WorkerError(f"Could not load Hermes session messages: {exc}", code="session_load_error") from exc
+
+    marker_id: int | None = None
+    first_user_id: int | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            row = dict(row)
+        if row.get("role") != "user":
+            continue
+        content = _strip_minions_user_scaffold(_content_to_text(row.get("content")))
+        row_id = int(row.get("id") or 0)
+        if marker_id is None:
+            if _is_compaction_reference(content):
+                marker_id = row_id
+            continue
+        if not _is_compaction_reference(content):
+            first_user_id = row_id
+            break
+    return marker_id, first_user_id
+
+
+def _project_message_page_row(
+    row: Any,
+    lineage_session_id: str,
+    projected_task_id: str,
+    child_boundary: tuple[int | None, int | None] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        row = dict(row)
+    role = row.get("role")
+    if role not in {"user", "assistant"}:
+        return None
+
+    row_id = int(row.get("id") or 0)
+    content = _content_to_text(row.get("content"))
+    if role == "user":
+        content = _strip_minions_user_scaffold(content)
+        if _is_compaction_reference(content):
+            return {
+                "id": f"hermes:{lineage_session_id}:compaction:{row.get('id')}",
+                "task_id": projected_task_id,
+                "role": "system",
+                "content": COMPACTION_MARKER_TEXT,
+                "created_at": _timestamp_to_ms(row.get("timestamp")),
+            }
+
+    if child_boundary is not None:
+        marker_id, first_user_id = child_boundary
+        if marker_id is None or first_user_id is None or row_id < first_user_id:
+            return None
+
+    if role == "assistant" and not content.strip() and row.get("tool_calls"):
+        return None
+    if not content.strip():
+        return None
+
+    message = {
+        "id": f"hermes:{lineage_session_id}:{row.get('id')}",
+        "task_id": projected_task_id,
+        "role": role,
+        "content": content,
+        "created_at": _timestamp_to_ms(row.get("timestamp")),
+    }
+    if role == "assistant":
+        thinking = (
+            _thinking_to_text(row.get("reasoning_content"))
+            or _thinking_to_text(row.get("reasoning"))
+            or _thinking_to_text(row.get("reasoning_details"))
+            or _thinking_to_text(row.get("codex_reasoning_items"))
+        )
+        if thinking:
+            message["thinking"] = thinking
+    return message
+
+
+def project_session_message_page(
+    session_id: Any,
+    task_id: Any = None,
+    limit: Any = None,
+    before: Any = None,
+) -> dict[str, Any]:
+    """Project a bounded tail-first page while keeping Hermes SessionDB canonical."""
+    session_id = string_or_none(session_id)
+    if not session_id:
+        raise WorkerError("Session ID is required.", code="bad_request")
+    page_limit = _message_page_limit(limit)
+    session_db, root_session_id = open_session(session_id, resolve_live=False)
+    lineage_ids = _session_lineage_ids(session_db, root_session_id)
+    counts = _active_message_counts(session_db, lineage_ids)
+    projected_task_id = string_or_none(task_id) or session_id
+
+    decoded_cursor = _decode_message_cursor(before)
+    if decoded_cursor is None:
+        lineage_index = len(lineage_ids) - 1
+        before_offset = counts.get(lineage_ids[lineage_index], 0) if lineage_ids else 0
+    else:
+        lineage_index, before_offset = decoded_cursor
+        if lineage_index >= len(lineage_ids):
+            raise WorkerError("Invalid message cursor.", code="bad_request")
+        before_offset = min(before_offset, counts.get(lineage_ids[lineage_index], 0))
+
+    max_raw_scan = max(200, min(MESSAGE_PAGE_MAX_RAW_SCAN, page_limit * 8))
+    projected_desc: list[dict[str, Any]] = []
+    inspected = 0
+    boundaries: dict[str, tuple[int | None, int | None]] = {}
+
+    while lineage_index >= 0 and inspected < max_raw_scan:
+        lineage_session_id = lineage_ids[lineage_index]
+        if before_offset <= 0:
+            lineage_index -= 1
+            if lineage_index >= 0:
+                before_offset = counts.get(lineage_ids[lineage_index], 0)
+            continue
+
+        take = min(before_offset, max_raw_scan - inspected)
+        start_offset = before_offset - take
+        try:
+            rows = session_db.get_messages(
+                lineage_session_id,
+                limit=take,
+                offset=start_offset,
+            )
+        except Exception as exc:
+            raise WorkerError(f"Could not load Hermes session messages: {exc}", code="session_load_error") from exc
+
+        child_boundary = None
+        if lineage_index > 0:
+            child_boundary = boundaries.get(lineage_session_id)
+            if child_boundary is None:
+                child_boundary = _child_projection_boundary(
+                    session_db,
+                    lineage_session_id,
+                    counts.get(lineage_session_id, 0),
+                )
+                boundaries[lineage_session_id] = child_boundary
+
+        for row_index in range(len(rows) - 1, -1, -1):
+            inspected += 1
+            before_offset = start_offset + row_index
+            message = _project_message_page_row(
+                rows[row_index],
+                lineage_session_id,
+                projected_task_id,
+                child_boundary,
+            )
+            if message is not None:
+                projected_desc.append(message)
+            if len(projected_desc) >= page_limit:
+                has_older = before_offset > 0 or lineage_index > 0
+                return {
+                    "messages": list(reversed(projected_desc)),
+                    "pageInfo": {
+                        "hasOlder": has_older,
+                        "olderCursor": _encode_message_cursor(lineage_index, before_offset) if has_older else None,
+                    },
+                }
+
+        before_offset = start_offset
+
+    has_older = before_offset > 0 or lineage_index > 0
+    return {
+        "messages": list(reversed(projected_desc)),
+        "pageInfo": {
+            "hasOlder": has_older,
+            "olderCursor": _encode_message_cursor(lineage_index, before_offset) if has_older else None,
+        },
+    }
 
 
 def _int_field(row: dict[str, Any], key: str) -> int:

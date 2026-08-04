@@ -118,6 +118,10 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return await (await this.adapterForTaskId(taskId)).getMessages(sessionId, taskId);
   }
 
+  async getMessagePage(sessionId: string, taskId: string, options: { limit: number; before?: string | null }) {
+    return await (await this.adapterForTaskId(taskId)).getMessagePage(sessionId, taskId, options);
+  }
+
   async getSessionMetadata(sessionId: string) {
     return await (await this.adapterForSession(sessionId)).getSessionMetadata(sessionId);
   }

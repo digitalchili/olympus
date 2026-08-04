@@ -80,8 +80,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const setActiveProfileId = useCallback((profileId: string) => {
     if (!profiles.some((profile) => profile.id === profileId)) return;
+
+    // Task IDs (and their messages) are profile-scoped. Retaining a task-detail
+    // URL after a profile switch asks the new profile for an ID it cannot own and
+    // leaves the board looking empty until the user navigates manually.
+    const isTaskDetail = /^\/tasks\/[^/]+$/.test(location.pathname);
     navigate({
-      pathname: location.pathname,
+      pathname: isTaskDetail ? '/' : location.pathname,
       search: searchWithProfile(location.search, profileId),
       hash: location.hash,
     });

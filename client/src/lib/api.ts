@@ -17,6 +17,7 @@ import type {
   Task,
   TaskAgentSettings,
   TaskMessage,
+  TaskMessagesPage,
   TaskStatus,
   ReasoningEffort,
   ScheduledTask,
@@ -38,6 +39,7 @@ import type {
   ProfileBuilderSuggestion,
   UpdateStatus,
 } from '@shared/types';
+import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
 import { apiPathWithProfile } from './profileQuery';
 
 export type { HermesProfile, SkillMeta, SkillInstallResult };
@@ -135,8 +137,10 @@ export function searchTasks(query: string) {
   return request<{ results: TaskSearchResult[] }>(`/search?q=${encodeURIComponent(query)}`);
 }
 
-export function fetchMessages(taskId: string) {
-  return request<{ messages: TaskMessage[]; context?: ContextUsage | null }>(`/tasks/${taskId}/messages`);
+export function fetchMessages(taskId: string, before?: string | null) {
+  const params = new URLSearchParams({ limit: String(TASK_MESSAGE_PAGE_SIZE) });
+  if (before) params.set('before', before);
+  return request<TaskMessagesPage>(`/tasks/${encodeURIComponent(taskId)}/messages?${params}`);
 }
 
 export function fetchCollaborations(taskId: string) {

@@ -28,6 +28,7 @@ from hermes_worker_utils import (
 from hermes_sessions import (
     load_agent_history,
     open_session,
+    project_session_message_page,
     project_session_messages,
     project_session_metadata,
 )
@@ -1692,7 +1693,15 @@ def _handle_request(request: dict[str, Any]) -> None:
         elif request_type == "scheduledTasks.tick":
             _result(request_id, {"executed": tick_scheduled_tasks()})
         elif request_type == "session.messages.get":
-            _result(request_id, project_session_messages(request.get("sessionId"), request.get("taskId")))
+            if request.get("limit") is None and request.get("before") is None:
+                _result(request_id, project_session_messages(request.get("sessionId"), request.get("taskId")))
+            else:
+                _result(request_id, project_session_message_page(
+                    request.get("sessionId"),
+                    request.get("taskId"),
+                    request.get("limit"),
+                    request.get("before"),
+                ))
         elif request_type == "session.get":
             _result(request_id, project_session_metadata(request.get("sessionId")))
         elif request_type == "goal.status":

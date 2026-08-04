@@ -8,6 +8,7 @@ import type {
   ScheduledTaskInput,
   SessionMetadata,
   TaskMessage,
+  TaskMessagePageInfo,
 } from '../../shared/types.js';
 
 export type { AgentRunSettings, ContextUsage };
@@ -57,6 +58,12 @@ export interface AgentAdapter {
   healthCheck(): Promise<boolean>;
 
   getMessages(sessionId: string, taskId: string): Promise<TaskMessage[]>;
+
+  getMessagePage(
+    sessionId: string,
+    taskId: string,
+    options: { limit: number; before?: string | null },
+  ): Promise<{ messages: TaskMessage[]; pageInfo: TaskMessagePageInfo }>;
 
   getSessionMetadata(sessionId: string): Promise<SessionMetadata | null>;
 

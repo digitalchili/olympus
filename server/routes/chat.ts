@@ -1,4 +1,4 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
 import {
   cancelCollaborationRun,
@@ -45,8 +45,9 @@ import {
   validateCollaborationInvites,
 } from '../collaboration.js';
 import { LocalProfileError } from '../local-profiles.js';
+import { requestProfile } from '../profile-context.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
 
@@ -66,6 +67,28 @@ function sendAdapterError(res: Response, error: unknown, fallback: string): void
 function hasNoSession(task: Task): boolean {
   if (task.last_agent_response_at !== null) return false;
   return getRunStatus(task.id)?.status !== 'streaming';
+}
+
+function taskBelongsToProfile(task: Task, profileId: string, isDefault: boolean): boolean {
+  return isDefault
+    ? task.profile_name === null || task.profile_name === profileId
+    : task.profile_name === profileId;
+}
+
+function messagePageQuery(query: Request['query']): { limit: number; before: string | null } {
+  const rawLimit = query.limit;
+  const rawBefore = query.before;
+  if (rawLimit !== undefined && (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit))) {
+    throw new LocalProfileError(400, 'limit must be an integer', 'BAD_MESSAGE_PAGE');
+  }
+  const limit = rawLimit === undefined ? TASK_MESSAGE_PAGE_SIZE : Number(rawLimit);
+  if (limit < 1 || limit > TASK_MESSAGE_PAGE_MAX_SIZE) {
+    throw new LocalProfileError(400, `limit must be between 1 and ${TASK_MESSAGE_PAGE_MAX_SIZE}`, 'BAD_MESSAGE_PAGE');
+  }
+  if (rawBefore !== undefined && (typeof rawBefore !== 'string' || rawBefore.length === 0)) {
+    throw new LocalProfileError(400, 'before must be a non-empty cursor', 'BAD_MESSAGE_PAGE');
+  }
+  return { limit, before: typeof rawBefore === 'string' ? rawBefore : null };
 }
 
 function isTaskRunActive(status: ReturnType<typeof getRunStatus>): boolean {
@@ -94,13 +117,29 @@ function completeTaskRun(
 chatRouter.get('/:id/messages', async (req, res) => {
   const task = getTask(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
+  let pageQuery;
+  try {
+    const profile = requestProfile(req);
+    if (!taskBelongsToProfile(task, profile.id, profile.isDefault)) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    pageQuery = messagePageQuery(req.query);
+  } catch (error) {
+    if (error instanceof LocalProfileError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    return res.status(500).json({ error: 'Could not resolve local Hermes profile' });
+  }
   const liveContext = getRunContext(task.id);
   const context = liveContext !== undefined ? liveContext : contextFromTask(task);
-  if (hasNoSession(task)) return res.json({ messages: [], context });
+  if (hasNoSession(task)) {
+    return res.json({ messages: [], pageInfo: { hasOlder: false, olderCursor: null }, context });
+  }
 
   try {
-    const messages = await publishMessageAttachments(task, await adapter.getMessages(task.id, task.id));
-    res.json({ messages, context });
+    const page = await adapter.getMessagePage(task.id, task.id, pageQuery);
+    const messages = await publishMessageAttachments(task, page.messages);
+    res.json({ messages, pageInfo: page.pageInfo, context });
   } catch (error) {
     sendAdapterError(res, error, 'Hermes session history unavailable');
   }

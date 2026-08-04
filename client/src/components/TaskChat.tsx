@@ -251,7 +251,20 @@ export function TaskChat({
   collaborationRuns = [],
 }: TaskChatProps) {
   const { activeProfileId } = useProfile();
-  const { messages, isStreaming: liveIsStreaming, stopped: runStopped, thinkingContent, activeTools, context, sendMessage, loadMessages } = useChat();
+  const {
+    messages,
+    isStreaming: liveIsStreaming,
+    stopped: runStopped,
+    thinkingContent,
+    activeTools,
+    context,
+    hasOlderMessages,
+    isLoadingOlderMessages,
+    olderMessagesError,
+    sendMessage,
+    loadMessages,
+    loadOlderMessages,
+  } = useChat();
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const [input, setInput] = useState('');
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
@@ -421,6 +434,21 @@ export function TaskChat({
     const container = messagesContainerRef.current;
     container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }, []);
+
+  const handleLoadOlderMessages = useCallback(async () => {
+    const container = messagesContainerRef.current;
+    const previousHeight = container?.scrollHeight ?? 0;
+    const previousTop = container?.scrollTop ?? 0;
+    try {
+      await loadOlderMessages(taskId);
+      window.requestAnimationFrame(() => {
+        const current = messagesContainerRef.current;
+        if (current) current.scrollTop = previousTop + current.scrollHeight - previousHeight;
+      });
+    } catch {
+      // The hook exposes a retryable inline error without replacing the loaded page.
+    }
+  }, [loadOlderMessages, taskId]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -741,6 +769,22 @@ export function TaskChat({
           className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-6 sm:py-4"
         >
           <div className={`${CHAT_COLUMN_CLASS} space-y-3`}>
+            {!isLoadingMessages && (hasOlderMessages || olderMessagesError) && (
+              <div className="flex flex-col items-center gap-1.5 pb-1">
+                <button
+                  type="button"
+                  onClick={() => void handleLoadOlderMessages()}
+                  disabled={isLoadingOlderMessages || !hasOlderMessages}
+                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                >
+                  {isLoadingOlderMessages && <Loader2 size={12} className="animate-spin" />}
+                  {isLoadingOlderMessages ? 'Loading older messages…' : 'Load older messages'}
+                </button>
+                {olderMessagesError && (
+                  <p className="text-xs text-red-500 dark:text-red-400">{olderMessagesError}</p>
+                )}
+              </div>
+            )}
             {isLoadingMessages ? (
               <div className="flex items-center justify-center gap-2 py-12 text-sm text-zinc-400 dark:text-zinc-500">
                 <Loader2 size={16} className="animate-spin" />

@@ -191,6 +191,20 @@ export interface TaskMessage {
   attachments?: TaskAttachment[];
 }
 
+export interface TaskMessagePageInfo {
+  hasOlder: boolean;
+  olderCursor: string | null;
+}
+
+export const TASK_MESSAGE_PAGE_SIZE = 40;
+export const TASK_MESSAGE_PAGE_MAX_SIZE = 100;
+
+export interface TaskMessagesPage {
+  messages: TaskMessage[];
+  pageInfo: TaskMessagePageInfo;
+  context?: ContextUsage | null;
+}
+
 export interface TaskAttachment {
   path: string;
   name: string;

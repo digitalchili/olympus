@@ -7,6 +7,7 @@ import type {
   ScheduledTaskInput,
   SessionMetadata,
   TaskMessage,
+  TaskMessagePageInfo,
   ContextUsage,
 } from '../../shared/types.js';
 import type { AgentRunSettings } from './types.js';
@@ -25,7 +26,7 @@ export type WorkerRequest =
   | { id: string; type: 'scheduledTasks.run'; scheduledTaskId: string }
   | { id: string; type: 'scheduledTasks.remove'; scheduledTaskId: string }
   | { id: string; type: 'scheduledTasks.tick' }
-  | { id: string; type: 'session.messages.get'; sessionId: string; taskId?: string }
+  | { id: string; type: 'session.messages.get'; sessionId: string; taskId?: string; limit?: number; before?: string | null }
   | { id: string; type: 'session.get'; sessionId: string }
   | { id: string; type: 'goal.status'; sessionId: string }
   | { id: string; type: 'goal.set'; sessionId: string; goal: string; maxTurns?: number | null }
@@ -74,6 +75,7 @@ export type WorkerResult =
   | { scheduledTask: ScheduledTask | null }
   | { executed: number }
   | { messages: TaskMessage[] }
+  | { messages: TaskMessage[]; pageInfo: TaskMessagePageInfo }
   | { session: SessionMetadata | null }
   | { goal: GoalStateSnapshot | null }
   | { cleared: boolean }

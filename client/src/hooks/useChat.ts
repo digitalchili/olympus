@@ -4,6 +4,7 @@ import type {
   LiveChatMessage,
   LiveChatRun,
   TaskMessage,
+  TaskMessagePageInfo,
   ToolProgressEvent,
 } from '@shared/types';
 import { BASE, fetchMessages } from '../lib/api';
@@ -23,7 +24,7 @@ interface SendMessageOptions {
   invitedProfileIds?: string[];
 }
 
-type ChatMessage = Omit<TaskMessage, 'task_id'> & {
+export type ChatMessage = Omit<TaskMessage, 'task_id'> & {
   task_id?: string;
   tools?: ToolProgressEvent[];
 };
@@ -157,6 +158,16 @@ function messagesWithLiveRun(committed: ChatMessage[], run: LiveChatRun): ChatMe
   return [...committedWithoutLiveRun(committed, live), ...live];
 }
 
+export function prependOlderMessages(current: ChatMessage[], older: ChatMessage[]): ChatMessage[] {
+  const seen = new Set(current.map((message) => message.id));
+  const uniqueOlder = older.filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+  return [...uniqueOlder, ...current];
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -164,6 +175,9 @@ export function useChat() {
   const [thinkingContent, setThinkingContent] = useState('');
   const [activeTools, setActiveTools] = useState<ToolProgressEvent[]>([]);
   const [context, setContext] = useState<ContextUsage | null>(null);
+  const [messagePageInfo, setMessagePageInfo] = useState<TaskMessagePageInfo>({ hasOlder: false, olderCursor: null });
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [olderMessagesError, setOlderMessagesError] = useState<string | null>(null);
 
   const postAbortRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
@@ -171,6 +185,8 @@ export function useChat() {
   const committedMessagesRef = useRef<ChatMessage[]>([]);
   const liveRunRef = useRef<LiveChatRun | null>(null);
   const liveContextRef = useRef<ContextUsage | null>(null);
+  const messagePageInfoRef = useRef<TaskMessagePageInfo>({ hasOlder: false, olderCursor: null });
+  const olderLoadTaskRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
 
   const closeLiveSource = useCallback(() => {
@@ -329,27 +345,64 @@ export function useChat() {
     committedMessagesRef.current = [];
     liveRunRef.current = null;
     liveContextRef.current = null;
+    messagePageInfoRef.current = { hasOlder: false, olderCursor: null };
+    olderLoadTaskRef.current = null;
     setMessages([]);
     setIsStreaming(false);
     setStopped(false);
     setThinkingContent('');
     setActiveTools([]);
     setContext(null);
+    setMessagePageInfo(messagePageInfoRef.current);
+    setIsLoadingOlderMessages(false);
+    setOlderMessagesError(null);
   }, [teardown]);
 
   const loadMessages = useCallback(async (taskId: string) => {
     clearAllState();
     taskIdRef.current = taskId;
 
-    const { messages: msgs, context: persistedContext } = await fetchMessages(taskId);
+    const { messages: msgs, pageInfo, context: persistedContext } = await fetchMessages(taskId);
     if (taskIdRef.current !== taskId) return msgs;
 
     committedMessagesRef.current = msgs as ChatMessage[];
+    messagePageInfoRef.current = pageInfo;
     liveContextRef.current = persistedContext ?? null;
+    setMessagePageInfo(pageInfo);
     publishState();
     openLiveSubscription(taskId);
     return msgs;
   }, [clearAllState, openLiveSubscription, publishState]);
+
+  const loadOlderMessages = useCallback(async (taskId: string) => {
+    const cursor = messagePageInfoRef.current.olderCursor;
+    if (taskIdRef.current !== taskId || !cursor || olderLoadTaskRef.current === taskId) return [];
+
+    olderLoadTaskRef.current = taskId;
+    setIsLoadingOlderMessages(true);
+    setOlderMessagesError(null);
+    try {
+      const page = await fetchMessages(taskId, cursor);
+      if (taskIdRef.current !== taskId) return page.messages;
+
+      committedMessagesRef.current = prependOlderMessages(
+        committedMessagesRef.current,
+        page.messages as ChatMessage[],
+      );
+      messagePageInfoRef.current = page.pageInfo;
+      setMessagePageInfo(page.pageInfo);
+      publishState();
+      return page.messages;
+    } catch (error) {
+      if (taskIdRef.current === taskId) {
+        setOlderMessagesError(toErrorMessage(error, 'Unable to load older messages.'));
+      }
+      throw error;
+    } finally {
+      if (olderLoadTaskRef.current === taskId) olderLoadTaskRef.current = null;
+      if (taskIdRef.current === taskId) setIsLoadingOlderMessages(false);
+    }
+  }, [publishState]);
 
   const appendLocalSendError = useCallback((content: string, error: string) => {
     const now = Date.now();
@@ -411,5 +464,19 @@ export function useChat() {
     teardown();
   }, [teardown]);
 
-  return { messages, isStreaming, stopped, thinkingContent, activeTools, context, sendMessage, loadMessages, reset: clearAllState };
+  return {
+    messages,
+    isStreaming,
+    stopped,
+    thinkingContent,
+    activeTools,
+    context,
+    hasOlderMessages: messagePageInfo.hasOlder,
+    isLoadingOlderMessages,
+    olderMessagesError,
+    sendMessage,
+    loadMessages,
+    loadOlderMessages,
+    reset: clearAllState,
+  };
 }

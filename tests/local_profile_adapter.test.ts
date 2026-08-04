@@ -17,6 +17,12 @@ function fakeAdapter(name: string, lifecycle: string[]): AgentAdapter & { start(
     async getMessages(_sessionId, taskId) {
       return [{ id: name, task_id: taskId, role: 'assistant', content: name, created_at: 1 }];
     },
+    async getMessagePage(_sessionId, taskId) {
+      return {
+        messages: [{ id: name, task_id: taskId, role: 'assistant', content: name, created_at: 1 }],
+        pageInfo: { hasOlder: false, olderCursor: null },
+      };
+    },
     async getSessionMetadata() { return null; },
     async generateTitle() { return { title: name }; },
     async compressSession(sessionId) { return { compressed: false, sessionId, previousMessageCount: 0, compressedMessageCount: 0 }; },
@@ -76,6 +82,7 @@ try {
   for await (const event of adapter.chatStream('writer-task', 'stream', streamOptions)) events.push(event);
   assert.deepEqual(events, [{ type: 'done', sessionId: 'writer' }]);
   assert.equal((await adapter.getMessages('writer-task', 'writer-task'))[0]?.content, 'writer');
+  assert.equal((await adapter.getMessagePage('writer-task', 'writer-task', { limit: 40, before: 'older' })).messages[0]?.content, 'writer');
   assert.equal(await adapter.interruptChatForProfile('writer', 'collaboration-session', 'Stopped by user'), true);
 
   await assert.rejects(() => adapter.chat('missing-task', 'hello'), /unknown local Hermes profile/i);

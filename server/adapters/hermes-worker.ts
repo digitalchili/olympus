@@ -529,6 +529,23 @@ export class HermesWorkerAdapter implements AgentAdapter {
     return result.messages;
   }
 
+  async getMessagePage(
+    sessionId: string,
+    taskId: string,
+    options: { limit: number; before?: string | null },
+  ) {
+    return await this.client.request<{
+      messages: TaskMessage[];
+      pageInfo: { hasOlder: boolean; olderCursor: string | null };
+    }>({
+      type: 'session.messages.get',
+      sessionId,
+      taskId,
+      limit: options.limit,
+      before: options.before,
+    });
+  }
+
   async getSessionMetadata(sessionId: string): Promise<SessionMetadata | null> {
     const result = await this.client.request<{ session: SessionMetadata | null }>({
       type: 'session.get',
