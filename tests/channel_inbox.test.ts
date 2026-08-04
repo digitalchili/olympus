@@ -3,7 +3,7 @@ import {
   channelMessageAuthor,
   channelMessagesStatusText,
   channelThreadsStatusText,
-  pinnedChannelInboxes,
+  enabledChannelInboxes,
 } from '../client/src/lib/channelInbox.js';
 import type { HermesChannel } from '../shared/types.js';
 
@@ -16,7 +16,7 @@ const channels: HermesChannel[] = [
   { id: 'webhook', displayLabel: 'Webhook', enabled: true, health: 'healthy' },
 ];
 
-assert.deepEqual(pinnedChannelInboxes(channels), [channels[0]],
+assert.deepEqual(enabledChannelInboxes(channels), [channels[0]],
   'the UI must reject internal transports even if a server regression returns them as enabled');
 
 assert.equal(channelThreadsStatusText({ state: 'awaiting_bridge', threads: [] }),

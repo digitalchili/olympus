@@ -6,8 +6,16 @@ import {
   type HermesChannelThreadsResult,
 } from '@shared/types';
 
-export function pinnedChannelInboxes(channels: HermesChannel[]): HermesChannel[] {
+export function enabledChannelInboxes(channels: HermesChannel[]): HermesChannel[] {
   return channels.filter((channel) => channel.enabled && isHermesMessageChannelId(channel.id));
+}
+
+export function selectedChannelInbox(channels: HermesChannel[], channelId: string | null): HermesChannel | null {
+  return channels.find((channel) => channel.id === channelId) ?? channels[0] ?? null;
+}
+
+export function channelInboxPath(channelId: string): string {
+  return `/channels?channel=${encodeURIComponent(channelId)}`;
 }
 
 export function channelThreadsStatusText(result: HermesChannelThreadsResult): string | null {

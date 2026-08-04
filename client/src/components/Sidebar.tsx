@@ -1,9 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router';
-import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search } from 'lucide-react';
+import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search, MessageCircle } from 'lucide-react';
+import type { HermesChannel } from '@shared/types';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
-import { fetchInstallationSettings } from '../lib/api';
+import { fetchHermesChannels, fetchInstallationSettings } from '../lib/api';
+import { channelInboxPath, enabledChannelInboxes, selectedChannelInbox } from '../lib/channelInbox';
 import { ProfileLink, useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { ProfilePicker } from './ProfilePicker';
 
@@ -17,10 +19,24 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const installationName = useStore((s) => s.installationName);
   const setInstallationName = useStore((s) => s.setInstallationName);
+  const [channels, setChannels] = useState<HermesChannel[]>([]);
 
   useEffect(() => {
     fetchInstallationSettings().then(({ name }) => setInstallationName(name)).catch(() => undefined);
   }, [setInstallationName]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setChannels([]);
+    void fetchHermesChannels(activeProfileId)
+      .then((result) => {
+        if (!cancelled) setChannels(enabledChannelInboxes(result.channels));
+      })
+      .catch(() => {
+        if (!cancelled) setChannels([]);
+      });
+    return () => { cancelled = true; };
+  }, [activeProfileId]);
 
   useEffect(() => {
     let chordKey: string | null = null;
@@ -77,6 +93,8 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
 
   const desktopCollapsed = collapsed;
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId);
+  const requestedChannelId = new URLSearchParams(location.search).get('channel');
+  const selectedChannel = selectedChannelInbox(channels, requestedChannelId);
 
   return (
     <aside
@@ -114,7 +132,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
       </div>
 
       <div
-        className={`flex h-[3.75rem] items-center justify-around gap-1 px-2 sm:flex-1 sm:flex-col sm:items-stretch sm:justify-start sm:gap-0 sm:h-auto ${
+        className={`flex h-[3.75rem] items-center justify-around gap-1 px-2 sm:flex-1 sm:flex-col sm:items-stretch sm:justify-start sm:gap-0 sm:h-auto sm:overflow-y-auto ${
           desktopCollapsed ? 'sm:px-2' : 'sm:px-3'
         }`}
       >
@@ -131,16 +149,6 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             collapsed={desktopCollapsed}
             shortcut={isMac ? '⇧⌘O' : 'Ctrl+⇧+O'}
           />
-          <button
-            type="button"
-            onClick={onOpenSearch}
-            title={`Search tasks (${isMac ? '⌘K' : 'Ctrl+K'})`}
-            className={`group flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${desktopCollapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'}`}
-          >
-            <Search size={18} />
-            <span className={desktopCollapsed ? 'sm:hidden' : ''}>Search</span>
-            {!desktopCollapsed && <span className="hidden ml-auto text-[10px] text-zinc-400 sm:inline">{isMac ? '⌘K' : 'Ctrl+K'}</span>}
-          </button>
           <SidebarLink
             icon={<Columns3 size={18} />}
             label="Tasks"
@@ -164,6 +172,27 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             collapsed={desktopCollapsed}
             shortcut={['G', 'F']}
           />
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            title={`Search tasks (${isMac ? '⌘K' : 'Ctrl+K'})`}
+            className={`group flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${desktopCollapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'}`}
+          >
+            <Search size={18} />
+            <span className={desktopCollapsed ? 'sm:hidden' : ''}>Search</span>
+            {!desktopCollapsed && <span className="hidden ml-auto text-[10px] text-zinc-400 sm:inline">{isMac ? '⌘K' : 'Ctrl+K'}</span>}
+          </button>
+          {selectedChannel && (
+            <SidebarLink
+              icon={<MessageCircle size={18} />}
+              label={selectedChannel.displayLabel}
+              mobileLabel="Channels"
+              to={channelInboxPath(selectedChannel.id)}
+              active={location.pathname === '/channels'}
+              collapsed={desktopCollapsed}
+              className="sm:hidden"
+            />
+          )}
           <SidebarLink
             icon={<Sparkles size={18} />}
             label="Skills"
@@ -181,6 +210,30 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             className="sm:hidden"
           />
         </nav>
+
+        {channels.length > 0 && (
+          <div className="mt-7 hidden sm:block">
+            {!desktopCollapsed ? (
+              <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-600">
+                Channels
+              </div>
+            ) : (
+              <div className="mx-3 mb-2 h-px bg-zinc-200 dark:bg-zinc-800" />
+            )}
+            <nav aria-label="Channels" className="space-y-1">
+              {channels.map((channel) => (
+                <SidebarLink
+                  key={channel.id}
+                  icon={<MessageCircle size={18} />}
+                  label={channel.displayLabel}
+                  to={channelInboxPath(channel.id)}
+                  active={location.pathname === '/channels' && selectedChannel?.id === channel.id}
+                  collapsed={desktopCollapsed}
+                />
+              ))}
+            </nav>
+          </div>
+        )}
 
         <div className="hidden sm:block sm:mt-7">
           {!desktopCollapsed ? (

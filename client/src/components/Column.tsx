@@ -2,25 +2,22 @@ import { useDroppable } from '@dnd-kit/core';
 import { MoreHorizontal, Plus } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
-import type { HermesChannel, Task, TaskRunState, TaskStatus } from '@shared/types';
+import type { Task, TaskRunState, TaskStatus } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { ColumnActionsMenu } from './ColumnActionsMenu';
 import { StatusIcon } from './StatusIcon';
 import { TaskCard } from './TaskCard';
-import { ChannelInboxCard } from './ChannelInboxCard';
 import { useProfileNavigate } from '../contexts/ProfileContext';
 
 interface ColumnProps {
   status: TaskStatus;
   tasks: Task[];
   taskRuns: Map<string, TaskRunState>;
-  channels?: HermesChannel[];
-  channelProfileId: string;
   isLast?: boolean;
   onRequestDeleteAll: (status: TaskStatus) => void;
 }
 
-export function Column({ status, tasks, taskRuns, channels = [], channelProfileId, isLast = false, onRequestDeleteAll }: ColumnProps) {
+export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll }: ColumnProps) {
   const { label } = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const navigate = useProfileNavigate();
@@ -76,13 +73,6 @@ export function Column({ status, tasks, taskRuns, channels = [], channelProfileI
             : ''
         }`}
       >
-        {channels.map((channel) => (
-          <ChannelInboxCard
-            key={`${channelProfileId}:${channel.id}`}
-            channel={channel}
-            profileId={channelProfileId}
-          />
-        ))}
         {tasks.map((task) => (
           <TaskCard
             key={task.id}
