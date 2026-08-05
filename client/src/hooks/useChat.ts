@@ -106,6 +106,97 @@ function snapshotMessages(messages: LiveChatMessage[]): ChatMessage[] {
   }));
 }
 
+const OPTIMISTIC_CHAT_ID_PREFIX = 'optimistic-chat-';
+
+function isOptimisticChatMessage(message: LiveChatMessage): boolean {
+  return message.id.startsWith(OPTIMISTIC_CHAT_ID_PREFIX);
+}
+
+function hasOptimisticChatMessages(run: LiveChatRun): boolean {
+  return run.messages.some(isOptimisticChatMessage);
+}
+
+export function createOptimisticChatRun(
+  taskId: string,
+  content: string,
+  kind: Extract<LiveChatRun['kind'], 'chat' | 'goal'> = 'chat',
+  now = Date.now(),
+): LiveChatRun {
+  return {
+    taskId,
+    runId: `${OPTIMISTIC_CHAT_ID_PREFIX}${createUuid()}`,
+    kind,
+    sessionId: taskId,
+    status: 'streaming',
+    startedAt: now,
+    updatedAt: now,
+    messages: [
+      {
+        id: `${OPTIMISTIC_CHAT_ID_PREFIX}${createUuid()}`,
+        task_id: taskId,
+        role: 'user',
+        content,
+        created_at: now,
+      },
+      {
+        id: `${OPTIMISTIC_CHAT_ID_PREFIX}${createUuid()}`,
+        task_id: taskId,
+        role: 'assistant',
+        content: '',
+        created_at: now,
+        tools: [],
+      },
+    ],
+  };
+}
+
+export function shouldCreateOptimisticChatRun(current: LiveChatRun | null): boolean {
+  return current?.status !== 'streaming';
+}
+
+export function rollbackOptimisticChatRun(
+  current: LiveChatRun | null,
+  optimisticRunId: string | undefined,
+): LiveChatRun | null {
+  if (!optimisticRunId || !current) return current;
+  if (current.runId === optimisticRunId) return null;
+  if (!hasOptimisticChatMessages(current)) return current;
+  return {
+    ...current,
+    messages: current.messages.filter((message) => !isOptimisticChatMessage(message)),
+  };
+}
+
+export function reconcileOptimisticChatSnapshot(
+  existing: LiveChatRun,
+  snapshot: LiveChatRun,
+): LiveChatRun {
+  if (existing.taskId !== snapshot.taskId) return snapshot;
+
+  const optimisticUser = existing.messages.find(
+    (message) => message.role === 'user' && isOptimisticChatMessage(message),
+  );
+  if (!optimisticUser) return snapshot;
+  if (snapshot.messages.some(
+    (message) => message.role === 'user' && message.content === optimisticUser.content,
+  )) {
+    return snapshot;
+  }
+
+  const optimisticAssistant = existing.messages.find(
+    (message) => message.role === 'assistant' && isOptimisticChatMessage(message),
+  );
+  const messages = [{ ...optimisticUser }];
+  if (optimisticAssistant && !snapshot.messages.some((message) => message.role === 'assistant')) {
+    messages.push({
+      ...optimisticAssistant,
+      tools: optimisticAssistant.tools?.map((tool) => ({ ...tool })),
+    });
+  }
+
+  return { ...snapshot, messages: [...messages, ...snapshot.messages] };
+}
+
 function sameRoleAndContent(left?: ChatMessage, right?: ChatMessage): boolean {
   return !!left && !!right && left.role === right.role && left.content === right.content;
 }
@@ -244,12 +335,29 @@ export function useChat() {
     taskIdRef.current = run.taskId;
 
     const existingLiveRun = liveRunRef.current;
-    if (existingLiveRun && existingLiveRun.runId !== run.runId) {
+    if (
+      existingLiveRun &&
+      hasOptimisticChatMessages(existingLiveRun) &&
+      existingLiveRun.runId !== run.runId &&
+      run.status !== 'streaming' &&
+      run.startedAt < existingLiveRun.startedAt
+    ) {
+      return;
+    }
+
+    if (
+      existingLiveRun &&
+      existingLiveRun.runId !== run.runId &&
+      !hasOptimisticChatMessages(existingLiveRun)
+    ) {
       committedMessagesRef.current = messagesWithLiveRun(committedMessagesRef.current, existingLiveRun);
     }
 
-    liveRunRef.current = run;
-    if (run.context !== undefined) liveContextRef.current = run.context;
+    const nextRun = existingLiveRun
+      ? reconcileOptimisticChatSnapshot(existingLiveRun, run)
+      : run;
+    liveRunRef.current = nextRun;
+    if (nextRun.context !== undefined) liveContextRef.current = nextRun.context;
     publishState();
   }, [publishState]);
 
@@ -404,17 +512,29 @@ export function useChat() {
     }
   }, [publishState]);
 
-  const appendLocalSendError = useCallback((content: string, error: string) => {
-    const now = Date.now();
-    setMessages((prev) => [
-      ...prev,
-      { id: createUuid(), role: 'user', content, created_at: now },
-      { id: createUuid(), role: 'assistant', content: `[Error: ${error}]`, created_at: now },
-    ]);
-    setIsStreaming(false);
-    setThinkingContent('');
-    setActiveTools([]);
-  }, []);
+  const finishOptimisticSendError = useCallback((
+    taskId: string,
+    optimisticRunId: string | undefined,
+    content: string,
+    error: string,
+    appendLocalError: boolean,
+  ) => {
+    if (taskIdRef.current !== taskId) return;
+
+    liveRunRef.current = rollbackOptimisticChatRun(
+      liveRunRef.current,
+      optimisticRunId,
+    );
+    if (appendLocalError) {
+      const now = Date.now();
+      committedMessagesRef.current = [
+        ...committedMessagesRef.current,
+        { id: createUuid(), task_id: taskId, role: 'user', content, created_at: now },
+        { id: createUuid(), task_id: taskId, role: 'assistant', content: `[Error: ${error}]`, created_at: now },
+      ];
+    }
+    publishState();
+  }, [publishState]);
 
   const sendMessage = useCallback(async (
     taskId: string,
@@ -424,12 +544,28 @@ export function useChat() {
   ): Promise<SendMessageResult> => {
     openLiveSubscription(taskId);
 
+    const previousRun = liveRunRef.current;
+    const optimisticRun = shouldCreateOptimisticChatRun(previousRun)
+      ? createOptimisticChatRun(
+        taskId,
+        content,
+        settings?.mode === 'goal' ? 'goal' : 'chat',
+      )
+      : null;
+    if (optimisticRun) {
+      if (previousRun) {
+        committedMessagesRef.current = messagesWithLiveRun(committedMessagesRef.current, previousRun);
+      }
+      liveRunRef.current = optimisticRun;
+      publishState();
+    }
+
     const abort = new AbortController();
     postAbortRef.current = abort;
     const runSettings = compactSettings(settings);
 
     try {
-      const res = await fetch(`${BASE}/tasks/${encodeURIComponent(taskId)}/messages`, {
+      const res = await fetch(`${BASE}${apiPathWithProfile(`/tasks/${encodeURIComponent(taskId)}/messages`)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -443,22 +579,43 @@ export function useChat() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         const error = body.error || `HTTP ${res.status}`;
-        if (res.status !== 409 && options?.appendLocalError !== false) appendLocalSendError(content, error);
+        finishOptimisticSendError(
+          taskId,
+          optimisticRun?.runId,
+          content,
+          error,
+          res.status !== 409 && options?.appendLocalError !== false,
+        );
         return { ok: false, conflict: res.status === 409, error };
       }
       const body = await res.json().catch(() => ({})) as { runId?: string };
+      if (
+        body.runId &&
+        optimisticRun &&
+        taskIdRef.current === taskId &&
+        liveRunRef.current?.runId === optimisticRun.runId
+      ) {
+        liveRunRef.current.runId = body.runId;
+      }
       return { ok: true, runId: body.runId };
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         const error = toErrorMessage(err, 'Failed to send message.');
-        if (options?.appendLocalError !== false) appendLocalSendError(content, error);
+        finishOptimisticSendError(
+          taskId,
+          optimisticRun?.runId,
+          content,
+          error,
+          options?.appendLocalError !== false,
+        );
         return { ok: false, error };
       }
+      finishOptimisticSendError(taskId, optimisticRun?.runId, content, '', false);
       return { ok: false, error: 'Message send was cancelled.' };
     } finally {
       if (postAbortRef.current === abort) postAbortRef.current = null;
     }
-  }, [appendLocalSendError, openLiveSubscription]);
+  }, [finishOptimisticSendError, openLiveSubscription, publishState]);
 
   useEffect(() => () => {
     teardown();
