@@ -45,7 +45,8 @@ async function invokeDraft(text: string | Error, body: unknown = { description: 
       return { text, sessionId };
     },
   });
-  const handler = (router.stack.find((layer) => layer.route?.path === '/draft')?.route.stack[0].handle) as Function;
+  const routeStack = router.stack.find((layer) => layer.route?.path === '/draft')?.route.stack;
+  const handler = routeStack?.at(-1)?.handle as Function;
   assert.ok(handler, 'draft route should be registered');
 
   const result = { status: 200, body: undefined as unknown };

@@ -2,8 +2,9 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Router } from 'express';
-import { getAllTasks } from '../db/queries.js';
-import { resolveHermesHome } from '../paths.js';
+import type { Task } from '../../shared/types.js';
+import { getTasksForProfile } from '../db/queries.js';
+import { requestProfile, sendProfileError } from '../profile-context.js';
 
 export const searchRouter = Router();
 
@@ -33,9 +34,9 @@ function excerpt(text: string, maxLength = 280): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
-function taskMetadataMatches(query: string): TaskSearchResult[] {
+function taskMetadataMatches(query: string, tasks: Task[]): TaskSearchResult[] {
   const normalized = query.toLocaleLowerCase();
-  return getAllTasks()
+  return tasks
     .filter((task) => `${task.title}\n${task.description ?? ''}`.toLocaleLowerCase().includes(normalized))
     .slice(0, MAX_RESULTS)
     .map((task) => ({
@@ -48,15 +49,14 @@ function taskMetadataMatches(query: string): TaskSearchResult[] {
     }));
 }
 
-function searchHermesMessages(query: string): TaskSearchResult[] {
+function searchHermesMessages(query: string, tasks: Task[], hermesHome: string): TaskSearchResult[] {
   const ftsQuery = toFtsQuery(query);
   if (!ftsQuery) return [];
 
-  const tasks = getAllTasks();
   if (!tasks.length) return [];
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const taskIds = tasks.slice(0, MAX_TASK_IDS_PER_QUERY).map((task) => task.id);
-  const hermesDbPath = join(resolveHermesHome(), 'state.db');
+  const hermesDbPath = join(hermesHome, 'state.db');
   if (!existsSync(hermesDbPath)) return [];
 
   const db = new Database(hermesDbPath, { readonly: true, fileMustExist: true });
@@ -102,8 +102,10 @@ searchRouter.get('/', (req, res) => {
   if (query.length < 2) return res.json({ results: [] });
 
   try {
-    const metadata = taskMetadataMatches(query);
-    const messages = searchHermesMessages(query);
+    const profile = requestProfile(req);
+    const tasks = getTasksForProfile(profile.id, profile.isDefault);
+    const metadata = taskMetadataMatches(query, tasks);
+    const messages = searchHermesMessages(query, tasks, profile.hermesHome);
     const seen = new Set<string>();
     const results = [...metadata, ...messages].filter((result) => {
       const key = `${result.taskId}:${result.role}:${result.snippet}`;
@@ -113,6 +115,8 @@ searchRouter.get('/', (req, res) => {
     }).slice(0, MAX_RESULTS);
     res.json({ results });
   } catch (error) {
+    const profileError = sendProfileError(error);
+    if (profileError) return res.status(profileError.status).json(profileError.body);
     res.status(503).json({ error: error instanceof Error ? error.message : 'Task search is unavailable' });
   }
 });

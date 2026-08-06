@@ -6,7 +6,7 @@ import { Router, type Response } from 'express';
 import type { Task, TaskAttachment, TaskMessage } from '../shared/types.js';
 import { expandHomePrefix } from './paths.js';
 import { LocalProfileError, LocalProfileRegistry, localProfileRegistry, type LocalProfileTarget } from './local-profiles.js';
-import { requestProfile } from './profile-context.js';
+import { requestProfile, taskBelongsToProfile } from './profile-context.js';
 
 class TaskArtifactError extends Error {
   constructor(
@@ -150,7 +150,7 @@ export function createTaskArtifactsRouter(options: TaskArtifactsRouterOptions): 
       if (!task) throw new TaskArtifactError(404, 'Task not found', 'TASK_NOT_FOUND');
 
       const requestedProfile = requestProfile(req, registry);
-      if (requestedProfile.id !== taskProfile(task, registry).id) {
+      if (!taskBelongsToProfile(task, requestedProfile)) {
         throw new TaskArtifactError(404, 'Task not found', 'TASK_NOT_FOUND');
       }
       if (typeof req.query.path !== 'string') {

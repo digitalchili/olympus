@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { REASONING_EFFORTS, type ProfileBuilderSuggestion, type ReasoningEffort } from '../../shared/types.js';
 import type { AgentRunOptions } from '../adapters/types.js';
 import { deleteTasksForProfile, getTasksForProfile } from '../db/queries.js';
@@ -10,8 +10,12 @@ import {
   localProfileRegistry,
   readProfileSettings,
   updateProfileSettings,
+  validateLocalProfileDeletion,
 } from '../local-profiles.js';
-import { requestProfile } from '../profile-context.js';
+import { profileRequestGate, requestProfile } from '../profile-context.js';
+import { closeClientsForProfile } from '../events.js';
+import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
+import { beginProfileDeletion, ProfileDeletingError } from '../profile-deletion.js';
 
 interface ProfileDraftAdapter {
   chatForProfile(
@@ -20,6 +24,7 @@ interface ProfileDraftAdapter {
     message: string,
     options: AgentRunOptions,
   ): Promise<{ text: string; sessionId: string }>;
+  evictProfile?(profileId: string): Promise<void>;
 }
 
 export const PROFILE_BUILDER_SYSTEM_MESSAGE = `You draft configuration for a new local Hermes profile.
@@ -75,7 +80,7 @@ export function parseProfileBuilderSuggestion(text: string): ProfileBuilderSugge
 }
 
 function sendLocalProfileError(res: Response, error: unknown, fallback: string) {
-  if (error instanceof LocalProfileError) {
+  if (error instanceof LocalProfileError || error instanceof ProfileDeletingError) {
     return res.status(error.status).json({ error: error.message, code: error.code });
   }
   return res.status(500).json({ error: fallback, code: 'PROFILE_LIFECYCLE_ERROR' });
@@ -85,8 +90,19 @@ function publicProfile(id: string) {
   return localProfileRegistry.allPublicProfiles().find((profile) => profile.id === id);
 }
 
+function routeProfileId(req: Request): string {
+  const id = req.params.id;
+  return Array.isArray(id) ? id[0] : id;
+}
+
 export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
   const router = Router();
+  const currentProfileGate = profileRequestGate();
+  const targetProfileGate = profileRequestGate(routeProfileId);
+  const createdProfileGate = profileRequestGate((req, registry) => {
+    const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
+    return id || requestProfile(req, registry).id;
+  });
 
   router.get('/', (req, res) => {
     const includeInactive = req.query.includeInactive === 'true';
@@ -95,7 +111,7 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
       : localProfileRegistry.publicProfiles() });
   });
 
-  router.post('/draft', async (req, res) => {
+  router.post('/draft', currentProfileGate, async (req, res) => {
     if (!isRecord(req.body) || typeof req.body.description !== 'string') {
       return res.status(400).json({ error: 'A profile description is required', code: 'INVALID_PROFILE_DESCRIPTION' });
     }
@@ -124,7 +140,7 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
     }
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', createdProfileGate, async (req, res) => {
     try {
       const created = await localProfileRegistry.create(req.body);
       res.status(201).json({ profile: publicProfile(created.id) });
@@ -135,35 +151,35 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
 
   router.get('/:id/settings', async (req, res) => {
     try {
-      res.json({ settings: await readProfileSettings(localProfileRegistry.require(req.params.id)) });
+      res.json({ settings: await readProfileSettings(localProfileRegistry.require(routeProfileId(req))) });
     } catch (error) {
       sendLocalProfileError(res, error, 'Could not read profile settings');
     }
   });
 
-  router.patch('/:id/settings', async (req, res) => {
+  router.patch('/:id/settings', targetProfileGate, async (req, res) => {
     try {
-      const settings = await updateProfileSettings(localProfileRegistry.require(req.params.id), req.body);
+      const settings = await updateProfileSettings(localProfileRegistry.require(routeProfileId(req)), req.body);
       res.json({ settings });
     } catch (error) {
       sendLocalProfileError(res, error, 'Could not update profile settings');
     }
   });
 
-  router.post('/:id/deactivate', async (req, res) => {
+  router.post('/:id/deactivate', targetProfileGate, async (req, res) => {
     try {
       const currentProfileId = requestProfile(req).id;
-      const updated = await localProfileRegistry.setActive(req.params.id, false, currentProfileId);
+      const updated = await localProfileRegistry.setActive(routeProfileId(req), false, currentProfileId);
       res.json({ profile: publicProfile(updated.id) });
     } catch (error) {
       sendLocalProfileError(res, error, 'Could not deactivate profile');
     }
   });
 
-  router.post('/:id/reactivate', async (req, res) => {
+  router.post('/:id/reactivate', targetProfileGate, async (req, res) => {
     try {
       const currentProfileId = requestProfile(req).id;
-      const updated = await localProfileRegistry.setActive(req.params.id, true, currentProfileId);
+      const updated = await localProfileRegistry.setActive(routeProfileId(req), true, currentProfileId);
       res.json({ profile: publicProfile(updated.id) });
     } catch (error) {
       sendLocalProfileError(res, error, 'Could not reactivate profile');
@@ -171,21 +187,43 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
   });
 
   router.delete('/:id', async (req, res) => {
+    let deletionLock: ReturnType<typeof beginProfileDeletion> | null = null;
     try {
-      const target = localProfileRegistry.require(req.params.id);
       const currentProfileId = requestProfile(req).id;
+      const target = validateLocalProfileDeletion(
+        localProfileRegistry,
+        routeProfileId(req),
+        req.body?.confirmation,
+        currentProfileId,
+      );
+      deletionLock = beginProfileDeletion(target.id);
+
+      const initialTasks = getTasksForProfile(target.id, false);
+      closeClientsForProfile(target.id);
+      closeSubscribersForTasks(initialTasks.map((task) => task.id));
+      await deletionLock.waitForIdle();
+
       const tasks = getTasksForProfile(target.id, false);
+      closeSubscribersForTasks(tasks.map((task) => task.id));
+      await adapter.evictProfile?.(target.id);
       const { backupDir } = await localProfileRegistry.delete(
         target.id,
         req.body?.confirmation,
         currentProfileId,
         { tasks },
       );
+      for (const task of tasks) discardRun(task.id);
       const deletedTaskIds = deleteTasksForProfile(target.id);
-      for (const taskId of deletedTaskIds) broadcast({ type: 'task_deleted', taskId });
+      const tasksById = new Map(tasks.map((task) => [task.id, task]));
+      for (const taskId of deletedTaskIds) {
+        const task = tasksById.get(taskId);
+        if (task) broadcast({ type: 'task_deleted', taskId }, task);
+      }
       res.json({ ok: true, backupDir, deletedTaskCount: deletedTaskIds.length });
     } catch (error) {
       sendLocalProfileError(res, error, 'Could not delete profile');
+    } finally {
+      deletionLock?.release();
     }
   });
 

@@ -1,12 +1,14 @@
 import { v4 as uuid } from 'uuid';
 import db from './index.js';
 import {
+  DEFAULT_PROFILE_NAME,
   type Task,
   type TaskStatus,
   type ReasoningEffort,
   type ContextUsage,
   type TaskRoutingSource,
 } from '../../shared/types.js';
+import { assertProfileAcceptingWork, isProfileDeleting } from '../profile-deletion.js';
 
 const stmtAllTasks = db.prepare('SELECT * FROM tasks ORDER BY updated_at DESC');
 const stmtTasksByStatus = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC');
@@ -68,6 +70,7 @@ export function insertTask(task: {
   routing_source?: TaskRoutingSource | null;
   last_agent_response_at?: number | null;
 }): Task {
+  assertProfileAcceptingWork(task.profile_name ?? DEFAULT_PROFILE_NAME);
   const id = uuid();
   const now = Date.now();
   const row = {
@@ -139,6 +142,11 @@ export function updateTask(
   id: string,
   fields: Partial<TaskUpdateFields>,
 ): Task | undefined {
+  const current = getTask(id);
+  if (!current || isProfileDeleting(current.profile_name ?? DEFAULT_PROFILE_NAME)) return undefined;
+  if (fields.profile_name !== undefined) {
+    assertProfileAcceptingWork(fields.profile_name ?? DEFAULT_PROFILE_NAME);
+  }
   const fieldKeys: string[] = [];
   const values: Record<string, unknown> = { id };
 
@@ -156,6 +164,8 @@ export function updateTask(
 }
 
 export function touchTask(id: string): void {
+  const task = getTask(id);
+  if (!task || isProfileDeleting(task.profile_name ?? DEFAULT_PROFILE_NAME)) return;
   stmtTouchTask.run(Date.now(), id);
 }
 
@@ -175,6 +185,10 @@ export function recordAgentResponse(taskId: string, at = Date.now(), context?: C
 }
 
 export function markTaskViewed(id: string): { task: Task | undefined; changed: boolean } {
+  const current = getTask(id);
+  if (!current || isProfileDeleting(current.profile_name ?? DEFAULT_PROFILE_NAME)) {
+    return { task: current, changed: false };
+  }
   const result = stmtMarkTaskViewed.run(id);
   return {
     task: getTask(id),
@@ -183,6 +197,8 @@ export function markTaskViewed(id: string): { task: Task | undefined; changed: b
 }
 
 export function deleteTask(id: string): boolean {
+  const task = getTask(id);
+  if (!task || isProfileDeleting(task.profile_name ?? DEFAULT_PROFILE_NAME)) return false;
   const result = stmtDeleteTask.run(id);
   return result.changes > 0;
 }

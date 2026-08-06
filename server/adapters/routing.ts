@@ -3,6 +3,7 @@ import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarge
 import type { AgentAdapter, AgentRunOptions, StreamEvent } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
 import type { AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
+import { acquireProfileWork } from '../profile-deletion.js';
 
 type LifecycleAdapter = AgentAdapter & {
   start?: () => Promise<void>;
@@ -41,6 +42,18 @@ export class ProfileAgentAdapter implements AgentAdapter {
     await Promise.all(workers.map(async (worker) => worker.stop?.()));
   }
 
+  async evictProfile(profileId: string): Promise<void> {
+    const worker = this.workers.get(profileId);
+    const starting = this.starting.get(profileId);
+    this.workers.delete(profileId);
+    this.starting.delete(profileId);
+    this.started.delete(profileId);
+
+    await starting?.catch(() => undefined);
+    this.started.delete(profileId);
+    await worker?.stop?.();
+  }
+
   private async namedAdapter(profileName: string): Promise<LifecycleAdapter> {
     const profile = this.registry.require(profileName);
     if (profile.isDefault) return this.defaultAdapter;
@@ -57,10 +70,12 @@ export class ProfileAgentAdapter implements AgentAdapter {
         start = worker.start()
           .then(() => { this.started.add(profile.id); })
           .catch((error) => {
-            this.workers.delete(profile.id);
+            if (this.workers.get(profile.id) === worker) this.workers.delete(profile.id);
             throw error;
           })
-          .finally(() => this.starting.delete(profile.id));
+          .finally(() => {
+            if (this.starting.get(profile.id) === start) this.starting.delete(profile.id);
+          });
         this.starting.set(profile.id, start);
       }
       await start;
@@ -126,8 +141,15 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return await (await this.adapterForSession(sessionId)).getSessionMetadata(sessionId);
   }
 
-  generateTitle(description: string) {
-    return this.defaultAdapter.generateTitle(description);
+  async generateTitle(description: string, profileId?: string | null) {
+    if (!profileId) return await this.defaultAdapter.generateTitle(description);
+
+    const release = acquireProfileWork(profileId);
+    try {
+      return await (await this.adapterForProfileId(profileId)).generateTitle(description);
+    } finally {
+      release();
+    }
   }
 
   async getDefaults(profileId?: string | null): Promise<AgentDefaults> {

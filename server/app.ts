@@ -23,6 +23,7 @@ import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
 import { createDrainRouter, maintenanceGuard } from './drain-http.js';
 import { createActiveRequestTracker } from './active-requests.js';
+import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsToProfile } from './profile-context.js';
 
 const app = express();
 
@@ -56,9 +57,20 @@ app.get('/api/version', (_req, res) => {
 });
 
 app.get('/api/events', (req, res) => {
-  initSSE(res);
-  addClient(res);
-  sendEvent(res, { type: 'task_runs_snapshot', runs: getRunStatuses() });
+  try {
+    const profile = requestProfile(req);
+    const runs = getRunStatuses().filter((run) => {
+      const task = getTask(run.taskId);
+      return task !== undefined && taskBelongsToProfile(task, profile);
+    });
+    initSSE(res);
+    addClient(res, profile);
+    sendEvent(res, { type: 'task_runs_snapshot', runs });
+  } catch (error) {
+    const profileError = sendProfileError(error);
+    if (profileError) return res.status(profileError.status).json(profileError.body);
+    res.status(500).json({ error: 'Could not resolve local Hermes profile' });
+  }
 });
 
 app.use('/api/files', express.json({ limit: '25mb' }), filesRouter);
@@ -67,6 +79,7 @@ app.use('/api/search', searchRouter);
 
 app.use(express.json());
 
+app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));
 app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));

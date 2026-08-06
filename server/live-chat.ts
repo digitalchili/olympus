@@ -298,7 +298,9 @@ export function subscribe(taskId: string, res: Response): void {
   taskSubscribers.add(res);
   res.on('close', () => {
     taskSubscribers.delete(res);
-    if (taskSubscribers.size === 0) subscribers.delete(taskId);
+    if (taskSubscribers.size === 0 && subscribers.get(taskId) === taskSubscribers) {
+      subscribers.delete(taskId);
+    }
   });
   startKeepalive();
 }
@@ -328,6 +330,30 @@ export function finishRun(taskId: string, ttlMs: number, runId: string): void {
   }, ttlMs);
   timer.unref();
   expiryTimers.set(taskId, timer);
+}
+
+export function discardRun(taskId: string): boolean {
+  clearExpiry(taskId);
+  return runs.delete(taskId);
+}
+
+export function closeSubscribersForTasks(taskIds: Iterable<string>): void {
+  for (const taskId of taskIds) {
+    const taskSubscribers = subscribers.get(taskId);
+    if (!taskSubscribers) continue;
+    subscribers.delete(taskId);
+    for (const subscriber of taskSubscribers) {
+      try {
+        subscriber.end();
+      } catch {
+        // The connection is already gone.
+      }
+    }
+  }
+  if (subscribers.size === 0 && keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
 }
 
 export function closeSubscribersForRestart(): void {

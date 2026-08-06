@@ -3,12 +3,15 @@ import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTa
 import { broadcast } from '../events.js';
 import { adapter } from '../app.js';
 import { TASK_STATUSES } from '../../shared/types.js';
-import type { TaskStatus } from '../../shared/types.js';
+import type { Task, TaskStatus } from '../../shared/types.js';
 import { validateProjectWorkdir } from '../project-folders.js';
 import { LocalProfileError } from '../local-profiles.js';
-import { requestProfile } from '../profile-context.js';
+import { requestProfile, requireTaskForProfile } from '../profile-context.js';
+import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
+import { cancelTaskRunForDeletion } from '../task-run-lifecycle.js';
 
 export const tasksRouter = Router();
+const requireTask = requireTaskForProfile(getTask);
 
 const LOW_INFORMATION_TITLES = new Set(['?', 'hi', 'hello', 'hey', 'yo']);
 
@@ -23,9 +26,8 @@ tasksRouter.get('/', (req, res) => {
   }
 });
 
-tasksRouter.get('/:id', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+tasksRouter.get('/:id', requireTask, (_req, res) => {
+  const task = res.locals.task as Task;
   res.json({ task });
 });
 
@@ -40,9 +42,9 @@ function generateTitle(text: string): string {
   return firstSentence.slice(0, 57) + '...';
 }
 
-async function enrichTaskTitle(taskId: string, fallbackTitle: string, description: string): Promise<void> {
+async function enrichTaskTitle(taskId: string, fallbackTitle: string, description: string, profileId: string): Promise<void> {
   try {
-    const { title } = await adapter.generateTitle(description);
+    const { title } = await adapter.generateTitle(description, profileId);
     const cleaned = title.trim();
     if (!cleaned || cleaned === fallbackTitle) return;
 
@@ -92,11 +94,12 @@ tasksRouter.post('/', async (req, res) => {
   res.status(201).json({ task });
 
   if (!userTitle) {
-    void enrichTaskTitle(task.id, resolvedTitle, description);
+    void enrichTaskTitle(task.id, resolvedTitle, description, profile.id);
   }
 });
 
-tasksRouter.patch('/:id', async (req, res) => {
+tasksRouter.patch('/:id', requireTask, async (req, res) => {
+  const task = res.locals.task as Task;
   const allowed = ['title', 'description', 'status'] as const;
   const fields: Record<string, unknown> = {};
   for (const key of allowed) {
@@ -114,33 +117,39 @@ tasksRouter.patch('/:id', async (req, res) => {
     return res.status(400).json({ error: `status must be one of: ${TASK_STATUSES.join(', ')}` });
   }
 
-  const updated = updateTask(req.params.id, fields);
+  const updated = updateTask(task.id, fields);
   if (!updated) return res.status(404).json({ error: 'Task not found' });
   broadcast({ type: 'task_updated', task: updated });
   res.json({ task: updated });
 });
 
-tasksRouter.post('/:id/viewed', (req, res) => {
-  const { task, changed } = markTaskViewed(req.params.id);
+tasksRouter.post('/:id/viewed', requireTask, (_req, res) => {
+  const requestedTask = res.locals.task as Task;
+  const { task, changed } = markTaskViewed(requestedTask.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (changed) broadcast({ type: 'task_updated', task });
   res.json({ task });
 });
 
-tasksRouter.delete('/:id', (req, res) => {
-  const deleted = deleteTask(req.params.id);
+tasksRouter.delete('/:id', requireTask, async (_req, res) => {
+  const task = res.locals.task as Task;
+  await cancelTaskRunForDeletion(task, adapter);
+  discardRun(task.id);
+  closeSubscribersForTasks([task.id]);
+  const deleted = deleteTask(task.id);
   if (!deleted) return res.status(404).json({ error: 'Task not found' });
-  broadcast({ type: 'task_deleted', taskId: req.params.id });
+  broadcast({ type: 'task_deleted', taskId: task.id }, task);
   res.json({ ok: true });
 });
 
-tasksRouter.post('/:id/move', (req, res) => {
+tasksRouter.post('/:id/move', requireTask, (req, res) => {
+  const task = res.locals.task as Task;
   const { status } = req.body;
   if (!TASK_STATUSES.includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${TASK_STATUSES.join(', ')}` });
   }
 
-  const updated = updateTask(req.params.id, { status });
+  const updated = updateTask(task.id, { status });
   if (!updated) return res.status(404).json({ error: 'Task not found' });
   broadcast({ type: 'task_updated', task: updated });
   res.json({ task: updated });

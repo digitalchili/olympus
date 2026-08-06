@@ -7,7 +7,7 @@ import multer from 'multer';
 import yauzl from 'yauzl';
 import { Router, type Request, type Response } from 'express';
 import type { ClawHubSkillSummary, ClawHubStats, SkillMeta } from '../../shared/types.js';
-import { requestProfile, sendProfileError } from '../profile-context.js';
+import { profileRequestGate, requestProfile, sendProfileError } from '../profile-context.js';
 
 const CLAWHUB_API_BASE = 'https://clawhub.ai/api/v1';
 const SIDECAR_FILENAME = '.olympus-dispatch-skill.json';
@@ -879,7 +879,7 @@ skillsRouter.get('/registry/:slug/scan', async (req, res) => {
   }
 });
 
-skillsRouter.post('/import', (req, res) => {
+skillsRouter.post('/import', profileRequestGate(), (req, res) => {
   skillImportUploadMiddleware(req, res, (error) => {
     if (error) {
       const status = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
@@ -891,7 +891,7 @@ skillsRouter.post('/import', (req, res) => {
   });
 });
 
-skillsRouter.post('/install', async (req, res) => {
+skillsRouter.post('/install', profileRequestGate(), async (req, res) => {
   try {
     const body = isRecord(req.body) ? req.body : {};
     const provider = stringValue(body.provider) || 'clawhub';
@@ -915,9 +915,10 @@ skillsRouter.post('/install', async (req, res) => {
   }
 });
 
-skillsRouter.delete('/:id', async (req, res) => {
+skillsRouter.delete('/:id', profileRequestGate(), async (req, res) => {
   try {
-    const skill = await deleteInstalledSkill(req.params.id, requestProfile(req).skillsDir);
+    const skillId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const skill = await deleteInstalledSkill(skillId, requestProfile(req).skillsDir);
     res.json({ ok: true, skill });
   } catch (error) {
     sendError(res, error, 'Failed to delete skill');

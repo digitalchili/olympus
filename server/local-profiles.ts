@@ -29,6 +29,7 @@ import {
   resolveMinionsLogsDir,
   resolveMinionsWorkspaceDir,
 } from './paths.js';
+import { isProfileDeleting } from './profile-deletion.js';
 
 const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const DISPLAY_KEYS = ['displayName', 'display_name', 'name', 'label'] as const;
@@ -176,6 +177,12 @@ function publicProfile(target: LocalProfileTarget): HermesProfile {
   return profile;
 }
 
+function assertProfileAvailable(profileId: string): void {
+  if (isProfileDeleting(profileId)) {
+    throw new LocalProfileError(409, `Hermes profile is being deleted: ${profileId}`, 'PROFILE_DELETING');
+  }
+}
+
 export function discoverLocalProfiles(hermesHome = resolveHermesHome(), includeInactive = true): HermesProfile[] {
   return discoverLocalProfileTargets(hermesHome)
     .filter((profile) => includeInactive || profile.active)
@@ -276,6 +283,7 @@ export class LocalProfileRegistry {
   requireActive(id: string): LocalProfileTarget {
     const target = this.require(id);
     if (!target.active) throw new LocalProfileError(409, `Hermes profile is inactive: ${id}`, 'INACTIVE_PROFILE');
+    assertProfileAvailable(target.id);
     return target;
   }
 
@@ -323,6 +331,7 @@ function optionalConfigString(value: unknown): string | null {
 }
 
 export async function readProfileSettings(target: LocalProfileTarget): Promise<HermesProfileSettings> {
+  assertProfileAvailable(target.id);
   const metadataPath = join(target.hermesHome, 'profile.yaml');
   const configPath = join(target.hermesHome, 'config.yaml');
   const soulPath = join(target.hermesHome, 'SOUL.md');
@@ -352,6 +361,7 @@ export async function readProfileSettings(target: LocalProfileTarget): Promise<H
 }
 
 export async function updateProfileSettings(target: LocalProfileTarget, value: unknown): Promise<HermesProfileSettings> {
+  assertProfileAvailable(target.id);
   const updates = recordValue(value);
   if (!updates) throw new LocalProfileError(400, 'Request body is required', 'INVALID_PROFILE_SETTINGS');
   const allowed = new Set(['displayName', 'description', 'model', 'provider', 'reasoningEffort', 'soul']);
@@ -411,6 +421,7 @@ export async function createLocalProfile(registry: LocalProfileRegistry, value: 
   if (unknown.length) throw new LocalProfileError(400, `Unsupported profile setting: ${unknown[0]}`, 'INVALID_PROFILE_SETTINGS');
 
   const id = validatedProfileId(input.id);
+  assertProfileAvailable(id);
   const displayName = validatedText(input.displayName, 'displayName', MAX_DISPLAY_NAME);
   if (!displayName) throw new LocalProfileError(400, 'displayName is required', 'INVALID_PROFILE_SETTINGS');
   const description = validatedText(input.description ?? '', 'description', MAX_DESCRIPTION);
@@ -466,6 +477,7 @@ export async function setLocalProfileActive(
   currentProfileId: string,
 ): Promise<LocalProfileTarget> {
   const target = registry.require(id);
+  assertProfileAvailable(target.id);
   if (!active && target.isDefault) {
     throw new LocalProfileError(409, 'The default profile cannot be deactivated', 'PROTECTED_PROFILE');
   }
@@ -505,14 +517,9 @@ export async function deleteLocalProfile(
   currentProfileId: string,
   accompanyingData?: unknown,
 ): Promise<{ backupDir: string }> {
-  const target = registry.require(id);
-  if (target.isDefault) throw new LocalProfileError(409, 'The default profile cannot be deleted', 'PROTECTED_PROFILE');
-  if (target.id === currentProfileId) throw new LocalProfileError(409, 'The current profile cannot be deleted', 'CURRENT_PROFILE');
-  if (confirmation !== target.id) {
-    throw new LocalProfileError(400, `Type the immutable profile ID “${target.id}” to confirm deletion`, 'PROFILE_ID_CONFIRMATION_REQUIRED');
-  }
-
+  const target = validateLocalProfileDeletion(registry, id, confirmation, currentProfileId);
   const resolvedTarget = await safeResolvedProfileRoot(registry, target);
+
   await appendAudit(join(resolvedTarget, '.olympus-dispatch-audit.jsonl'), {
     action: 'profile.delete.requested',
     profileId: target.id,
@@ -535,4 +542,19 @@ export async function deleteLocalProfile(
   });
   await rm(resolvedTarget, { recursive: true, force: false });
   return { backupDir };
+}
+
+export function validateLocalProfileDeletion(
+  registry: LocalProfileRegistry,
+  id: string,
+  confirmation: unknown,
+  currentProfileId: string,
+): LocalProfileTarget {
+  const target = registry.require(id);
+  if (target.isDefault) throw new LocalProfileError(409, 'The default profile cannot be deleted', 'PROTECTED_PROFILE');
+  if (target.id === currentProfileId) throw new LocalProfileError(409, 'The current profile cannot be deleted', 'CURRENT_PROFILE');
+  if (confirmation !== target.id) {
+    throw new LocalProfileError(400, `Type the immutable profile ID “${target.id}” to confirm deletion`, 'PROFILE_ID_CONFIRMATION_REQUIRED');
+  }
+  return target;
 }

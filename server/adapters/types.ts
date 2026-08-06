@@ -67,7 +67,7 @@ export interface AgentAdapter {
 
   getSessionMetadata(sessionId: string): Promise<SessionMetadata | null>;
 
-  generateTitle(description: string): Promise<{ title: string }>;
+  generateTitle(description: string, profileId?: string | null): Promise<{ title: string }>;
 
   compressSession(
     sessionId: string,
@@ -95,21 +95,21 @@ export interface AgentAdapter {
 
   evaluateGoal(sessionId: string, responseText: string): Promise<GoalDecision>;
 
-  listScheduledTasks(includeDisabled?: boolean, limit?: number): Promise<ScheduledTask[]>;
+  listScheduledTasks(includeDisabled?: boolean, limit?: number, profileId?: string | null): Promise<ScheduledTask[]>;
 
-  getScheduledTask(scheduledTaskId: string): Promise<ScheduledTask | null>;
+  getScheduledTask(scheduledTaskId: string, profileId?: string | null): Promise<ScheduledTask | null>;
 
-  createScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;
+  createScheduledTask(input: ScheduledTaskInput, profileId?: string | null): Promise<ScheduledTask>;
 
-  updateScheduledTask(scheduledTaskId: string, updates: Partial<ScheduledTaskInput>): Promise<ScheduledTask | null>;
+  updateScheduledTask(scheduledTaskId: string, updates: Partial<ScheduledTaskInput>, profileId?: string | null): Promise<ScheduledTask | null>;
 
-  pauseScheduledTask(scheduledTaskId: string, reason?: string): Promise<ScheduledTask | null>;
+  pauseScheduledTask(scheduledTaskId: string, reason?: string, profileId?: string | null): Promise<ScheduledTask | null>;
 
-  resumeScheduledTask(scheduledTaskId: string): Promise<ScheduledTask | null>;
+  resumeScheduledTask(scheduledTaskId: string, profileId?: string | null): Promise<ScheduledTask | null>;
 
-  runScheduledTask(scheduledTaskId: string): Promise<ScheduledTask | null>;
+  runScheduledTask(scheduledTaskId: string, profileId?: string | null): Promise<ScheduledTask | null>;
 
-  removeScheduledTask(scheduledTaskId: string): Promise<boolean>;
+  removeScheduledTask(scheduledTaskId: string, profileId?: string | null): Promise<boolean>;
 
-  tickScheduledTasks(): Promise<number>;
+  tickScheduledTasks(profileId?: string | null): Promise<number>;
 }

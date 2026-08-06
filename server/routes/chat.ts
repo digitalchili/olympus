@@ -45,20 +45,31 @@ import {
   validateCollaborationInvites,
 } from '../collaboration.js';
 import { LocalProfileError } from '../local-profiles.js';
-import { requestProfile } from '../profile-context.js';
+import { acquireProfileWork } from '../profile-deletion.js';
+import { requireTaskForProfile } from '../profile-context.js';
+import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, MINIONS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type GoalStateSnapshot, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, MINIONS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
+chatRouter.use('/:id', requireTaskForProfile(getTask));
 
-type ActiveCollaboration = {
-  runId: string;
-  phase: CollaborationContributionPhase | 'synthesizing';
-  cancelled: boolean;
-  settled: boolean;
-};
+function taskProfileId(task: Task): string {
+  return task.profile_name ?? DEFAULT_PROFILE_NAME;
+}
 
-const activeCollaborations = new Map<string, ActiveCollaboration>();
+function releaseProfileWorkWhenSettled(taskId: string, work: Promise<void>, release: () => void): void {
+  void trackTaskRun(taskId, work).then(release, release);
+}
+
+async function withProfileWork<T>(profileId: string, work: () => Promise<T>): Promise<T> {
+  const release = acquireProfileWork(profileId);
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
 
 function sendAdapterError(res: Response, error: unknown, fallback: string): void {
   res.status(503).json({ error: toErrorMessage(error, fallback) });
@@ -67,12 +78,6 @@ function sendAdapterError(res: Response, error: unknown, fallback: string): void
 function hasNoSession(task: Task): boolean {
   if (task.last_agent_response_at !== null) return false;
   return getRunStatus(task.id)?.status !== 'streaming';
-}
-
-function taskBelongsToProfile(task: Task, profileId: string, isDefault: boolean): boolean {
-  return isDefault
-    ? task.profile_name === null || task.profile_name === profileId
-    : task.profile_name === profileId;
 }
 
 function messagePageQuery(query: Request['query']): { limit: number; before: string | null } {
@@ -115,14 +120,9 @@ function completeTaskRun(
 }
 
 chatRouter.get('/:id/messages', async (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
   let pageQuery;
   try {
-    const profile = requestProfile(req);
-    if (!taskBelongsToProfile(task, profile.id, profile.isDefault)) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
     pageQuery = messagePageQuery(req.query);
   } catch (error) {
     if (error instanceof LocalProfileError) {
@@ -146,14 +146,12 @@ chatRouter.get('/:id/messages', async (req, res) => {
 });
 
 chatRouter.get('/:id/collaborations', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
   res.json({ runs: listCollaborationRuns(task.id) });
 });
 
 chatRouter.get('/:id/session', async (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
   if (hasNoSession(task)) return res.json({ session: null });
 
   try {
@@ -351,12 +349,12 @@ async function collectCollaborationPhase(
         : reviewContributorMessage(collaboration.question, contribution.profile_id, proposals)),
       options: { systemMessage: contributorSystemMessage(runTask.workdir, phase) },
     })),
-    async (invocation) => adapter.chatForProfile(
+    async (invocation) => withProfileWork(invocation.profileId, () => adapter.chatForProfile(
       invocation.profileId,
       invocation.sessionId,
       invocation.message,
       invocation.options,
-    ),
+    )),
     (result) => {
       if (active.cancelled) return;
       const text = result.text?.trim();
@@ -532,9 +530,38 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
   }
 }
 
+function beginGoalRunOperation(
+  runTask: Task,
+  sessionId: string,
+  content: string,
+): {
+  setup: Promise<ReturnType<typeof startGoalRun>>;
+  work: Promise<void>;
+} {
+  let resolveSetup!: (started: ReturnType<typeof startGoalRun>) => void;
+  let rejectSetup!: (error: unknown) => void;
+  const setup = new Promise<ReturnType<typeof startGoalRun>>((resolve, reject) => {
+    resolveSetup = resolve;
+    rejectSetup = reject;
+  });
+  const work = (async () => {
+    try {
+      const goalState = await adapter.setGoal(sessionId, content);
+      const started = startGoalRun(runTask.id, sessionId, goalState);
+      broadcast({ type: 'task_run_updated', run: started.state });
+      broadcastLive(runTask.id, { type: 'snapshot', run: started.snapshot });
+      resolveSetup(started);
+      await consumeGoalRun(runTask, sessionId, content, started.snapshot.runId);
+    } catch (error) {
+      rejectSetup(error);
+      throw error;
+    }
+  })();
+  return { setup, work };
+}
+
 chatRouter.post('/:id/messages', async (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
 
   const { content } = req.body;
   if (!content || typeof content !== 'string') {
@@ -594,62 +621,82 @@ chatRouter.post('/:id/messages', async (req, res) => {
   const sessionId = runTask.id;
 
   if (mode === 'goal') {
-    let goalState: GoalStateSnapshot;
+    const releaseRunWork = acquireProfileWork(taskProfileId(runTask));
+    let handedOff = false;
     try {
-      goalState = await adapter.setGoal(sessionId, content);
-    } catch (error) {
-      return sendAdapterError(res, error, 'Could not set Hermes goal');
-    }
+      const operation = beginGoalRunOperation(runTask, sessionId, content);
+      releaseProfileWorkWhenSettled(runTask.id, operation.work, releaseRunWork);
+      handedOff = true;
 
-    const { snapshot, state } = startGoalRun(runTask.id, sessionId, goalState);
+      let started: Awaited<typeof operation.setup>;
+      try {
+        started = await operation.setup;
+      } catch (error) {
+        return sendAdapterError(res, error, 'Could not set Hermes goal');
+      }
+
+      return res.status(202).json({ runId: started.snapshot.runId });
+    } finally {
+      if (!handedOff) releaseRunWork();
+    }
+  }
+
+  const releaseRunWork = acquireProfileWork(taskProfileId(runTask));
+  let handedOff = false;
+  try {
+    const { snapshot, state } = startRun(runTask.id, sessionId, content);
     broadcast({ type: 'task_run_updated', run: state });
     broadcastLive(runTask.id, { type: 'snapshot', run: snapshot });
-    void consumeGoalRun(runTask, sessionId, content, snapshot.runId);
 
-    return res.status(202).json({ runId: snapshot.runId });
-  }
-
-  const { snapshot, state } = startRun(runTask.id, sessionId, content);
-  broadcast({ type: 'task_run_updated', run: state });
-  broadcastLive(runTask.id, { type: 'snapshot', run: snapshot });
-
-  const hasCollaboration = collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited;
-  if (hasCollaboration) {
-    let collaboration;
-    try {
-      collaboration = createCollaborationRun({
-        taskId: runTask.id,
-        question: content,
-        ownerProfileId: runTask.profile_name ?? 'default',
-        ownerInvited: collaborationInvites.ownerInvited,
-        participants: collaborationInvites.participants.map((profile) => ({ id: profile.id, label: profile.label })),
-      });
-    } catch (error) {
-      const message = toErrorMessage(error, 'Could not start collaboration');
-      const event: StreamEvent = { type: 'error', error: message };
-      applyEvent(runTask.id, event);
-      broadcastLive(runTask.id, event);
-      settleRun(runTask.id, snapshot.runId, null);
-      return res.status(500).json({ error: message });
+    const hasCollaboration = collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited;
+    if (hasCollaboration) {
+      let collaboration;
+      try {
+        collaboration = createCollaborationRun({
+          taskId: runTask.id,
+          question: content,
+          ownerProfileId: runTask.profile_name ?? 'default',
+          ownerInvited: collaborationInvites.ownerInvited,
+          participants: collaborationInvites.participants.map((profile) => ({ id: profile.id, label: profile.label })),
+        });
+      } catch (error) {
+        const message = toErrorMessage(error, 'Could not start collaboration');
+        const event: StreamEvent = { type: 'error', error: message };
+        applyEvent(runTask.id, event);
+        broadcastLive(runTask.id, event);
+        settleRun(runTask.id, snapshot.runId, null);
+        return res.status(500).json({ error: message });
+      }
+      const active: ActiveCollaboration = {
+        runId: collaboration.id,
+        phase: 'proposal',
+        cancelled: false,
+        settled: false,
+      };
+      activeCollaborations.set(runTask.id, active);
+      releaseProfileWorkWhenSettled(
+        runTask.id,
+        consumeCollaborationRun(runTask, content, snapshot.runId, collaboration.id, active),
+        releaseRunWork,
+      );
+      handedOff = true;
+      return res.status(202).json({ runId: snapshot.runId, collaborationRunId: collaboration.id });
     }
-    const active: ActiveCollaboration = {
-      runId: collaboration.id,
-      phase: 'proposal',
-      cancelled: false,
-      settled: false,
-    };
-    activeCollaborations.set(runTask.id, active);
-    void consumeCollaborationRun(runTask, content, snapshot.runId, collaboration.id, active);
-    return res.status(202).json({ runId: snapshot.runId, collaborationRunId: collaboration.id });
-  }
 
-  void consumeChatRun(runTask, sessionId, content, snapshot.runId);
-  res.status(202).json({ runId: snapshot.runId });
+    releaseProfileWorkWhenSettled(
+      runTask.id,
+      consumeChatRun(runTask, sessionId, content, snapshot.runId),
+      releaseRunWork,
+    );
+    handedOff = true;
+    return res.status(202).json({ runId: snapshot.runId });
+  } finally {
+    if (!handedOff) releaseRunWork();
+  }
 });
 
 chatRouter.post('/:id/interrupt', async (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
 
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim()
     ? req.body.reason.trim()
@@ -699,8 +746,7 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
 });
 
 chatRouter.post('/:id/steer', async (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
 
   const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
   if (!content) return res.status(400).json({ error: 'content is required' });
@@ -726,8 +772,7 @@ chatRouter.post('/:id/steer', async (req, res) => {
 });
 
 chatRouter.post('/:id/compact', async (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
 
   const activeRun = getRunStatus(task.id);
   if (isTaskRunActive(activeRun)) {
@@ -744,32 +789,33 @@ chatRouter.post('/:id/compact', async (req, res) => {
   broadcast({ type: 'task_run_updated', run: state });
   broadcastLive(task.id, { type: 'snapshot', run: snapshot });
 
-  try {
-    const result: CompactResult = await adapter.compressSession(task.id, {
-      focusTopic,
-      currentTokens,
-      systemMessage: taskSystemMessage(task),
-      settings: taskRunSettings(task),
-    });
+  await trackTaskRun(task.id, (async () => {
+    try {
+      const result: CompactResult = await adapter.compressSession(task.id, {
+        focusTopic,
+        currentTokens,
+        systemMessage: taskSystemMessage(task),
+        settings: taskRunSettings(task),
+      });
 
-    if (result.context) {
-      const updated = recordAgentResponse(task.id, task.last_agent_response_at ?? Date.now(), result.context);
-      if (updated) broadcast({ type: 'task_updated', task: updated });
+      if (result.context) {
+        const updated = recordAgentResponse(task.id, task.last_agent_response_at ?? Date.now(), result.context);
+        if (updated) broadcast({ type: 'task_updated', task: updated });
+      }
+
+      completeTaskRun(task.id, snapshot.runId, 'done', DONE_SNAPSHOT_TTL_MS, { context: result.context });
+
+      res.json(result);
+    } catch (error) {
+      const message = toErrorMessage(error, 'Compaction failed');
+      completeTaskRun(task.id, snapshot.runId, 'error', ERROR_SNAPSHOT_TTL_MS, { error: message });
+      res.status(503).json({ error: message });
     }
-
-    completeTaskRun(task.id, snapshot.runId, 'done', DONE_SNAPSHOT_TTL_MS, { context: result.context });
-
-    res.json(result);
-  } catch (error) {
-    const message = toErrorMessage(error, 'Compaction failed');
-    completeTaskRun(task.id, snapshot.runId, 'error', ERROR_SNAPSHOT_TTL_MS, { error: message });
-    res.status(503).json({ error: message });
-  }
+  })());
 });
 
 chatRouter.get('/:id/live', (req, res) => {
-  const task = getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const task = res.locals.task as Task;
 
   initSSE(res);
   subscribe(task.id, res);

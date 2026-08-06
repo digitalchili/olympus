@@ -61,7 +61,8 @@ try {
     registry: new LocalProfileRegistry(hermesHome),
     createAdapter(profile) {
       created.push({ id: profile.id, hermesHome: profile.hermesHome });
-      return fakeAdapter(profile.id, lifecycle);
+      const generation = created.filter((item) => item.id === profile.id).length;
+      return fakeAdapter(generation === 1 ? profile.id : `${profile.id}-${generation}`, lifecycle);
     },
     taskProfile(taskId) {
       return taskProfiles.get(taskId) ?? null;
@@ -85,16 +86,25 @@ try {
   assert.equal((await adapter.getMessagePage('writer-task', 'writer-task', { limit: 40, before: 'older' })).messages[0]?.content, 'writer');
   assert.equal(await adapter.interruptChatForProfile('writer', 'collaboration-session', 'Stopped by user'), true);
 
+  await adapter.evictProfile('writer');
+  assert.equal((await adapter.chat('writer-task', 'fresh state')).text, 'writer-2');
+  assert.deepEqual(created, [
+    { id: 'writer', hermesHome: join(hermesHome, 'profiles', 'writer') },
+    { id: 'writer', hermesHome: join(hermesHome, 'profiles', 'writer') },
+  ], 'evicting a named worker must recreate it instead of reusing cached state');
+
   await assert.rejects(() => adapter.chat('missing-task', 'hello'), /unknown local Hermes profile/i);
-  assert.equal(created.length, 1);
+  assert.equal(created.length, 2);
 
   await adapter.stop();
   assert.deepEqual(lifecycle, [
     'start:default',
     'start:writer',
     'interrupt:writer:collaboration-session',
-    'stop:default',
     'stop:writer',
+    'start:writer-2',
+    'stop:default',
+    'stop:writer-2',
   ]);
 } finally {
   await rm(hermesHome, { recursive: true, force: true });

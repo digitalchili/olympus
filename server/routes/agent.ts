@@ -3,7 +3,7 @@ import { getTask } from '../db/queries.js';
 import { isRecord, toErrorMessage } from '../errors.js';
 import { taskRunSettings } from '../agent-settings.js';
 import { REASONING_EFFORTS, DEFAULT_PROFILE_NAME } from '../../shared/types.js';
-import { requestProfile } from '../profile-context.js';
+import { profileRequestGate, requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { LocalProfileError } from '../local-profiles.js';
 import type { AgentDefaults, Task, TaskAgentSettings, ReasoningEffort } from '../../shared/types.js';
 
@@ -59,7 +59,7 @@ export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
     }
   });
 
-  router.patch('/defaults', async (req, res) => {
+  router.patch('/defaults', profileRequestGate(), async (req, res) => {
     if (!isRecord(req.body)) {
       return res.status(400).json({ error: 'Request body is required' });
     }
@@ -113,10 +113,10 @@ export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
 
 export function createTaskAgentSettingsRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
+  const requireTask = requireTaskForProfile(getTask);
 
-  router.get('/:id/agent-settings', async (req, res) => {
-    const task = getTask(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+  router.get('/:id/agent-settings', requireTask, async (_req, res) => {
+    const task = res.locals.task as Task;
 
     const defaults = await defaultsForSettings(adapter, task.profile_name ?? DEFAULT_PROFILE_NAME);
     res.json(buildTaskSettings(task, defaults));
