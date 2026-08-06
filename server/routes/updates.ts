@@ -1,3 +1,4 @@
+import { accessSync, constants, statSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { isAbsolute } from 'node:path';
 import { Router } from 'express';
@@ -45,7 +46,7 @@ type UpdateHook =
   | { kind: 'socket'; socketPath: string }
   | { kind: 'url'; url: string };
 
-function getUpdateHook(): UpdateHook | null {
+function getConfiguredUpdateHook(): UpdateHook | null {
   const socketPath = process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET?.trim();
   if (socketPath && isAbsolute(socketPath)) return { kind: 'socket', socketPath };
 
@@ -57,6 +58,19 @@ function getUpdateHook(): UpdateHook | null {
     return url.protocol === 'http:' && localHosts.has(url.hostname)
       ? { kind: 'url', url: url.toString() }
       : null;
+  } catch {
+    return null;
+  }
+}
+
+function getUpdateHook(): UpdateHook | null {
+  const hook = getConfiguredUpdateHook();
+  if (!hook || hook.kind === 'url') return hook;
+
+  try {
+    if (!statSync(hook.socketPath).isSocket()) return null;
+    accessSync(hook.socketPath, constants.R_OK | constants.W_OK);
+    return hook;
   } catch {
     return null;
   }
@@ -106,7 +120,9 @@ async function postUpdateHook(hook: UpdateHook, body: string, token: string | un
 }
 
 async function fetchStatus(force = false): Promise<UpdateStatus> {
-  if (!force && cachedStatus && Date.now() - cachedAt < CACHE_TTL_MS) return cachedStatus;
+  if (!force && cachedStatus && Date.now() - cachedAt < CACHE_TTL_MS) {
+    return { ...cachedStatus, updateConfigured: Boolean(getUpdateHook()) };
+  }
 
   const { version: currentVersion } = getAppVersion();
   const repository = getRepository();
@@ -163,7 +179,7 @@ export function createUpdatesRouter(): Router {
   router.post('/apply', async (_req, res) => {
     const updateHook = getUpdateHook();
     if (!updateHook) {
-      return res.status(503).json({ error: 'No installation-local update hook is configured.' });
+      return res.status(503).json({ error: 'No installation-local update hook is available.' });
     }
     const status = await fetchStatus(true);
     if (!status.updateAvailable) {

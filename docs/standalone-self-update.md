@@ -62,6 +62,8 @@ Set:
 - the generated local token;
 - a root-only backup directory (the default is `/var/lib/olympus-dispatch-updater/backups`).
 
+The supplied systemd unit creates persistent state under `/var/lib/olympus-dispatch-updater`. Keep the socket in its `socket/` directory. Unlike a systemd `RuntimeDirectory`, this host directory is not deleted and recreated when the runner restarts, so Docker's bind mount continues to point at the live socket directory.
+
 Validate the update command without changing Docker state:
 
 ```bash
@@ -84,7 +86,7 @@ services:
       OLYMPUS_DISPATCH_UPDATE_SOCKET: /run/olympus-dispatch-updater/update.sock
       OLYMPUS_DISPATCH_UPDATE_TOKEN: ${OLYMPUS_DISPATCH_UPDATE_TOKEN}
     volumes:
-      - /run/olympus-dispatch-updater:/run/olympus-dispatch-updater
+      - /var/lib/olympus-dispatch-updater/socket:/run/olympus-dispatch-updater
 ```
 
 Put the two application-side secrets in its existing protected `.env` (mode `0600`). Do not mount `/var/run/docker.sock` into Olympus.
@@ -95,8 +97,8 @@ Start the runner before reconciling the Compose service so the bind-mount source
 sudo systemctl daemon-reload
 sudo systemctl enable --now olympus-dispatch-updater.service
 sudo systemctl status --no-pager olympus-dispatch-updater.service
-sudo test -S /run/olympus-dispatch-updater/update.sock
-curl --unix-socket /run/olympus-dispatch-updater/update.sock \
+sudo test -S /var/lib/olympus-dispatch-updater/socket/update.sock
+curl --unix-socket /var/lib/olympus-dispatch-updater/socket/update.sock \
   -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost/update
 ```
 

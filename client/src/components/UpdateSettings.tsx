@@ -31,7 +31,7 @@ export function UpdateSettingsCard({
   const updateTitle = !status
     ? 'Check for updates first'
     : !status.updateConfigured
-      ? 'No installation-local update hook is configured'
+      ? 'The installation-local update hook is unavailable'
       : !status.updateAvailable
         ? 'No update is available'
         : 'Update this installation';
@@ -85,7 +85,7 @@ export function UpdateSettingsCard({
           </p>
         ) : !status?.updateConfigured && status ? (
           <p className="text-amber-600 dark:text-amber-400">
-            Updating here is disabled because no installation-local update hook is configured.
+            Updating here is disabled because the installation-local update hook is unavailable.
           </p>
         ) : status?.updateAvailable ? (
           <p className="text-zinc-600 dark:text-zinc-300">A newer release is available.</p>

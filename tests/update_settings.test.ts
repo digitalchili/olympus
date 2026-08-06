@@ -43,6 +43,7 @@ const unconfiguredMarkup = renderToStaticMarkup(createElement(UpdateSettingsCard
   onRequestUpdate() {},
 }));
 assert.match(unconfiguredMarkup, /installation-local update hook/);
+assert.match(unconfiguredMarkup, /unavailable/i);
 assert.match(unconfiguredMarkup, /data-update-action="true"[^>]* disabled=""/);
 
 const dialogMarkup = renderToStaticMarkup(createElement(UpdateConfirmDialog, {
