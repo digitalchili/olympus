@@ -1,9 +1,11 @@
 import { create } from 'zustand';
-import type { Task, TaskRunState, TaskStatus } from '@shared/types';
+import type { DelegationRun, Task, TaskRunState, TaskStatus } from '@shared/types';
+import { applyDelegationRunUpdate } from './delegationActivity';
 
 interface AppState {
   tasks: Task[];
   taskRuns: Map<string, TaskRunState>;
+  delegationRuns: Map<string, DelegationRun[]>;
   tasksLoaded: boolean;
   sidebarCollapsed: boolean;
   installationName: string;
@@ -13,6 +15,8 @@ interface AppState {
   removeTask: (taskId: string) => void;
   setTaskRuns: (runs: TaskRunState[]) => void;
   setTaskRun: (run: TaskRunState) => void;
+  setDelegationRuns: (runs: DelegationRun[]) => void;
+  setDelegationRun: (run: DelegationRun) => void;
   toggleSidebar: () => void;
   setInstallationName: (name: string) => void;
 }
@@ -40,6 +44,7 @@ function taskRunEqual(a: TaskRunState | undefined, b: TaskRunState): boolean {
 export const useStore = create<AppState>((set) => ({
   tasks: [],
   taskRuns: new Map<string, TaskRunState>(),
+  delegationRuns: new Map<string, DelegationRun[]>(),
   tasksLoaded: false,
   sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
   installationName: 'Hermes',
@@ -60,10 +65,12 @@ export const useStore = create<AppState>((set) => ({
   removeTask: (taskId) =>
     set((state) => {
       const tasks = state.tasks.filter((t) => t.id !== taskId);
-      if (!state.taskRuns.has(taskId)) return { tasks };
+      if (!state.taskRuns.has(taskId) && !state.delegationRuns.has(taskId)) return { tasks };
       const taskRuns = new Map(state.taskRuns);
       taskRuns.delete(taskId);
-      return { tasks, taskRuns };
+      const delegationRuns = new Map(state.delegationRuns);
+      delegationRuns.delete(taskId);
+      return { tasks, taskRuns, delegationRuns };
     }),
 
   setTaskRuns: (runs) =>
@@ -93,6 +100,25 @@ export const useStore = create<AppState>((set) => ({
       if (shouldStore) taskRuns.set(run.taskId, run);
       else taskRuns.delete(run.taskId);
       return { taskRuns };
+    }),
+
+  setDelegationRuns: (runs) =>
+    set(() => {
+      const grouped = new Map<string, DelegationRun[]>();
+      for (const run of runs) {
+        grouped.set(run.task_id, [...(grouped.get(run.task_id) ?? []), run]);
+      }
+      return { delegationRuns: grouped };
+    }),
+
+  setDelegationRun: (run) =>
+    set((state) => {
+      const current = state.delegationRuns.get(run.task_id) ?? [];
+      const next = applyDelegationRunUpdate(current, run);
+      if (next === current) return state;
+      const delegationRuns = new Map(state.delegationRuns);
+      delegationRuns.set(run.task_id, next);
+      return { delegationRuns };
     }),
 
   toggleSidebar: () =>

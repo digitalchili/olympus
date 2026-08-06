@@ -1,5 +1,6 @@
 import type {
   AgentRunSettings,
+  AdapterDelegationEvent,
   CompactResult,
   ContextUsage,
   GoalDecision,
@@ -56,6 +57,10 @@ export interface AgentAdapter {
   steerChat(sessionId: string, message: string): Promise<boolean>;
 
   healthCheck(): Promise<boolean>;
+
+  onDelegationEvent?(listener: (event: AdapterDelegationEvent) => void): () => void;
+
+  onDelegationReset?(listener: (profileId?: string) => void): () => void;
 
   getMessages(sessionId: string, taskId: string): Promise<TaskMessage[]>;
 

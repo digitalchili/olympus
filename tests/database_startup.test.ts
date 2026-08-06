@@ -15,6 +15,7 @@ assert.equal(String(journalMode).toLowerCase(), 'wal');
 assert.doesNotThrow(() => db.prepare('SELECT id FROM tasks LIMIT 1').all());
 assert.doesNotThrow(() => db.prepare('SELECT id FROM channel_threads LIMIT 1').all());
 assert.doesNotThrow(() => db.prepare('SELECT id FROM channel_messages LIMIT 1').all());
+assert.doesNotThrow(() => db.prepare('SELECT id FROM delegation_runs LIMIT 1').all());
 db.close();
 
 console.log('Database startup tests passed');

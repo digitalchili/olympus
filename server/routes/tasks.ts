@@ -9,6 +9,7 @@ import { LocalProfileError } from '../local-profiles.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
 import { cancelTaskRunForDeletion } from '../task-run-lifecycle.js';
+import { listDelegationRuns } from '../db/delegations.js';
 
 export const tasksRouter = Router();
 const requireTask = requireTaskForProfile(getTask);
@@ -29,6 +30,12 @@ tasksRouter.get('/', (req, res) => {
 tasksRouter.get('/:id', requireTask, (_req, res) => {
   const task = res.locals.task as Task;
   res.json({ task });
+});
+
+tasksRouter.get('/:id/delegations', requireTask, (req, res) => {
+  const task = res.locals.task as Task;
+  const profile = requestProfile(req);
+  res.json({ runs: listDelegationRuns(task.id, profile.id) });
 });
 
 function generateTitle(text: string): string {

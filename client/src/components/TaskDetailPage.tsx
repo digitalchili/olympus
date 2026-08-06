@@ -159,7 +159,11 @@ export function TaskDetailPage() {
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !isEditableTarget(e.target)) navigate('/');
+      if (
+        e.key === 'Escape'
+        && !isEditableTarget(e.target)
+        && !document.querySelector('[role="dialog"][aria-modal="true"]')
+      ) navigate('/');
       if (e.key === 'd' && e.metaKey && e.shiftKey && task && task.status !== 'done') {
         e.preventDefault();
         handleStatusChange('done');

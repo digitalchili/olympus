@@ -275,12 +275,84 @@ export interface TaskRunState {
   goal?: GoalStateSnapshot | null;
 }
 
+export type DelegationRunStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'stalled'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'unknown';
+
+/** A deliberately narrow, visibility-only projection of one delegated worker. */
+export interface DelegationRun {
+  id: string;
+  profile_name: string;
+  task_id: string;
+  parent_session_id: string;
+  delegation_id: string;
+  child_id: string;
+  child_session_id: string | null;
+  parent_child_id: string | null;
+  child_index: number;
+  child_count: number;
+  status: DelegationRunStatus;
+  current_action: string | null;
+  model: string | null;
+  tool_count: number;
+  api_calls: number;
+  duration_seconds: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number | null;
+  files_touched: number;
+  created_at: number;
+  started_at: number | null;
+  last_activity_at: number;
+  completed_at: number | null;
+  updated_at: number;
+}
+
+export interface DelegationWorkerEvent {
+  schema: 'olympus.delegation.event.v1';
+  delegationId: string;
+  childId: string;
+  parentSessionId: string;
+  childSessionId: string | null;
+  parentChildId: string | null;
+  childIndex: number;
+  childCount: number;
+  status: DelegationRunStatus;
+  currentAction: string | null;
+  model: string | null;
+  toolCount: number;
+  apiCalls: number;
+  durationSeconds: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  costUsd: number | null;
+  filesTouched: number;
+}
+
+export interface AdapterDelegationEvent {
+  profileId?: string;
+  taskId: string;
+  event: DelegationWorkerEvent;
+}
+
 export type BoardEvent =
   | { type: 'task_created'; task: Task }
   | { type: 'task_updated'; task: Task }
   | { type: 'task_deleted'; taskId: string }
   | { type: 'task_runs_snapshot'; runs: TaskRunState[] }
-  | { type: 'task_run_updated'; run: TaskRunState };
+  | { type: 'task_run_updated'; run: TaskRunState }
+  | { type: 'delegations_snapshot'; runs: DelegationRun[] }
+  | { type: 'delegation_run_updated'; run: DelegationRun }
+  | { type: 'maintenance_reconnect' };
 
 export type LiveChatMessage = TaskMessage & { tools?: ToolProgressEvent[] };
 

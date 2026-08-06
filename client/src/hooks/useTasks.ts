@@ -11,12 +11,15 @@ export function useTasks() {
   const removeTask = useStore((s) => s.removeTask);
   const setTaskRuns = useStore((s) => s.setTaskRuns);
   const setTaskRun = useStore((s) => s.setTaskRun);
+  const setDelegationRuns = useStore((s) => s.setDelegationRuns);
+  const setDelegationRun = useStore((s) => s.setDelegationRun);
   const retryRef = useRef(0);
 
   useEffect(() => {
     setTasks([]);
+    setDelegationRuns([]);
     fetchTasks().then((res) => setTasks(res.tasks)).catch(console.error);
-  }, [setTasks]);
+  }, [setTasks, setDelegationRuns]);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -51,6 +54,10 @@ export function useTasks() {
             setTaskRuns(event.runs);
           } else if (event.type === 'task_run_updated') {
             setTaskRun(event.run);
+          } else if (event.type === 'delegations_snapshot') {
+            setDelegationRuns(event.runs);
+          } else if (event.type === 'delegation_run_updated') {
+            setDelegationRun(event.run);
           }
         } catch {}
       };
@@ -70,5 +77,5 @@ export function useTasks() {
       clearTimeout(retryTimeout);
       es?.close();
     };
-  }, [setTasks, upsertTask, removeTask, setTaskRuns, setTaskRun]);
+  }, [setTasks, upsertTask, removeTask, setTaskRuns, setTaskRun, setDelegationRuns, setDelegationRun]);
 }

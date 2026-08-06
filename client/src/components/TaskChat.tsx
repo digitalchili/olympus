@@ -25,6 +25,7 @@ import { ProfileInviteControls } from './ProfileInviteControls';
 import { useProfile } from '../contexts/ProfileContext';
 import type { ChatRunMode, CollaborationRun, GoalStateSnapshot } from '@shared/types';
 import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility';
+import { DelegationActivity } from './DelegationActivity';
 
 interface TaskChatProps {
   taskId: string;
@@ -267,6 +268,7 @@ export function TaskChat({
     loadOlderMessages,
   } = useChat();
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
+  const delegationRuns = useStore((s) => s.delegationRuns.get(taskId));
   const [input, setInput] = useState('');
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
   const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
@@ -887,6 +889,7 @@ export function TaskChat({
                 </Fragment>
               );
             })}
+            <DelegationActivity runs={delegationRuns ?? []} />
             {runStopped && <ConversationDivider>Stopped by you</ConversationDivider>}
             {compactInFlight && (
               <ConversationDivider>

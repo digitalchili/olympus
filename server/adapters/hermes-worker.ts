@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   AgentDefaults,
   AgentModelsResponse,
+  AdapterDelegationEvent,
   CompactResult,
   GoalDecision,
   GoalStateSnapshot,
@@ -163,14 +164,26 @@ function createAsyncQueue<T>() {
   };
 }
 
-class HermesWorkerClient {
+export class HermesWorkerClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private readline: Interface | null = null;
   private pending = new Map<string, Pending>();
   private ready = false;
   private readyPromise: Promise<void> | null = null;
+  private delegationListeners = new Set<(event: AdapterDelegationEvent) => void>();
+  private delegationResetListeners = new Set<(profileId?: string) => void>();
 
   constructor(private hermesHome: string) {}
+
+  onDelegationEvent(listener: (event: AdapterDelegationEvent) => void): () => void {
+    this.delegationListeners.add(listener);
+    return () => this.delegationListeners.delete(listener);
+  }
+
+  onDelegationReset(listener: (profileId?: string) => void): () => void {
+    this.delegationResetListeners.add(listener);
+    return () => this.delegationResetListeners.delete(listener);
+  }
 
   async start(): Promise<void> {
     this.ensureStarted();
@@ -351,6 +364,12 @@ class HermesWorkerClient {
       return;
     }
 
+    if (event.type === 'delegation_event') {
+      const envelope = { taskId: event.taskId, event: event.event } satisfies AdapterDelegationEvent;
+      for (const listener of this.delegationListeners) listener(envelope);
+      return;
+    }
+
     const pending = this.pending.get(event.id);
     if (!pending) return;
 
@@ -375,6 +394,7 @@ class HermesWorkerClient {
   }
 
   private handleExit(error: Error): void {
+    const wasRunning = this.child !== null || this.ready;
     if (this.readline) {
       this.readline.close();
       this.readline = null;
@@ -383,6 +403,9 @@ class HermesWorkerClient {
     this.ready = false;
 
     this.failPending(new Error(`Hermes worker crashed: ${error.message}`));
+    if (wasRunning) {
+      for (const listener of this.delegationResetListeners) listener();
+    }
   }
 
   private write(request: WorkerRequest): void {
@@ -414,6 +437,14 @@ export class HermesWorkerAdapter implements AgentAdapter {
 
   async stop(): Promise<void> {
     await this.client.stop();
+  }
+
+  onDelegationEvent(listener: (event: AdapterDelegationEvent) => void): () => void {
+    return this.client.onDelegationEvent(listener);
+  }
+
+  onDelegationReset(listener: (profileId?: string) => void): () => void {
+    return this.client.onDelegationReset(listener);
   }
 
   async chat(

@@ -2,7 +2,7 @@ import { getTask } from '../db/queries.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
 import type { AgentAdapter, AgentRunOptions, StreamEvent } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
-import type { AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
+import type { AdapterDelegationEvent, AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
 import { acquireProfileWork } from '../profile-deletion.js';
 
 type LifecycleAdapter = AgentAdapter & {
@@ -23,11 +23,44 @@ export class ProfileAgentAdapter implements AgentAdapter {
   private workers = new Map<string, LifecycleAdapter>();
   private starting = new Map<string, Promise<void>>();
   private started = new Set<string>();
+  private delegationListeners = new Set<(event: AdapterDelegationEvent) => void>();
+  private delegationResetListeners = new Set<(profileId?: string) => void>();
+  private delegationUnsubscribers = new Map<LifecycleAdapter, () => void>();
 
   constructor(private defaultAdapter: LifecycleAdapter, options: ProfileAdapterOptions = {}) {
     this.registry = options.registry ?? localProfileRegistry;
     this.createAdapter = options.createAdapter ?? ((profile) => new HermesWorkerAdapter({ hermesHome: profile.hermesHome }));
     this.taskProfile = options.taskProfile ?? ((taskId) => getTask(taskId)?.profile_name);
+    this.bindDelegationEvents(defaultAdapter, 'default');
+  }
+
+  private bindDelegationEvents(worker: LifecycleAdapter, profileId: string): void {
+    if (!worker.onDelegationEvent || this.delegationUnsubscribers.has(worker)) return;
+    const unsubscribeEvent = worker.onDelegationEvent((incoming) => {
+      const task = getTask(incoming.taskId);
+      if (!task) return;
+      const ownerProfileId = task.profile_name ?? 'default';
+      if (ownerProfileId !== profileId) return;
+      const event = { ...incoming, profileId } satisfies AdapterDelegationEvent;
+      for (const listener of this.delegationListeners) listener(event);
+    });
+    const unsubscribeReset = worker.onDelegationReset?.(() => {
+      for (const listener of this.delegationResetListeners) listener(profileId);
+    });
+    this.delegationUnsubscribers.set(worker, () => {
+      unsubscribeEvent();
+      unsubscribeReset?.();
+    });
+  }
+
+  onDelegationEvent(listener: (event: AdapterDelegationEvent) => void): () => void {
+    this.delegationListeners.add(listener);
+    return () => this.delegationListeners.delete(listener);
+  }
+
+  onDelegationReset(listener: (profileId?: string) => void): () => void {
+    this.delegationResetListeners.add(listener);
+    return () => this.delegationResetListeners.delete(listener);
   }
 
   async start(): Promise<void> {
@@ -39,6 +72,8 @@ export class ProfileAgentAdapter implements AgentAdapter {
     this.workers.clear();
     this.starting.clear();
     this.started.clear();
+    for (const unsubscribe of this.delegationUnsubscribers.values()) unsubscribe();
+    this.delegationUnsubscribers.clear();
     await Promise.all(workers.map(async (worker) => worker.stop?.()));
   }
 
@@ -62,6 +97,7 @@ export class ProfileAgentAdapter implements AgentAdapter {
     if (!worker) {
       worker = this.createAdapter(profile) as LifecycleAdapter;
       this.workers.set(profile.id, worker);
+      this.bindDelegationEvents(worker, profile.id);
     }
 
     if (worker.start && !this.started.has(profile.id)) {

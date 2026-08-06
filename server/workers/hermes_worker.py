@@ -147,6 +147,111 @@ def _send(payload: dict[str, Any]) -> None:
         PROTOCOL_OUT.flush()
 
 
+def _safe_protocol_identifier(value: Any, max_length: int = 160) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > max_length:
+        return None
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:@/-")
+    return value if all(char in allowed for char in value) else None
+
+
+def _nonnegative_number(value: Any, *, integer: bool = False, maximum: float | None = None) -> int | float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return 0
+    number = float(value)
+    if number < 0 or number != number or number in (float("inf"), float("-inf")):
+        return 0
+    if maximum is not None:
+        number = min(number, maximum)
+    return int(number) if integer else number
+
+
+def project_delegation_event(
+    event_type: str,
+    tool_name: str | None,
+    payload: dict[str, Any],
+    *,
+    parent_session_id: str,
+    delegation_id: str,
+) -> dict[str, Any] | None:
+    """Project an unsafe Hermes callback into Olympus's closed visibility schema."""
+    child_id = _safe_protocol_identifier(payload.get("subagent_id"))
+    safe_parent_session = _safe_protocol_identifier(parent_session_id)
+    safe_delegation = _safe_protocol_identifier(delegation_id)
+    if not child_id or not safe_parent_session or not safe_delegation:
+        return None
+
+    if event_type == "subagent.spawn_requested":
+        status = "queued"
+    elif event_type == "subagent.start":
+        status = "running"
+    elif event_type == "subagent.tool":
+        status = "running"
+    elif event_type == "subagent.progress":
+        status = "waiting"
+    elif event_type == "subagent.text":
+        status = "running"
+    elif event_type == "subagent.complete":
+        status = {
+            "completed": "completed",
+            "failed": "failed",
+            "error": "failed",
+            "interrupted": "cancelled",
+            "timeout": "timed_out",
+            "stalled": "stalled",
+        }.get(str(payload.get("status") or "").lower(), "unknown")
+    else:
+        return None
+
+    raw_files: list[Any] = []
+    files_read = payload.get("files_read")
+    files_written = payload.get("files_written")
+    if isinstance(files_read, list):
+        raw_files.extend(files_read)
+    if isinstance(files_written, list):
+        raw_files.extend(files_written)
+    file_count = len({value for value in raw_files if isinstance(value, str)})
+    duration = payload.get("duration_seconds")
+    cost = payload.get("cost_usd")
+    current_action = (
+        _safe_protocol_identifier(tool_name, 64)
+        if event_type == "subagent.tool"
+        else None
+    )
+
+    return {
+        "schema": "olympus.delegation.event.v1",
+        "delegationId": safe_delegation,
+        "childId": child_id,
+        "parentSessionId": safe_parent_session,
+        "childSessionId": _safe_protocol_identifier(payload.get("child_session_id")),
+        "parentChildId": _safe_protocol_identifier(payload.get("parent_id")),
+        "childIndex": min(_nonnegative_number(payload.get("task_index"), integer=True), 99),
+        "childCount": max(1, min(_nonnegative_number(payload.get("task_count"), integer=True), 100)),
+        "status": status,
+        "currentAction": current_action,
+        "model": _safe_protocol_identifier(payload.get("model"), 120),
+        "toolCount": _nonnegative_number(payload.get("tool_count"), integer=True),
+        "apiCalls": _nonnegative_number(payload.get("api_calls"), integer=True),
+        "durationSeconds": (
+            _nonnegative_number(duration, maximum=31_536_000)
+            if isinstance(duration, (int, float)) and not isinstance(duration, bool)
+            else None
+        ),
+        "inputTokens": _nonnegative_number(payload.get("input_tokens"), integer=True),
+        "outputTokens": _nonnegative_number(payload.get("output_tokens"), integer=True),
+        "reasoningTokens": _nonnegative_number(payload.get("reasoning_tokens"), integer=True),
+        "costUsd": (
+            _nonnegative_number(cost, maximum=1_000_000)
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool)
+            else None
+        ),
+        "filesTouched": min(file_count, 10_000),
+    }
+
+
 def _result(request_id: str, data: dict[str, Any]) -> None:
     _send({"id": request_id, "type": "result", "data": data})
 
@@ -1298,6 +1403,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         system_message = None
 
     state = {"text": "", "thinking": ""}
+    active_delegation_id: str | None = None
+    child_delegation_ids: dict[str, str] = {}
+    child_last_emit_at: dict[str, float] = {}
 
     def on_text_delta(text: Any) -> None:
         if text is None:
@@ -1316,6 +1424,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         _send({"id": request_id, "type": "thinking_delta", "content": chunk})
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
+        nonlocal active_delegation_id
         event_type = None
         name = None
         preview = None
@@ -1333,13 +1442,44 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             event_type = "tool.started"
 
         tool_name = str(name or "tool")
+
+        if event_type in {None, "tool.started"} and tool_name == "delegate_task":
+            active_delegation_id = f"deleg-{uuid.uuid4().hex[:16]}"
+
+        if isinstance(event_type, str) and event_type.startswith("subagent."):
+            child_id = _safe_protocol_identifier(kwargs.get("subagent_id"))
+            if child_id:
+                now = time.monotonic()
+                if event_type == "subagent.text" and now - child_last_emit_at.get(child_id, 0) < 2:
+                    return
+                delegation_id = child_delegation_ids.get(child_id)
+                if not delegation_id:
+                    delegation_id = active_delegation_id or f"deleg-{uuid.uuid4().hex[:16]}"
+                    child_delegation_ids[child_id] = delegation_id
+                projected = project_delegation_event(
+                    event_type,
+                    str(name) if name else None,
+                    kwargs,
+                    parent_session_id=session_id,
+                    delegation_id=delegation_id,
+                )
+                if projected:
+                    child_last_emit_at[child_id] = now
+                    _send({
+                        "id": request_id,
+                        "type": "delegation_event",
+                        "taskId": task_id,
+                        "event": projected,
+                    })
+            return
+
         if event_type in {None, "tool.started"}:
             _send({
                 "id": request_id,
                 "type": "tool_progress",
                 "tool": tool_name,
                 "status": "running",
-                "label": str(preview) if preview else None,
+                "label": None if tool_name == "delegate_task" else (str(preview) if preview else None),
             })
             return
 
@@ -1350,8 +1490,10 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 "tool": tool_name,
                 "status": "error" if kwargs.get("is_error") else "completed",
                 "duration": kwargs.get("duration"),
-                "label": str(preview) if preview else None,
+                "label": None if tool_name == "delegate_task" else (str(preview) if preview else None),
             })
+            if tool_name == "delegate_task":
+                active_delegation_id = None
 
     agent = _create_agent(
         session_id=session_id,

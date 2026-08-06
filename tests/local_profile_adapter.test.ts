@@ -5,7 +5,14 @@ import { LocalProfileRegistry } from '../server/local-profiles.js';
 import { ProfileAgentAdapter } from '../server/adapters/routing.js';
 import type { AgentAdapter, AgentRunOptions, StreamEvent } from '../server/adapters/types.js';
 
-function fakeAdapter(name: string, lifecycle: string[]): AgentAdapter & { start(): Promise<void>; stop(): Promise<void> } {
+type FakeAdapter = AgentAdapter & {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  emitReset(): void;
+};
+
+function fakeAdapter(name: string, lifecycle: string[]): FakeAdapter {
+  let resetListener: ((profileId?: string) => void) | null = null;
   return {
     async start() { lifecycle.push(`start:${name}`); },
     async stop() { lifecycle.push(`stop:${name}`); },
@@ -14,6 +21,9 @@ function fakeAdapter(name: string, lifecycle: string[]): AgentAdapter & { start(
     async interruptChat(sessionId) { lifecycle.push(`interrupt:${name}:${sessionId}`); return true; },
     async steerChat() { return true; },
     async healthCheck() { return true; },
+    onDelegationEvent() { return () => {}; },
+    onDelegationReset(listener) { resetListener = listener; return () => { resetListener = null; }; },
+    emitReset() { resetListener?.(); },
     async getMessages(_sessionId, taskId) {
       return [{ id: name, task_id: taskId, role: 'assistant', content: name, created_at: 1 }];
     },
@@ -52,22 +62,28 @@ try {
   await writeFile(join(hermesHome, 'profiles', 'writer', 'profile.yaml'), 'description: Writer\n');
 
   const created: Array<{ id: string; hermesHome: string }> = [];
+  const createdWorkers = new Map<string, FakeAdapter>();
   const taskProfiles = new Map<string, string | null>([
     ['default-task', null],
     ['writer-task', 'writer'],
     ['missing-task', 'not-local'],
   ]);
-  const adapter = new ProfileAgentAdapter(fakeAdapter('default', lifecycle), {
+  const defaultWorker = fakeAdapter('default', lifecycle);
+  const adapter = new ProfileAgentAdapter(defaultWorker, {
     registry: new LocalProfileRegistry(hermesHome),
     createAdapter(profile) {
       created.push({ id: profile.id, hermesHome: profile.hermesHome });
       const generation = created.filter((item) => item.id === profile.id).length;
-      return fakeAdapter(generation === 1 ? profile.id : `${profile.id}-${generation}`, lifecycle);
+      const worker = fakeAdapter(generation === 1 ? profile.id : `${profile.id}-${generation}`, lifecycle);
+      createdWorkers.set(profile.id, worker);
+      return worker;
     },
     taskProfile(taskId) {
       return taskProfiles.get(taskId) ?? null;
     },
   });
+  const resetProfiles: Array<string | undefined> = [];
+  adapter.onDelegationReset((profileId) => resetProfiles.push(profileId));
 
   await adapter.start();
   assert.deepEqual(lifecycle, ['start:default']);
@@ -77,6 +93,9 @@ try {
   assert.equal((await adapter.chat('writer-task', 'hello')).text, 'writer');
   assert.equal((await adapter.chat('writer-task', 'again')).text, 'writer');
   assert.deepEqual(created, [{ id: 'writer', hermesHome: join(hermesHome, 'profiles', 'writer') }]);
+  defaultWorker.emitReset();
+  createdWorkers.get('writer')?.emitReset();
+  assert.deepEqual(resetProfiles, ['default', 'writer'], 'worker resets retain trusted profile ownership');
 
   const streamOptions: AgentRunOptions = { task: { id: 'writer-task', title: 'Writer task' } };
   const events: StreamEvent[] = [];

@@ -15,9 +15,11 @@ import { createChannelHistoryRouter } from './routes/channel-history.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { getTask } from './db/queries.js';
+import { listDelegationRunsForProfile, markProfileDelegationsUnknown, recordDelegationEvent } from './db/delegations.js';
+import { normalizeDelegationEvent } from './delegation-events.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { ProfileAgentAdapter } from './adapters/routing.js';
-import { initSSE, addClient, sendEvent, closeClientsForRestart } from './events.js';
+import { initSSE, addClient, sendEvent, closeClientsForRestart, broadcast } from './events.js';
 import { closeSubscribersForRestart, getRunStatuses } from './live-chat.js';
 import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
@@ -29,6 +31,26 @@ import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsTo
 const app = express();
 
 const adapter = new ProfileAgentAdapter(new HermesWorkerAdapter());
+adapter.onDelegationEvent((incoming) => {
+  if (!incoming.profileId) return;
+  const task = getTask(incoming.taskId);
+  if (!task || (task.profile_name ?? 'default') !== incoming.profileId) return;
+  const event = normalizeDelegationEvent(incoming.event);
+  if (!event) return;
+  const run = recordDelegationEvent({
+    profileId: incoming.profileId,
+    taskId: task.id,
+    event,
+  });
+  if (run) broadcast({ type: 'delegation_run_updated', run }, task);
+});
+adapter.onDelegationReset((profileId) => {
+  if (!profileId) return;
+  for (const run of markProfileDelegationsUnknown(profileId)) {
+    const task = getTask(run.task_id);
+    if (task) broadcast({ type: 'delegation_run_updated', run }, task);
+  }
+});
 const activeRequests = createActiveRequestTracker();
 const drainController = new DrainController(() => getActiveTaskRunCount() + activeRequests.count());
 
@@ -65,6 +87,7 @@ app.get('/api/events', (req, res) => {
     initSSE(res);
     addClient(res, profile);
     sendEvent(res, { type: 'task_runs_snapshot', runs });
+    sendEvent(res, { type: 'delegations_snapshot', runs: listDelegationRunsForProfile(profile.id) });
   } catch (error) {
     const profileError = sendProfileError(error);
     if (profileError) return res.status(profileError.status).json(profileError.body);

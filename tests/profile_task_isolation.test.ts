@@ -61,6 +61,7 @@ try {
     liveChat,
     events,
     { localProfileRegistry },
+    delegationDb,
     { default: db },
   ] = await Promise.all([
     import('../server/app.js'),
@@ -68,6 +69,7 @@ try {
     import('../server/live-chat.js'),
     import('../server/events.js'),
     import('../server/local-profiles.js'),
+    import('../server/db/delegations.js'),
     import('../server/db/index.js'),
   ]);
 
@@ -95,6 +97,33 @@ try {
     status: 'in_progress',
     profile_name: 'writer',
   });
+  const writerDelegation = delegationDb.recordDelegationEvent({
+    profileId: 'writer',
+    taskId: writerTask.id,
+    receivedAt: 100,
+    event: {
+      schema: 'olympus.delegation.event.v1',
+      delegationId: 'deleg-writer',
+      childId: 'child-writer',
+      parentSessionId: writerTask.id,
+      childSessionId: 'session-child-writer',
+      parentChildId: null,
+      childIndex: 0,
+      childCount: 1,
+      status: 'running',
+      currentAction: 'web_search',
+      model: 'gpt-5.6-sol',
+      toolCount: 1,
+      apiCalls: 1,
+      durationSeconds: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      costUsd: null,
+      filesTouched: 0,
+    },
+  });
+  assert.ok(writerDelegation);
 
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -115,6 +144,7 @@ try {
       { path: `/api/tasks/${writerTask.id}/compact?profile=default`, init: jsonRequest('POST') },
       { path: `/api/tasks/${writerTask.id}/live?profile=default` },
       { path: `/api/tasks/${writerTask.id}/collaborations?profile=default` },
+      { path: `/api/tasks/${writerTask.id}/delegations?profile=default` },
       { path: `/api/tasks/${writerTask.id}/session?profile=default` },
       { path: `/api/tasks/${writerTask.id}/agent-settings?profile=default` },
       { path: `/api/tasks/${writerTask.id}/artifacts/download?profile=default&path=${encodeURIComponent(join(root, 'anything.txt'))}` },
@@ -132,6 +162,9 @@ try {
     assert.equal((await fetch(`${base}/api/tasks/${legacyDefaultTask.id}/messages`)).status, 200);
     assert.equal((await fetch(`${base}/api/tasks/${legacyDefaultTask.id}/collaborations`)).status, 200);
     assert.equal((await fetch(`${base}/api/tasks/${legacyDefaultTask.id}/session`)).status, 200);
+    const writerDelegationsResponse = await fetch(`${base}/api/tasks/${writerTask.id}/delegations?profile=writer`);
+    assert.equal(writerDelegationsResponse.status, 200);
+    assert.deepEqual((await writerDelegationsResponse.json() as { runs: Array<{ id: string }> }).runs.map((run) => run.id), [writerDelegation.id]);
     assert.equal((await fetch(`${base}/api/tasks/${explicitDefaultTask.id}?profile=writer`)).status, 404);
 
     liveChat.startRun(explicitDefaultTask.id, explicitDefaultTask.id, 'default run');
@@ -183,9 +216,10 @@ try {
     events.broadcast({ type: 'task_updated', task: writerTask });
     events.broadcast({ type: 'task_run_updated', run: liveChat.getRunStatus(writerTask.id)! });
     events.broadcast({ type: 'task_deleted', taskId: writerTask.id }, writerTask);
+    events.broadcast({ type: 'delegation_run_updated', run: writerDelegation }, writerTask);
 
     assert.equal(defaultClient.writes.join('').includes(writerTask.id), false, 'default board stream must not receive writer events');
-    assert.equal(writerClient.writes.filter((write) => write.includes(writerTask.id)).length, 3, 'writer board stream receives its task events');
+    assert.equal(writerClient.writes.filter((write) => write.includes(writerTask.id)).length, 4, 'writer board stream receives its task and delegation events');
 
     const secondWriterTask = queries.insertTask({
       title: 'Second writer task',

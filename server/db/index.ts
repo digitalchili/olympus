@@ -81,6 +81,17 @@ function recoverInterruptedCollaborations(): void {
   `).run(now);
 }
 
+function recoverInterruptedDelegations(): void {
+  const now = Date.now();
+  db.prepare(`
+    UPDATE delegation_runs
+    SET status = 'unknown', current_action = NULL,
+        completed_at = MAX(updated_at + 1, ?),
+        updated_at = MAX(updated_at + 1, ?)
+    WHERE status IN ('queued', 'running', 'waiting')
+  `).run(now, now);
+}
+
 db.exec('BEGIN IMMEDIATE');
 try {
   db.exec(schema);
@@ -91,6 +102,7 @@ try {
   ensureColumn('tasks', 'profile_name', 'TEXT');
   ensureColumn('tasks', 'routing_source', 'TEXT');
   recoverInterruptedCollaborations();
+  recoverInterruptedDelegations();
   db.exec('COMMIT');
 } catch (error) {
   db.exec('ROLLBACK');

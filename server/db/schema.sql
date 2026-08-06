@@ -55,6 +55,43 @@ CREATE TABLE IF NOT EXISTS collaboration_contributions (
 CREATE INDEX IF NOT EXISTS idx_collaboration_contributions_run
   ON collaboration_contributions(run_id, started_at);
 
+CREATE TABLE IF NOT EXISTS delegation_runs (
+  id TEXT PRIMARY KEY,
+  profile_name TEXT NOT NULL,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  parent_session_id TEXT NOT NULL,
+  delegation_id TEXT NOT NULL,
+  child_id TEXT NOT NULL,
+  child_session_id TEXT,
+  parent_child_id TEXT,
+  child_index INTEGER NOT NULL DEFAULT 0 CHECK(child_index >= 0),
+  child_count INTEGER NOT NULL DEFAULT 1 CHECK(child_count >= 1),
+  status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'waiting', 'stalled', 'completed', 'failed', 'cancelled', 'timed_out', 'unknown')),
+  current_action TEXT,
+  model TEXT,
+  tool_count INTEGER NOT NULL DEFAULT 0 CHECK(tool_count >= 0),
+  api_calls INTEGER NOT NULL DEFAULT 0 CHECK(api_calls >= 0),
+  duration_seconds REAL,
+  input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens >= 0),
+  output_tokens INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens >= 0),
+  reasoning_tokens INTEGER NOT NULL DEFAULT 0 CHECK(reasoning_tokens >= 0),
+  cost_usd REAL,
+  files_touched INTEGER NOT NULL DEFAULT 0 CHECK(files_touched >= 0),
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  last_activity_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(child_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_delegation_runs_task_time
+  ON delegation_runs(task_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_delegation_runs_profile_time
+  ON delegation_runs(profile_name, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_delegation_runs_status
+  ON delegation_runs(status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,

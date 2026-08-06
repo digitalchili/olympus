@@ -54,6 +54,7 @@ function taskForEvent(event: BoardEvent, task?: Task): Task | undefined {
   if (task) return task;
   if (event.type === 'task_created' || event.type === 'task_updated') return event.task;
   if (event.type === 'task_run_updated') return getTask(event.run.taskId);
+  if (event.type === 'delegation_run_updated') return getTask(event.run.task_id);
   return undefined;
 }
 

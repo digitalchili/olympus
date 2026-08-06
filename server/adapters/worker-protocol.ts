@@ -9,6 +9,7 @@ import type {
   TaskMessage,
   TaskMessagePageInfo,
   ContextUsage,
+  DelegationWorkerEvent,
 } from '../../shared/types.js';
 import type { AgentRunSettings } from './types.js';
 
@@ -103,5 +104,6 @@ export type WorkerEvent =
       duration?: number;
       label?: string | null;
     }
+  | { id: string; type: 'delegation_event'; taskId: string; event: DelegationWorkerEvent }
   | { id: string; type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; pendingSteer?: string }
   | { id: string; type: 'error'; error: string | WorkerErrorPayload };
