@@ -9,6 +9,7 @@ import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
 import { ApiError, compactTask, fetchHermesProfiles, interruptTask, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
+import { deliverQueuedSteer } from '../lib/steerDelivery';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
@@ -652,8 +653,11 @@ export function TaskChat({
     setSteeringQueuedId(queuedMessage.id);
     setQueuedSendError(null);
     try {
-      const result = await steerTask(taskId, queuedMessage.content);
-      if (result.steered) {
+      const outcome = await deliverQueuedSteer(
+        () => steerTask(taskId, queuedMessage.content),
+        () => sendQueuedMessage(queuedMessage),
+      );
+      if (outcome === 'steered') {
         setQueuedMessage((current) => current?.id === queuedMessage.id ? null : current);
       }
       // When Hermes is between turns or the message has an attachment, it stays
@@ -663,7 +667,7 @@ export function TaskChat({
     } finally {
       setSteeringQueuedId((current) => current === queuedMessage.id ? null : current);
     }
-  }, [queuedIsSending, queuedMessage, steeringQueuedId, taskId]);
+  }, [queuedIsSending, queuedMessage, sendQueuedMessage, steeringQueuedId, taskId]);
 
   const handleEditQueuedMessage = useCallback(() => {
     if (!queuedMessage || queuedIsSending || steeringQueuedId) return;
