@@ -43,12 +43,41 @@ select_node() {
 
 build_release() {
   release=$1
+  build_source=${2:-$source_root}
   mkdir -p "$release"
-  (cd "$source_root" && tar --exclude=.git --exclude=node_modules --exclude=dist --exclude=.worktrees \
+  (cd "$build_source" && tar --exclude=.git --exclude=node_modules --exclude=dist --exclude=.worktrees \
     --exclude=.env --exclude='.env.*' --exclude='.tmp-*' --exclude='.olympus-*' --exclude=backups -cf - .) | (cd "$release" && tar -xf -)
-  [ ! -f "$source_root/.env.example" ] || cp "$source_root/.env.example" "$release/.env.example"
+  [ ! -f "$build_source/.env.example" ] || cp "$build_source/.env.example" "$release/.env.example"
   (cd "$release" && "$npm" ci --include=dev && "$npm" test && "$npm" run typecheck && "$npm" run build)
   test -f "$release/dist/server/server/index.js"
+}
+
+fetch_release_source() {
+  requested_version=$1
+  destination=$2
+  printf '%s' "$requested_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || {
+    printf 'A semantic release version is required.\n' >&2
+    return 2
+  }
+
+  repository=${OLYMPUS_UPDATE_REPOSITORY:-digitalchili/olympus}
+  case "$repository" in
+    */*) remote=${OLYMPUS_UPDATE_GIT_URL:-https://github.com/$repository.git} ;;
+    *) printf 'Invalid Olympus update repository: %s\n' "$repository" >&2; return 2 ;;
+  esac
+
+  rm -rf "$destination"
+  mkdir -p "$destination"
+  git -C "$destination" init -q
+  git -C "$destination" fetch --quiet --depth 1 --no-tags "$remote" \
+    "refs/tags/v$requested_version:refs/tags/v$requested_version"
+  git -C "$destination" checkout --quiet --detach "refs/tags/v$requested_version"
+
+  fetched_version=$($node -p 'require(process.argv[1]).version' "$destination/package.json")
+  [ "$fetched_version" = "$requested_version" ] || {
+    printf 'Fetched package version %s does not match requested release %s.\n' "$fetched_version" "$requested_version" >&2
+    return 1
+  }
 }
 
 atomic_link() {
@@ -72,7 +101,39 @@ wait_idle() {
   return 1
 }
 
-wait_ready_mac() { curl --retry 30 --retry-delay 2 --retry-connrefused --fail --silent --show-error "http://127.0.0.1:${PORT:-6969}/api/ready" >/dev/null; }
+restart_launchd() {
+  domain="gui/$(id -u)"
+  launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+  attempt=1
+  attempts=${LAUNCHD_ATTEMPTS:-10}
+  while [ "$attempt" -le "$attempts" ]; do
+    if launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1; then
+      launchctl kickstart -k "$domain/$label" >/dev/null 2>&1 || true
+      return 0
+    fi
+    # bootout is asynchronous, so wait for the old registration to disappear
+    # instead of accepting a kickstart that may still belong to the old job.
+    [ "$attempt" -ge "$attempts" ] || sleep "${LAUNCHD_INTERVAL_SECONDS:-1}"
+    attempt=$((attempt + 1))
+  done
+  printf 'Could not restart launchd service %s after %s attempts.\n' "$label" "$attempts" >&2
+  return 1
+}
+
+wait_ready_mac() {
+  expected_version=${1:-}
+  i=0
+  while [ "$i" -lt "${READY_ATTEMPTS:-30}" ]; do
+    if curl --fail --silent --show-error "http://127.0.0.1:${PORT:-6969}/api/ready" >/dev/null; then
+      if [ -z "$expected_version" ]; then return 0; fi
+      live_version=$(curl --fail --silent --show-error "http://127.0.0.1:${PORT:-6969}/api/version" 2>/dev/null || true)
+      printf '%s' "$live_version" | tr -d '[:space:]' | grep -Fq "\"version\":\"$expected_version\"" && return 0
+    fi
+    i=$((i + 1)); sleep "${READY_INTERVAL_SECONDS:-2}"
+  done
+  printf 'Olympus release %s did not become ready.\n' "${expected_version:-unknown}" >&2
+  return 1
+}
 
 backup_native_release() {
   release_root=$1
@@ -96,7 +157,7 @@ backup_native_release() {
     }).catch((error) => { console.error(error.message); process.exit(1); });
   ')
   printf 'ok\n' > "$destination/olympus-$stamp.integrity"
-  (cd "$state_home" && tar --exclude='./backups' --exclude='./data/olympus-dispatch.db' --exclude='./data/olympus-dispatch.db-wal' --exclude='./data/olympus-dispatch.db-shm' -czf "$absolute_destination/olympus-$stamp-state.tgz" .)
+  (cd "$state_home" && tar --exclude='./backups' --exclude='./data/olympus-dispatch.db' --exclude='./data/olympus-dispatch.db-wal' --exclude='./data/olympus-dispatch.db-shm' --exclude='./update.sock' --exclude='*.sock' --exclude='./updater' -czf "$absolute_destination/olympus-$stamp-state.tgz" .)
   printf 'timestamp=%s\nrelease=%s\n' "$stamp" "$release_root" > "$destination/olympus-$stamp.metadata"
   chmod 600 "$destination/olympus-$stamp.metadata" "$destination/olympus-$stamp.integrity"
   printf 'Verified native backup created: %s/olympus-%s.sqlite\n' "$destination" "$stamp"

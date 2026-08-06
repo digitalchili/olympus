@@ -23,15 +23,14 @@ import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
 import { createDrainRouter, maintenanceGuard } from './drain-http.js';
 import { createActiveRequestTracker } from './active-requests.js';
+import { getActiveTaskRunCount } from './task-run-lifecycle.js';
 import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsToProfile } from './profile-context.js';
 
 const app = express();
 
 const adapter = new ProfileAgentAdapter(new HermesWorkerAdapter());
 const activeRequests = createActiveRequestTracker();
-const drainController = new DrainController(() => getRunStatuses().filter((run) =>
-  run.status === 'streaming' || run.status === 'compacting'
-).length + activeRequests.count());
+const drainController = new DrainController(() => getActiveTaskRunCount() + activeRequests.count());
 
 app.get('/api/health', async (_req, res) => {
   const hermes = await adapter.healthCheck();

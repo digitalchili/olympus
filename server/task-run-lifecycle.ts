@@ -12,6 +12,12 @@ export type ActiveCollaboration = {
 export const activeCollaborations = new Map<string, ActiveCollaboration>();
 const activeTaskRuns = new Map<string, Set<Promise<void>>>();
 
+export function getActiveTaskRunCount(): number {
+  let count = 0;
+  for (const runs of activeTaskRuns.values()) count += runs.size;
+  return count;
+}
+
 export function trackTaskRun(taskId: string, work: Promise<void>): Promise<void> {
   let runs = activeTaskRuns.get(taskId);
   if (!runs) {
