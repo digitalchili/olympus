@@ -1,9 +1,9 @@
 import { memo } from 'react';
 import { Streamdown, type Components, type ControlsConfig } from 'streamdown';
-import { code } from '@streamdown/code';
+import { codeHighlighter } from '../lib/highlighter';
 import 'streamdown/styles.css';
 
-const plugins = { code };
+const plugins = { code: codeHighlighter };
 
 const controls: ControlsConfig = {
   code: { copy: true, download: false },
