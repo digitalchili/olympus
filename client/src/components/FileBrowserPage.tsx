@@ -103,7 +103,7 @@ export function FileBrowserPage() {
       : `create:${inlineName.type}`
     : null;
 
-  const loadDirectory = useCallback(async (targetPath: string, reportError = true) => {
+  const loadDirectory = useCallback(async (targetPath?: string, reportError = true) => {
     setLoadingDirectory(true);
     try {
       const nextDirectory = await listFiles(targetPath);
@@ -155,7 +155,7 @@ export function FileBrowserPage() {
   }, [applyOpenFile]);
 
   useEffect(() => {
-    loadDirectory(WORKSPACE_ROOT).catch(() => undefined);
+    loadDirectory().catch(() => undefined);
   }, [loadDirectory]);
 
   useEffect(() => {
@@ -324,7 +324,7 @@ export function FileBrowserPage() {
 
   async function handlePathSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const targetPath = pathInput.trim() || WORKSPACE_ROOT;
+    const targetPath = pathInput.trim() || directory?.path || WORKSPACE_ROOT;
     await navigateToDirectory(targetPath);
   }
 

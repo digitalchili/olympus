@@ -21,7 +21,8 @@ import { randomUUID } from 'node:crypto';
 import archiver from 'archiver';
 import multer from 'multer';
 import { Router, type Request, type Response } from 'express';
-import { expandHomePrefix } from '../paths.js';
+import { expandHomePrefix, resolveOlympusWorkspaceDir, resolveProjectRoot } from '../paths.js';
+import { discoverLocalProfileTargets } from '../local-profiles.js';
 import { errorCode, isRecord } from '../errors.js';
 import type {
   FileEntry,
@@ -47,7 +48,6 @@ const HOME = resolve(homedir());
 const TEXT_SAMPLE_BYTES = 8192;
 const MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_TEXT_FILE_SIZE_DISPLAY = '10 MiB';
-const DEFAULT_FILE_BROWSER_PATH = '~/.olympus-dispatch/workspace';
 const UPLOAD_TMP_DIR = join(tmpdir(), 'olympus-dispatch-uploads');
 
 mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
@@ -75,7 +75,7 @@ export const filesRouter = Router();
 
 filesRouter.get('/list', async (req, res) => {
   try {
-    const directoryPath = resolveUserPath(req.query.path, DEFAULT_FILE_BROWSER_PATH);
+    const directoryPath = resolveUserPath(req.query.path, defaultBrowsePath());
     const directoryStats = await stat(directoryPath);
 
     if (!directoryStats.isDirectory()) {
@@ -89,11 +89,13 @@ filesRouter.get('/list', async (req, res) => {
 
     entries.sort(compareEntries);
 
+    // Stop "up one level" at a browsable root so the UI never offers a path it cannot open.
     const parentPath = dirname(directoryPath);
+    const hasParent = parentPath !== directoryPath && isBrowsablePath(parentPath);
     res.json({
       path: directoryPath,
       displayPath: displayPath(directoryPath),
-      parentPath: parentPath === directoryPath ? null : parentPath,
+      parentPath: hasParent ? parentPath : null,
       entries,
     });
   } catch (error) {
@@ -420,12 +422,45 @@ function resolveRequiredPath(value: unknown): string {
   return resolveUserPath(value);
 }
 
+/**
+ * Directories the file browser may reach: every profile workspace plus the project
+ * root. Anything else on the host — SSH keys, Hermes credentials, system files — stays
+ * out of reach of an API that has no authentication of its own.
+ */
+function browsableRoots(): string[] {
+  const roots = new Set<string>([resolveOlympusWorkspaceDir(), resolveProjectRoot()]);
+  for (const profile of discoverLocalProfileTargets()) {
+    roots.add(resolve(expandHomePrefix(profile.workspaceDir)));
+  }
+  return [...roots];
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+export function isBrowsablePath(target: string, roots = browsableRoots()): boolean {
+  return roots.some((root) => isWithinRoot(root, target));
+}
+
+function assertBrowsable(target: string): string {
+  if (!isBrowsablePath(target)) {
+    throw new FileRouteError(403, 'Path is outside the Olympus file browser roots', 'PATH_NOT_ALLOWED');
+  }
+  return target;
+}
+
+function defaultBrowsePath(): string {
+  return resolveOlympusWorkspaceDir();
+}
+
 function resolveUserPath(value: unknown, fallback?: string): string {
   if (typeof value !== 'string' || value.length === 0) {
-    if (fallback !== undefined) return resolve(expandHomePrefix(fallback));
+    if (fallback !== undefined) return assertBrowsable(resolve(expandHomePrefix(fallback)));
     throw new FileRouteError(400, 'Path is required', 'BAD_REQUEST');
   }
-  return resolve(expandHomePrefix(value));
+  return assertBrowsable(resolve(expandHomePrefix(value)));
 }
 
 function validateFileName(value: string): string {

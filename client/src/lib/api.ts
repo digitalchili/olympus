@@ -372,8 +372,11 @@ export function fetchClawHubSkillScan(slug: string, version?: string | null, own
 
 export const WORKSPACE_ROOT = '~/.olympus-dispatch/workspace';
 
-export function listFiles(path = WORKSPACE_ROOT) {
-  return request<FileListResponse>(`/files/list?path=${encodeURIComponent(path)}`);
+/** Omitting the path lets the server answer with its own workspace root, which is the
+ *  only side that knows where OLYMPUS_DISPATCH_HOME actually points. */
+export function listFiles(path?: string) {
+  const query = path === undefined ? '' : `?path=${encodeURIComponent(path)}`;
+  return request<FileListResponse>(`/files/list${query}`);
 }
 
 export function readFile(path: string) {
