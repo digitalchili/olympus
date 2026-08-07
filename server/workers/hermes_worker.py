@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JSONL bridge between Minions and Hermes AIAgent."""
+"""JSONL bridge between Olympus and Hermes AIAgent."""
 
 from __future__ import annotations
 
@@ -49,8 +49,8 @@ from hermes_scheduled_tasks import (
 
 PROTOCOL_OUT = sys.stdout
 PROTOCOL_LOCK = threading.Lock()
-# Keep in sync with MINIONS_GOAL_MAX_TURNS in shared/types.ts.
-MINIONS_GOAL_MAX_TURNS = 20
+# Keep in sync with OLYMPUS_GOAL_MAX_TURNS in shared/types.ts.
+OLYMPUS_GOAL_MAX_TURNS = 20
 
 # Cap on concurrent AIAgent.run_conversation calls.
 AGENT_RUN_LIMIT = int(os.environ.get("HERMES_AGENT_RUN_LIMIT", "10"))
@@ -1341,7 +1341,7 @@ def _agent_failure_message(text: str) -> str | None:
 
 
 def _sync_session_identity(agent: Any, session_id: str) -> None:
-    """Refresh persisted Hermes session metadata when Minions switches models."""
+    """Refresh persisted Hermes session metadata when Olympus switches models."""
     session_db = getattr(agent, "_session_db", None)
     model = string_or_none(getattr(agent, "model", None))
     if not session_db or not session_id or not model:
@@ -1406,7 +1406,7 @@ def _goal_manager(session_id: str) -> Any:
         raise WorkerError("Session ID is required.", code="bad_request")
     from hermes_cli.goals import GoalManager
 
-    return GoalManager(session_id=session_id, default_max_turns=MINIONS_GOAL_MAX_TURNS)
+    return GoalManager(session_id=session_id, default_max_turns=OLYMPUS_GOAL_MAX_TURNS)
 
 
 def _project_goal_state(state: Any) -> dict[str, Any] | None:

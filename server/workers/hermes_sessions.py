@@ -1,4 +1,4 @@
-"""Project Hermes SessionDB rows into the shape Minions consumes.
+"""Project Hermes SessionDB rows into the shape Olympus consumes.
 
 Owns transcript sanitization for replay-as-conversation, message projection
 for the chat UI, and session metadata projection for cost/token displays.
@@ -187,7 +187,7 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 
-def _strip_minions_user_scaffold(content: str) -> str:
+def _strip_olympus_user_scaffold(content: str) -> str:
     stripped = content.lstrip()
     if stripped.startswith("[TASK AGENT]"):
         marker = "[TASK DESCRIPTION]"
@@ -271,7 +271,7 @@ def project_session_messages(session_id: Any, task_id: Any = None) -> dict[str, 
 
             content = _content_to_text(row.get("content"))
             if role == "user":
-                content = _strip_minions_user_scaffold(content)
+                content = _strip_olympus_user_scaffold(content)
                 if _is_compaction_reference(content):
                     projected.append({
                         "id": f"hermes:{lineage_session_id}:compaction:{row.get('id')}",
@@ -412,7 +412,7 @@ def _child_projection_boundary(session_db: Any, session_id: str, count: int) -> 
             row = dict(row)
         if row.get("role") != "user":
             continue
-        content = _strip_minions_user_scaffold(_content_to_text(row.get("content")))
+        content = _strip_olympus_user_scaffold(_content_to_text(row.get("content")))
         row_id = int(row.get("id") or 0)
         if marker_id is None:
             if _is_compaction_reference(content):
@@ -439,7 +439,7 @@ def _project_message_page_row(
     row_id = int(row.get("id") or 0)
     content = _content_to_text(row.get("content"))
     if role == "user":
-        content = _strip_minions_user_scaffold(content)
+        content = _strip_olympus_user_scaffold(content)
         if _is_compaction_reference(content):
             return {
                 "id": f"hermes:{lineage_session_id}:compaction:{row.get('id')}",

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Loader2, Search, Sparkles, Target, Zap, type LucideIcon } from 'lucide-react';
-import { MINIONS_GOAL_MAX_TURNS, REASONING_EFFORTS, type AgentDefaults, type AgentModelGroup, type ChatRunMode, type ContextUsage, type ReasoningEffort } from '@shared/types';
+import { OLYMPUS_GOAL_MAX_TURNS, REASONING_EFFORTS, type AgentDefaults, type AgentModelGroup, type ChatRunMode, type ContextUsage, type ReasoningEffort } from '@shared/types';
 import { formatTokenCount } from '../lib/format';
 import { GOAL_MODE_SHORTCUT_LABEL } from '../lib/keyboard';
 
@@ -1032,7 +1032,7 @@ function GoalModeToggle({
           </kbd>
         </div>
         <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-          Keeps Hermes working toward one objective. Hermes checks after each reply and can continue for up to {MINIONS_GOAL_MAX_TURNS} turns, stopping earlier when it finishes.
+          Keeps Hermes working toward one objective. Hermes checks after each reply and can continue for up to {OLYMPUS_GOAL_MAX_TURNS} turns, stopping earlier when it finishes.
         </p>
       </div>
     </div>

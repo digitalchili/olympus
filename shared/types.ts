@@ -21,7 +21,7 @@ export interface UpdateStatus {
 
 export const CHAT_RUN_MODES = ['task', 'goal'] as const;
 export type ChatRunMode = (typeof CHAT_RUN_MODES)[number];
-export const MINIONS_GOAL_MAX_TURNS = 20;
+export const OLYMPUS_GOAL_MAX_TURNS = 20;
 
 export interface AgentRunSettings {
   model?: string | null;

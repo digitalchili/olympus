@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -17,43 +17,50 @@ export function resolveHermesHome(): string {
   return resolveHomeAwarePath(configured || '~/.hermes');
 }
 
-export function resolveMinionsHome(): string {
+export function resolveOlympusHome(): string {
   const configured = process.env.OLYMPUS_DISPATCH_HOME?.trim();
   return resolveHomeAwarePath(configured || '~/.olympus-dispatch');
 }
 
-export function resolveMinionsDataDir(): string {
-  return join(resolveMinionsHome(), 'data');
+export function resolveOlympusDataDir(): string {
+  return join(resolveOlympusHome(), 'data');
 }
 
-export function resolveMinionsLogsDir(): string {
-  return join(resolveMinionsHome(), 'logs');
+export function resolveOlympusLogsDir(): string {
+  return join(resolveOlympusHome(), 'logs');
 }
 
-export function resolveMinionsBackupsDir(): string {
-  return join(resolveMinionsHome(), 'backups');
+export function resolveOlympusBackupsDir(): string {
+  return join(resolveOlympusHome(), 'backups');
 }
 
-export function resolveMinionsWorkspaceDir(): string {
-  return join(resolveMinionsHome(), 'workspace');
+export function resolveOlympusWorkspaceDir(): string {
+  return join(resolveOlympusHome(), 'workspace');
+}
+
+/** Root for the host-side project-folder picker, falling back to the workspace when it is missing. */
+export function resolveProjectRoot(): string {
+  const candidate = process.env.OLYMPUS_DISPATCH_PROJECT_ROOT?.trim() || join(homedir(), 'Dev');
+  const resolved = resolveHomeAwarePath(candidate);
+  return existsSync(resolved) ? resolved : resolveOlympusWorkspaceDir();
 }
 
 export function resolveHermesSkillsDir(): string {
   return join(resolveHermesHome(), 'skills');
 }
 
-export function resolveMinionsDbPath(): string {
+export function resolveOlympusDbPath(): string {
   const configured = process.env.DB_PATH?.trim();
   if (configured) return resolveHomeAwarePath(configured);
-  return join(resolveMinionsDataDir(), 'olympus-dispatch.db');
+  return join(resolveOlympusDataDir(), 'olympus-dispatch.db');
 }
 
-export function ensureMinionsStateDirs(): void {
-  const dbPath = resolveMinionsDbPath();
-  mkdirSync(resolveMinionsDataDir(), { recursive: true });
-  mkdirSync(resolveMinionsLogsDir(), { recursive: true });
-  mkdirSync(resolveMinionsBackupsDir(), { recursive: true });
-  mkdirSync(resolveMinionsWorkspaceDir(), { recursive: true });
+export function ensureOlympusStateDirs(): void {
+  const dbPath = resolveOlympusDbPath();
+  mkdirSync(resolveOlympusDataDir(), { recursive: true });
+  mkdirSync(resolveOlympusLogsDir(), { recursive: true });
+  mkdirSync(resolveOlympusBackupsDir(), { recursive: true });
+  mkdirSync(resolveOlympusWorkspaceDir(), { recursive: true });
   mkdirSync(resolveHermesSkillsDir(), { recursive: true });
   mkdirSync(dirname(dbPath), { recursive: true });
 }

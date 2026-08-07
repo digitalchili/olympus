@@ -38,7 +38,7 @@ interface Frontmatter {
   description?: string;
 }
 
-interface MinionsSkillSidecar {
+interface OlympusSkillSidecar {
   provider?: string;
   registrySlug?: string;
   registryOwnerHandle?: string;
@@ -274,7 +274,7 @@ async function readInstalledSkill(skillFile: string, root: string): Promise<Skil
   const frontmatter = parseFrontmatter(content);
   const skillDir = dirname(skillFile);
   const id = skillIdFromFile(root, skillFile);
-  const sidecar = await readJsonFile<MinionsSkillSidecar>(join(skillDir, SIDECAR_FILENAME));
+  const sidecar = await readJsonFile<OlympusSkillSidecar>(join(skillDir, SIDECAR_FILENAME));
   const fallbackName = basename(skillDir);
   const provider = sidecar?.provider;
   const registrySlug = sidecar?.registrySlug ?? (id.startsWith('clawhub/') ? id.slice('clawhub/'.length).split('/')[0] : undefined);
@@ -684,7 +684,7 @@ async function downloadClawHubFiles(slug: string, version: string, versionPayloa
   return files;
 }
 
-async function writeSkillFiles(destination: string, files: Map<string, Buffer>, sidecar: MinionsSkillSidecar): Promise<void> {
+async function writeSkillFiles(destination: string, files: Map<string, Buffer>, sidecar: OlympusSkillSidecar): Promise<void> {
   const parent = dirname(destination);
   const tempDir = join(parent, `.${basename(destination)}.tmp-${Date.now()}-${randomUUID()}`);
   await rm(tempDir, { recursive: true, force: true });
@@ -738,7 +738,7 @@ async function installClawHubSkill(skillsRoot: string, slug: string, ownerHandle
   const files = await downloadClawHubFiles(slug, version, versionPayload, ownerHandle);
   const skill = skillPayload(detail);
 
-  const sidecar: MinionsSkillSidecar = {
+  const sidecar: OlympusSkillSidecar = {
     provider: 'clawhub',
     registrySlug: slug,
     registryOwnerHandle: resolvedOwnerHandle,
@@ -783,7 +783,7 @@ async function importLocalSkill(skillsRoot: string, uploadedFiles: Express.Multe
   const baseSlug = slugifySkillDirectoryName(displayName, 'skill');
   const destination = await uniqueLocalSkillDestination(skillsRoot, baseSlug);
 
-  const sidecar: MinionsSkillSidecar = {
+  const sidecar: OlympusSkillSidecar = {
     provider: 'local',
     displayName,
     summary,

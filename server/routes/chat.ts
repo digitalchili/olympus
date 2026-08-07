@@ -49,7 +49,7 @@ import { acquireProfileWork } from '../profile-deletion.js';
 import { requireTaskForProfile } from '../profile-context.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, MINIONS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
 chatRouter.use('/:id', requireTaskForProfile(getTask));
@@ -466,7 +466,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
 
   try {
     while (turnContent) {
-      if (++turnCount > MINIONS_GOAL_MAX_TURNS) {
+      if (++turnCount > OLYMPUS_GOAL_MAX_TURNS) {
         appendSystemMessage(runTask.id, 'Goal turn limit reached');
         break;
       }

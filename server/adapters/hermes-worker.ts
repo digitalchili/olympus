@@ -18,7 +18,7 @@ import type {
 } from '../../shared/types.js';
 import type { AgentAdapter, AgentRunOptions, AgentRunSettings, StreamEvent } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
-import { expandHomePrefix, resolveHermesHome, resolveMinionsWorkspaceDir } from '../paths.js';
+import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
 
 // A cold Hermes Python worker can spend tens of seconds importing providers and state.
 // Keep the UI responsive after startup rather than killing a healthy worker prematurely.
@@ -332,7 +332,7 @@ export class HermesWorkerClient {
 
     const python = resolvePython();
     const script = resolveWorkerScript();
-    const workspace = resolveMinionsWorkspaceDir();
+    const workspace = resolveOlympusWorkspaceDir();
     mkdirSync(workspace, { recursive: true });
     const child = spawn(python, [script], {
       cwd: workspace,

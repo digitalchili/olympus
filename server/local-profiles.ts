@@ -24,10 +24,10 @@ import type {
 import { DEFAULT_PROFILE_NAME, REASONING_EFFORTS } from '../shared/types.js';
 import {
   resolveHermesHome,
-  resolveMinionsBackupsDir,
-  resolveMinionsHome,
-  resolveMinionsLogsDir,
-  resolveMinionsWorkspaceDir,
+  resolveOlympusBackupsDir,
+  resolveOlympusHome,
+  resolveOlympusLogsDir,
+  resolveOlympusWorkspaceDir,
 } from './paths.js';
 import { isProfileDeleting } from './profile-deletion.js';
 
@@ -123,7 +123,7 @@ function buildTarget(id: string, hermesHome: string, isDefault: boolean, metadat
     capabilities: profileCapabilities(hermesHome),
     health: profileHealth(hermesHome),
     hermesHome,
-    workspaceDir: isDefault ? resolveMinionsWorkspaceDir() : join(hermesHome, 'workspace'),
+    workspaceDir: isDefault ? resolveOlympusWorkspaceDir() : join(hermesHome, 'workspace'),
     skillsDir: join(hermesHome, 'skills'),
     scheduledOutputDir: join(hermesHome, 'cron', 'output'),
   };
@@ -232,8 +232,8 @@ async function appendAudit(path: string, value: Record<string, unknown>): Promis
 }
 
 async function appendGlobalLifecycleAudit(lifecycleHome: string, value: Record<string, unknown>): Promise<void> {
-  const logsDir = lifecycleHome === resolveMinionsHome()
-    ? resolveMinionsLogsDir()
+  const logsDir = lifecycleHome === resolveOlympusHome()
+    ? resolveOlympusLogsDir()
     : join(lifecycleHome, 'logs');
   await appendAudit(join(logsDir, 'profile-lifecycle.jsonl'), value);
 }
@@ -254,7 +254,7 @@ async function atomicWriteWithBackup(target: LocalProfileTarget, fileName: strin
 export class LocalProfileRegistry {
   constructor(
     public readonly hermesHome = resolveHermesHome(),
-    public readonly lifecycleHome = resolveMinionsHome(),
+    public readonly lifecycleHome = resolveOlympusHome(),
   ) {}
 
   publicProfiles(): HermesProfile[] {
@@ -525,8 +525,8 @@ export async function deleteLocalProfile(
     profileId: target.id,
   });
 
-  const backupsRoot = registry.lifecycleHome === resolveMinionsHome()
-    ? resolveMinionsBackupsDir()
+  const backupsRoot = registry.lifecycleHome === resolveOlympusHome()
+    ? resolveOlympusBackupsDir()
     : join(registry.lifecycleHome, 'backups');
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupDir = join(backupsRoot, 'profiles', `${timestamp}-${target.id}`);

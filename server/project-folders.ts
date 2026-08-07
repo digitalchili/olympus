@@ -1,17 +1,10 @@
 import { realpath } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Request, Response } from 'express';
 import { Router } from 'express';
-import { resolveMinionsWorkspaceDir } from './paths.js';
+import { resolveProjectRoot } from './paths.js';
 
-function configuredRoot(): string {
-  const candidate = process.env.OLYMPUS_DISPATCH_PROJECT_ROOT?.trim() || join(homedir(), 'Dev');
-  return existsSync(candidate) ? resolve(candidate) : resolveMinionsWorkspaceDir();
-}
-
-const PROJECT_ROOT = configuredRoot();
+const PROJECT_ROOT = resolveProjectRoot();
 
 function isInsideRoot(target: string): boolean {
   const rel = relative(PROJECT_ROOT, target);
