@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, Fragment } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo, Fragment } from 'react';
 import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText, FilePenLine, Globe, Code, Wrench, X, Target, Square } from 'lucide-react';
 import { InputToolbar, ContextRing } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, MessageAttachmentCards, UploadErrorBar } from './ChatAttachments';
@@ -43,7 +43,7 @@ type QueuedMessage = {
   invitedProfileIds: string[];
 };
 
-function ThinkingBlock({ content, isLive }: { content: string; isLive: boolean }) {
+const ThinkingBlock = memo(function ThinkingBlock({ content, isLive }: { content: string; isLive: boolean }) {
   const [expanded, setExpanded] = useState(isLive);
 
   useEffect(() => {
@@ -69,7 +69,7 @@ function ThinkingBlock({ content, isLive }: { content: string; isLive: boolean }
       )}
     </div>
   );
-}
+});
 
 const TOOL_ICONS: Record<string, typeof Terminal> = {
   terminal: Terminal,
@@ -85,6 +85,7 @@ const TOOL_ICONS: Record<string, typeof Terminal> = {
   browser_vision: Globe,
 };
 
+const INITIAL_RENDER_LIMIT = 12;
 const CHAT_COLUMN_CLASS = 'w-full min-w-0 max-w-[760px] mx-auto';
 const PLACEHOLDER_CLASS = 'text-sm text-zinc-400 dark:text-zinc-500 text-center py-12';
 
@@ -106,7 +107,7 @@ function formatToolName(name: string): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function ToolCallBlock({ tool }: { tool: ToolProgressEvent }) {
+const ToolCallBlock = memo(function ToolCallBlock({ tool }: { tool: ToolProgressEvent }) {
   const Icon = getToolIcon(tool.tool);
   return (
     <div className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border ${
@@ -136,7 +137,7 @@ function ToolCallBlock({ tool }: { tool: ToolProgressEvent }) {
       )}
     </div>
   );
-}
+});
 
 function QueuedMessageBar({
   queuedMessage,
@@ -320,6 +321,9 @@ export function TaskChat({
   const latestUserMessageRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const didInitialScrollRef = useRef(false);
+  // Long threads are dominated by markdown rendering, so paint the newest messages
+  // first and fill in the rest once the user can already read the conversation.
+  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER_LIMIT);
   const pendingAutoSendRef = useRef<string | null>(null);
   const pendingRevealRef = useRef(false);
   const queuedMessageRef = useRef<QueuedMessage | null>(null);
@@ -400,6 +404,7 @@ export function TaskChat({
     pendingAutoSendRef.current = null;
     pendingRevealRef.current = false;
     didInitialScrollRef.current = false;
+    setRenderLimit(INITIAL_RENDER_LIMIT);
     loadMessages(taskId)
       .then((loadedMessages) => {
         if (cancelled) return;
@@ -475,6 +480,24 @@ export function TaskChat({
     container.scrollTop = container.scrollHeight;
     didInitialScrollRef.current = true;
   }, [loadedTaskId, messages.length, taskId]);
+
+  // Fill in the deferred older messages once the newest ones are on screen, holding
+  // the reading position steady as content is inserted above it.
+  useEffect(() => {
+    if (loadedTaskId !== taskId || renderLimit >= messages.length) return;
+
+    const handle = window.setTimeout(() => {
+      const container = messagesContainerRef.current;
+      const previousHeight = container?.scrollHeight ?? 0;
+      const previousTop = container?.scrollTop ?? 0;
+      setRenderLimit(Number.MAX_SAFE_INTEGER);
+      window.requestAnimationFrame(() => {
+        const current = messagesContainerRef.current;
+        if (current) current.scrollTop = previousTop + current.scrollHeight - previousHeight;
+      });
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [loadedTaskId, messages.length, renderLimit, taskId]);
 
   useLayoutEffect(() => {
     if (!compactInFlight && !compactDone) return;
@@ -747,6 +770,8 @@ export function TaskChat({
     [activeMention, collaborationGoalToggleDisabled, handleSubmit, handleToggleGoalMode, highlightedProfileIndex, selectMentionProfile],
   );
   const isLoadingMessages = loadedTaskId !== taskId;
+  const renderOffset = Math.max(0, messages.length - renderLimit);
+  const visibleMessages = renderOffset > 0 ? messages.slice(renderOffset) : messages;
 
   const sendButton = isStreaming
     ? {
@@ -802,7 +827,10 @@ export function TaskChat({
             ) : messages.length === 0 ? (
               <p className={PLACEHOLDER_CLASS}>Start a conversation with your assistant.</p>
             ) : null}
-            {messages.map((msg, idx) => {
+            {visibleMessages.map((msg, visibleIdx) => {
+              // Keep every index below meaning "position in the full thread" so the
+              // deferred first paint stays invisible to the rest of this component.
+              const idx = visibleIdx + renderOffset;
               const compactDivider = compactDone && idx === compactAfterIndex ? (
                 <ConversationDivider>Conversation compacted</ConversationDivider>
               ) : null;
