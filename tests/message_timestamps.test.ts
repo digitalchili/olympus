@@ -56,9 +56,14 @@ assert.equal(
   'both message types retain a native timestamp fallback',
 );
 assert.equal(
-  taskChatSource.match(/group-hover\/message:opacity-100/g)?.length,
+  taskChatSource.match(/onMouseEnter=\{\(event\) => showHoverTimestamp\(event, timestampLabel\)\}/g)?.length,
   2,
-  'both user questions and assistant replies render a visible timestamp label on hover',
+  'both user questions and assistant replies open the cursor-following timestamp tooltip',
+);
+assert.match(
+  taskChatSource,
+  /data-message-timestamp="pointer-tooltip"/,
+  'the shared timestamp tooltip is rendered once near the pointer',
 );
 assert.equal(
   taskChatSource.match(/data-message-timestamp="visible-hover"/g)?.length,

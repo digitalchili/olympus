@@ -289,6 +289,7 @@ export function TaskChat({
   const [interruptInFlight, setInterruptInFlight] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
   const {
     pendingFiles,
     dragOver,
@@ -319,11 +320,35 @@ export function TaskChat({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const latestUserMessageRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const hoverTimestampRef = useRef<HTMLDivElement>(null);
   const didInitialScrollRef = useRef(false);
   const pendingAutoSendRef = useRef<string | null>(null);
   const pendingRevealRef = useRef(false);
   const queuedMessageRef = useRef<QueuedMessage | null>(null);
   const lastGoalStatusRef = useRef<GoalStateSnapshot['status'] | null>(null);
+  const positionHoverTimestamp = useCallback((clientX: number, clientY: number) => {
+    const tooltip = hoverTimestampRef.current;
+    if (!tooltip) return;
+
+    const gutter = 8;
+    const offset = 12;
+    let left = clientX + offset;
+    let top = clientY + offset;
+    if (left + tooltip.offsetWidth > window.innerWidth - gutter) {
+      left = clientX - tooltip.offsetWidth - offset;
+    }
+    if (top + tooltip.offsetHeight > window.innerHeight - gutter) {
+      top = clientY - tooltip.offsetHeight - offset;
+    }
+    tooltip.style.transform = `translate3d(${Math.max(gutter, left)}px, ${Math.max(gutter, top)}px, 0)`;
+  }, []);
+  const showHoverTimestamp = useCallback((event: React.MouseEvent<HTMLElement>, label?: string) => {
+    if (!label) return;
+    setHoveredTimestamp(label);
+    const { clientX, clientY } = event;
+    requestAnimationFrame(() => positionHoverTimestamp(clientX, clientY));
+  }, [positionHoverTimestamp]);
+  const hideHoverTimestamp = useCallback(() => setHoveredTimestamp(null), []);
   const runIsStreaming = (taskRun?.kind === 'chat' || taskRun?.kind === 'goal') && taskRun.status === 'streaming';
   const isGoalStreaming = taskRun?.kind === 'goal' && taskRun.status === 'streaming';
   const isStreaming = liveIsStreaming || runIsStreaming;
@@ -387,6 +412,7 @@ export function TaskChat({
     setSelectedProfiles([]);
     setActiveMention(null);
     setHighlightedProfileIndex(0);
+    setHoveredTimestamp(null);
     setQueuedSendError(null);
     setAutoSendingQueuedId(null);
     setRunMode(startupRef.current.initialSettings?.mode ?? 'task');
@@ -769,6 +795,17 @@ export function TaskChat({
       className="relative flex w-full flex-col flex-1 min-h-0"
       {...dragHandlers}
     >
+      {hoveredTimestamp && (
+        <div
+          ref={hoverTimestampRef}
+          role="tooltip"
+          data-message-timestamp="pointer-tooltip"
+          className="pointer-events-none fixed top-0 left-0 z-[100] whitespace-nowrap rounded-md border border-zinc-200/80 bg-white/95 px-2 py-1 text-[11px] leading-none text-zinc-600 shadow-sm backdrop-blur will-change-transform dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-300"
+          style={{ transform: 'translate3d(-9999px, -9999px, 0)' }}
+        >
+          {hoveredTimestamp}
+        </div>
+      )}
       {dragOver && <AttachDropOverlay />}
       <div className="relative flex-1 min-h-0">
         <div
@@ -827,7 +864,12 @@ export function TaskChat({
                       ref={isLatestUserMessage ? latestUserMessageRef : undefined}
                       className="flex min-w-0 justify-end"
                     >
-                      <div className="group/message relative w-fit min-w-0 max-w-[92%] sm:max-w-[85%]">
+                      <div
+                        className="group/message relative w-fit min-w-0 max-w-[92%] sm:max-w-[85%]"
+                        onMouseEnter={(event) => showHoverTimestamp(event, timestampLabel)}
+                        onMouseMove={(event) => positionHoverTimestamp(event.clientX, event.clientY)}
+                        onMouseLeave={hideHoverTimestamp}
+                      >
                         <div
                           title={timestampLabel}
                           tabIndex={0}
@@ -839,7 +881,7 @@ export function TaskChat({
                         {timestampLabel && (
                           <span
                             data-message-timestamp="visible-hover"
-                            className="pointer-events-none absolute top-full right-0 z-10 mt-1 whitespace-nowrap rounded-md border border-zinc-200/80 bg-white/95 px-2 py-1 text-[11px] leading-none text-zinc-500 opacity-0 shadow-sm backdrop-blur transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100 dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-400 sm:top-1/2 sm:right-full sm:mr-2 sm:mt-0 sm:-translate-y-1/2"
+                            className="pointer-events-none absolute top-full right-0 z-10 mt-1 whitespace-nowrap rounded-md border border-zinc-200/80 bg-white/95 px-2 py-1 text-[11px] leading-none text-zinc-500 opacity-0 shadow-sm backdrop-blur transition-opacity duration-150 group-focus-within/message:opacity-100 dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-400 sm:top-1/2 sm:right-full sm:mr-2 sm:mt-0 sm:-translate-y-1/2"
                           >
                             {timestampLabel}
                           </span>
@@ -870,6 +912,9 @@ export function TaskChat({
                     title={timestampLabel}
                     tabIndex={0}
                     className="group/message flex min-w-0 justify-start rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400"
+                    onMouseEnter={(event) => showHoverTimestamp(event, timestampLabel)}
+                    onMouseMove={(event) => positionHoverTimestamp(event.clientX, event.clientY)}
+                    onMouseLeave={hideHoverTimestamp}
                   >
                     <div className="min-w-0 w-full sm:px-2">
                       {thinkingToShow && (
@@ -910,7 +955,7 @@ export function TaskChat({
                         {timestampLabel && (
                           <span
                             data-message-timestamp="visible-hover"
-                            className="pointer-events-none whitespace-nowrap text-[11px] leading-none text-zinc-400 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100 dark:text-zinc-500"
+                            className="pointer-events-none whitespace-nowrap text-[11px] leading-none text-zinc-400 opacity-0 transition-opacity duration-150 group-focus-within/message:opacity-100 dark:text-zinc-500"
                           >
                             {timestampLabel}
                           </span>
