@@ -72,6 +72,8 @@ plist_changed=1
 /usr/bin/plutil -replace ProgramArguments.0 -string "$node" "$plist"
 switched=1
 atomic_link "$release"
+[ "$(readlink "$current")" = "$release" ] || { printf 'Current release symlink did not select the candidate.\n' >&2; exit 1; }
+[ "$($node -p 'require(process.argv[1]).version' "$current/package.json")" = "$version" ] || { printf 'Current release version does not match the requested update.\n' >&2; exit 1; }
 restart_launchd
 wait_ready_mac "$version"
 rm -f "$plist_backup"

@@ -145,6 +145,16 @@ esac
   assert.match(updateSource, /--version/);
   assert.match(updateSource, /fetch_release_source/);
   assert.match(updateSource, /wait_ready_mac "\$version"/);
+  assert.match(updateSource, /Current release symlink did not select the candidate/);
+  assert.match(updateSource, /Current release version does not match the requested update/);
+
+  const installSource = await readFile('scripts/macos/install.sh', 'utf8');
+  const plistTemplate = await readFile('deploy/macos/com.olympus.dispatch.plist', 'utf8');
+  assert.match(installSource, /--tailscale/);
+  assert.match(installSource, /HOST_VALUE=\$\{OLYMPUS_HOST:-127\.0\.0\.1\}/);
+  assert.match(installSource, /restart_launchd/);
+  assert.match(installSource, /wait_ready_mac "\$version"/);
+  assert.match(plistTemplate, /<key>HOST<\/key><string>@@HOST@@<\/string>/);
 } finally {
   await rm(fixture, { recursive: true, force: true });
   await rm(stateHome, { recursive: true, force: true });
