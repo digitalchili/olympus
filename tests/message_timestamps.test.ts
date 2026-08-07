@@ -65,5 +65,10 @@ assert.equal(
   2,
   'both duplicate visual timestamp labels are explicitly marked',
 );
+assert.doesNotMatch(
+  taskChatSource,
+  /\{shouldShowReplyCopyButton\([^)]*\) && \([\s\S]*?<div className="mt-1 flex/,
+  'assistant timestamps must not depend on reply copy-button visibility',
+);
 
 console.log('Message timestamp tests passed');
