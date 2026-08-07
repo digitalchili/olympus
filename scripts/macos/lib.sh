@@ -89,12 +89,13 @@ atomic_link() {
 
 set_launch_agent_program_arguments() {
   entrypoint=$1
-  /usr/libexec/PlistBuddy -c 'Delete :ProgramArguments' "$plist" >/dev/null 2>&1 || true
-  /usr/libexec/PlistBuddy -c 'Add :ProgramArguments array' "$plist"
-  /usr/libexec/PlistBuddy -c "Add :ProgramArguments:0 string $node" "$plist"
-  /usr/libexec/PlistBuddy -c "Add :ProgramArguments:1 string $entrypoint" "$plist"
-  [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist")" = "$node" ] || return 1
-  [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "$plist")" = "$entrypoint" ] || return 1
+  plistbuddy=${PLISTBUDDY:-/usr/libexec/PlistBuddy}
+  "$plistbuddy" -c 'Delete :ProgramArguments' "$plist" >/dev/null 2>&1 || true
+  "$plistbuddy" -c 'Add :ProgramArguments array' "$plist"
+  "$plistbuddy" -c "Add :ProgramArguments:0 string $node" "$plist"
+  "$plistbuddy" -c "Add :ProgramArguments:1 string $entrypoint" "$plist"
+  [ "$("$plistbuddy" -c 'Print :ProgramArguments:0' "$plist")" = "$node" ] || return 1
+  [ "$("$plistbuddy" -c 'Print :ProgramArguments:1' "$plist")" = "$entrypoint" ] || return 1
 }
 
 maintenance_request() {

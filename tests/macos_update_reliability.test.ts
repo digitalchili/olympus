@@ -145,9 +145,28 @@ esac
   await writeFile(plistFixture, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>ProgramArguments</key><array><string>old-node</string><string>old-entrypoint</string></array></dict></plist>`);
-  const programArguments = await run('sh', ['-c', '. ./scripts/macos/lib.sh; plist="$PLIST"; node="$NODE"; set_launch_agent_program_arguments "$ENTRYPOINT"; /usr/libexec/PlistBuddy -c "Print :ProgramArguments" "$PLIST"'], {
+  const fakePlistBuddy = join(fakeBin, 'PlistBuddy');
+  await writeFile(fakePlistBuddy, [
+    '#!/bin/sh',
+    'command=$2',
+    'plist=$3',
+    'state="${plist}.arguments"',
+    'case "$command" in',
+    "  'Delete :ProgramArguments') rm -f \"$state\" ;;",
+    "  'Add :ProgramArguments array') : > \"$state\" ;;",
+    "  'Add :ProgramArguments:0 string '*) printf '%s\\n' \"${command#Add :ProgramArguments:0 string }\" > \"$state\" ;;",
+    "  'Add :ProgramArguments:1 string '*) printf '%s\\n' \"${command#Add :ProgramArguments:1 string }\" >> \"$state\" ;;",
+    "  'Print :ProgramArguments:0') sed -n '1p' \"$state\" ;;",
+    "  'Print :ProgramArguments:1') sed -n '2p' \"$state\" ;;",
+    "  'Print :ProgramArguments') cat \"$state\" ;;",
+    '  *) exit 2 ;;',
+    'esac',
+    '',
+  ].join('\n'));
+  await chmod(fakePlistBuddy, 0o755);
+  const programArguments = await run('sh', ['-c', '. ./scripts/macos/lib.sh; plist="$PLIST"; node="$NODE"; set_launch_agent_program_arguments "$ENTRYPOINT"; "$PLISTBUDDY" -c "Print :ProgramArguments" "$PLIST"'], {
     cwd: projectRoot,
-    env: { ...process.env, PLIST: plistFixture, NODE: process.execPath, ENTRYPOINT: '/tmp/olympus/server/index.js' },
+    env: { ...process.env, PLIST: plistFixture, NODE: process.execPath, ENTRYPOINT: '/tmp/olympus/server/index.js', PLISTBUDDY: fakePlistBuddy },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   assert.equal(programArguments.code, 0, programArguments.stderr);
