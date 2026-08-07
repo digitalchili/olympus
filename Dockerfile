@@ -20,8 +20,11 @@ FROM ${HERMES_IMAGE} AS runtime
 ARG VERSION=0.3.0
 ARG REVISION=unknown
 WORKDIR /opt/olympus-dispatch
+# HOST=0.0.0.0 is required inside the container network namespace; exposure to the
+# outside world stays controlled by the published port binding (loopback by default).
 ENV NODE_ENV=production \
     PORT=6969 \
+    HOST=0.0.0.0 \
     HERMES_AGENT_DIR=/opt/hermes \
     HERMES_PYTHON=/opt/hermes/.venv/bin/python \
     PYTHONDONTWRITEBYTECODE=1

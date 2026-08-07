@@ -9,6 +9,8 @@ import { closeSubscribersForRestart } from './live-chat.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
+// Olympus is local-first: never listen beyond loopback unless the operator asks for it.
+const HOST = process.env.HOST?.trim() || '127.0.0.1';
 
 const httpServer = createServer(app);
 let closeFrontend: FrontendCleanup = () => {};
@@ -18,6 +20,7 @@ type ShutdownReason = NodeJS.Signals | 'startup-error';
 
 async function listenWithFallback(
   server: Server,
+  host: string,
   startPort: number,
   maxAttempts: number,
 ): Promise<number> {
@@ -35,7 +38,7 @@ async function listenWithFallback(
         };
         server.once('error', onError);
         server.once('listening', onListening);
-        server.listen(tryPort);
+        server.listen(tryPort, host);
       });
       if (tryPort !== startPort) {
         console.warn(`Port ${startPort} was busy — using port ${tryPort} instead.`);
@@ -60,9 +63,13 @@ async function main() {
       error instanceof Error ? error.message : error,
     );
   }
-  const boundPort = await listenWithFallback(httpServer, PORT, PORT_FALLBACK_ATTEMPTS);
+  const boundPort = await listenWithFallback(httpServer, HOST, PORT, PORT_FALLBACK_ATTEMPTS);
 
-  console.log(`Olympus Dispatch by Digital Chili running on http://localhost:${boundPort}`);
+  const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;
+  console.log(`Olympus Dispatch by Digital Chili running on http://${displayHost}:${boundPort}`);
+  if (displayHost !== HOST) {
+    console.warn(`HOST=${HOST} exposes Olympus beyond loopback — it has no authentication of its own.`);
+  }
 }
 
 function closeHttpServer(): Promise<void> {
