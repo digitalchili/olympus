@@ -4,14 +4,21 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ReplyCopyButton, shouldShowReplyCopyButton } from '../client/src/components/ReplyCopyButton.js';
 
-const markup = renderToStaticMarkup(createElement(ReplyCopyButton, {
+const replyMarkup = renderToStaticMarkup(createElement(ReplyCopyButton, {
   content: 'Reply with **Markdown** and `code`.',
 }));
+const questionMarkup = renderToStaticMarkup(createElement(ReplyCopyButton, {
+  content: 'What does this mean?',
+  kind: 'question',
+}));
 
-assert.match(markup, /type="button"/);
-assert.match(markup, /aria-label="Copy reply"/);
-assert.match(markup, /title="Copy reply"/);
-assert.match(markup, /data-reply-copy-button="true"/);
+assert.match(replyMarkup, /type="button"/);
+assert.match(replyMarkup, /aria-label="Copy reply"/);
+assert.match(replyMarkup, /title="Copy reply"/);
+assert.match(replyMarkup, /data-reply-copy-button="true"/);
+assert.match(questionMarkup, /aria-label="Copy question"/);
+assert.match(questionMarkup, /title="Copy question"/);
+assert.match(questionMarkup, /data-question-copy-button="true"/);
 
 assert.equal(shouldShowReplyCopyButton('Complete reply', false), true);
 assert.equal(shouldShowReplyCopyButton('Streaming reply', true), false);

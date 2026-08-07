@@ -50,25 +50,25 @@ assert.equal(
   2,
   'both user questions and assistant replies derive a timestamp label',
 );
-assert.equal(
-  taskChatSource.match(/title=\{timestampLabel\}/g)?.length,
-  2,
-  'both message types retain a native timestamp fallback',
+assert.doesNotMatch(
+  taskChatSource,
+  /title=\{timestampLabel\}|data-message-timestamp="pointer-tooltip"|showHoverTimestamp/,
+  'timestamps must not use native or cursor-following tooltips',
 );
 assert.equal(
-  taskChatSource.match(/onMouseEnter=\{\(event\) => showHoverTimestamp\(event, timestampLabel\)\}/g)?.length,
+  taskChatSource.match(/group-hover\/message:opacity-100/g)?.length,
   2,
-  'both user questions and assistant replies open the cursor-following timestamp tooltip',
+  'both question and reply action rows reveal their timestamp on section hover',
+);
+assert.equal(
+  taskChatSource.match(/data-message-timestamp="message-action-row"/g)?.length,
+  2,
+  'both timestamps live in message action rows',
 );
 assert.match(
   taskChatSource,
-  /data-message-timestamp="pointer-tooltip"/,
-  'the shared timestamp tooltip is rendered once near the pointer',
-);
-assert.equal(
-  taskChatSource.match(/data-message-timestamp="visible-hover"/g)?.length,
-  2,
-  'both duplicate visual timestamp labels are explicitly marked',
+  /<ReplyCopyButton content=\{text\} kind="question" \/>/,
+  'user questions have a copy button',
 );
 assert.doesNotMatch(
   taskChatSource,
