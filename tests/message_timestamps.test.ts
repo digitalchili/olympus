@@ -67,8 +67,8 @@ assert.equal(
 );
 assert.match(
   taskChatSource,
-  /<ReplyCopyButton content=\{text\} kind="question" \/>/,
-  'user questions have a copy button',
+  /<div className="mt-1 flex min-h-6 items-center justify-end gap-2">\s*\{timestampLabel && \([\s\S]*?\{timestampLabel\}[\s\S]*?\)\}\s*\{text && <ReplyCopyButton content=\{text\} kind="question" \/>\}/,
+  'user question action rows place the timestamp before the right-aligned copy button',
 );
 assert.doesNotMatch(
   taskChatSource,

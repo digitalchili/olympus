@@ -836,7 +836,6 @@ export function TaskChat({
                           <MessageAttachmentCards paths={filePaths} />
                         </div>
                         <div className="mt-1 flex min-h-6 items-center justify-end gap-2">
-                          {text && <ReplyCopyButton content={text} kind="question" />}
                           {timestampLabel && (
                             <span
                               data-message-timestamp="message-action-row"
@@ -845,6 +844,7 @@ export function TaskChat({
                               {timestampLabel}
                             </span>
                           )}
+                          {text && <ReplyCopyButton content={text} kind="question" />}
                         </div>
                       </div>
                     </div>
