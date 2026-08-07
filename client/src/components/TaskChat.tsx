@@ -819,6 +819,7 @@ export function TaskChat({
               if (msg.role === 'user') {
                 const isLatestUserMessage = msg.id === latestUserMessageId;
                 const { text, filePaths } = splitAttachmentMessage(msg.content);
+                const timestampLabel = messageTimestampTitle(msg);
                 return (
                   <Fragment key={msg.id}>
                     {compactDivider}
@@ -826,12 +827,23 @@ export function TaskChat({
                       ref={isLatestUserMessage ? latestUserMessageRef : undefined}
                       className="flex min-w-0 justify-end"
                     >
-                      <div
-                        title={messageTimestampTitle(msg)}
-                        className="min-w-0 max-w-[92%] overflow-hidden rounded-2xl bg-zinc-100 px-3.5 py-2.5 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap break-words dark:bg-zinc-800 dark:text-zinc-100 sm:max-w-[85%] sm:px-4"
-                      >
-                        {text && <div>{text}</div>}
-                        <MessageAttachmentCards paths={filePaths} />
+                      <div className="group/message relative w-fit min-w-0 max-w-[92%] sm:max-w-[85%]">
+                        <div
+                          title={timestampLabel}
+                          className="min-w-0 overflow-hidden rounded-2xl bg-zinc-100 px-3.5 py-2.5 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap break-words dark:bg-zinc-800 dark:text-zinc-100 sm:px-4"
+                        >
+                          {text && <div>{text}</div>}
+                          <MessageAttachmentCards paths={filePaths} />
+                        </div>
+                        {timestampLabel && (
+                          <span
+                            aria-hidden="true"
+                            data-message-timestamp="visible-hover"
+                            className="pointer-events-none absolute top-full right-0 z-10 mt-1 whitespace-nowrap rounded-md border border-zinc-200/80 bg-white/95 px-2 py-1 text-[11px] leading-none text-zinc-500 opacity-0 shadow-sm backdrop-blur transition-opacity duration-150 group-hover/message:opacity-100 dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-400 sm:top-1/2 sm:right-full sm:mr-2 sm:mt-0 sm:-translate-y-1/2"
+                          >
+                            {timestampLabel}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </Fragment>
@@ -849,11 +861,12 @@ export function TaskChat({
                 : isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
               const showSpinner = isLastAssistant && isStreaming && !msg.content && !thinkingContent && !activeTools.some(t => t.status === 'running');
               const { text: assistantText } = splitAttachmentMessage(msg.content);
+              const timestampLabel = messageTimestampTitle(msg);
 
               return (
                 <Fragment key={msg.id}>
                   {compactDivider}
-                  <div title={messageTimestampTitle(msg)} className="flex min-w-0 justify-start">
+                  <div title={timestampLabel} className="group/message flex min-w-0 justify-start">
                     <div className="min-w-0 w-full sm:px-2">
                       {thinkingToShow && (
                         <ThinkingBlock content={thinkingToShow} isLive={isLiveThinking} />
@@ -887,8 +900,17 @@ export function TaskChat({
                         <MessageAttachmentCards taskId={taskId} attachments={msg.attachments ?? []} />
                       </div>
                       {shouldShowReplyCopyButton(assistantText, isLastAssistant && isStreaming) && (
-                        <div className="mt-1 flex items-center">
+                        <div className="mt-1 flex min-h-6 items-center gap-2">
                           <ReplyCopyButton content={assistantText} />
+                          {timestampLabel && (
+                            <span
+                              aria-hidden="true"
+                              data-message-timestamp="visible-hover"
+                              className="pointer-events-none whitespace-nowrap text-[11px] leading-none text-zinc-400 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100 dark:text-zinc-500"
+                            >
+                              {timestampLabel}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>

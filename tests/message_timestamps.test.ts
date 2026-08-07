@@ -46,9 +46,24 @@ function createStorage(initial: Record<string, string> = {}) {
 const taskChatSource = await readFile('client/src/components/TaskChat.tsx', 'utf8');
 assert.match(taskChatSource, /import \{ messageTimestampTitle \} from ['"]\.\.\/lib\/messageTimestamps['"]/);
 assert.equal(
-  taskChatSource.match(/title=\{messageTimestampTitle\(msg\)\}/g)?.length,
+  taskChatSource.match(/const timestampLabel = messageTimestampTitle\(msg\);/g)?.length,
   2,
-  'both user questions and assistant replies expose their timestamp on hover',
+  'both user questions and assistant replies derive a timestamp label',
+);
+assert.equal(
+  taskChatSource.match(/title=\{timestampLabel\}/g)?.length,
+  2,
+  'both message types retain a native timestamp fallback',
+);
+assert.equal(
+  taskChatSource.match(/group-hover\/message:opacity-100/g)?.length,
+  2,
+  'both user questions and assistant replies render a visible timestamp label on hover',
+);
+assert.equal(
+  taskChatSource.match(/data-message-timestamp="visible-hover"/g)?.length,
+  2,
+  'both duplicate visual timestamp labels are explicitly marked',
 );
 
 console.log('Message timestamp tests passed');
