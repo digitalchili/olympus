@@ -13,6 +13,7 @@ import { deliverQueuedSteer } from '../lib/steerDelivery';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
+import { messageTimestampTitle } from '../lib/messageTimestamps';
 import {
   addProfileInvite,
   applyProfileMentionSelection,
@@ -821,8 +822,14 @@ export function TaskChat({
                 return (
                   <Fragment key={msg.id}>
                     {compactDivider}
-                    <div ref={isLatestUserMessage ? latestUserMessageRef : undefined} className="flex min-w-0 justify-end">
-                      <div className="min-w-0 max-w-[92%] overflow-hidden rounded-2xl bg-zinc-100 px-3.5 py-2.5 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap break-words dark:bg-zinc-800 dark:text-zinc-100 sm:max-w-[85%] sm:px-4">
+                    <div
+                      ref={isLatestUserMessage ? latestUserMessageRef : undefined}
+                      className="flex min-w-0 justify-end"
+                    >
+                      <div
+                        title={messageTimestampTitle(msg)}
+                        className="min-w-0 max-w-[92%] overflow-hidden rounded-2xl bg-zinc-100 px-3.5 py-2.5 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap break-words dark:bg-zinc-800 dark:text-zinc-100 sm:max-w-[85%] sm:px-4"
+                      >
                         {text && <div>{text}</div>}
                         <MessageAttachmentCards paths={filePaths} />
                       </div>
@@ -846,7 +853,7 @@ export function TaskChat({
               return (
                 <Fragment key={msg.id}>
                   {compactDivider}
-                  <div className="flex min-w-0 justify-start">
+                  <div title={messageTimestampTitle(msg)} className="flex min-w-0 justify-start">
                     <div className="min-w-0 w-full sm:px-2">
                       {thinkingToShow && (
                         <ThinkingBlock content={thinkingToShow} isLive={isLiveThinking} />

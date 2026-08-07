@@ -33,6 +33,15 @@ export function formatMessageTimestamp(
   }).format(timestamp);
 }
 
+export function messageTimestampTitle(
+  message: MessageTimestamp,
+  locales?: Intl.LocalesArgument,
+  timeZone?: string,
+): string | undefined {
+  const timestamp = selectMessageTimestamp(message);
+  return timestamp === null ? undefined : formatMessageTimestamp(timestamp, locales, timeZone);
+}
+
 export function formatFullMessageTimestamp(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'full',

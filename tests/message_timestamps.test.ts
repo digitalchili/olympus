@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   formatMessageTimestamp,
   getShowMessageTimestamps,
+  messageTimestampTitle,
   selectMessageTimestamp,
   setShowMessageTimestamps,
 } from '../client/src/lib/messageTimestamps.js';
@@ -37,6 +39,16 @@ function createStorage(initial: Record<string, string> = {}) {
   assert.equal(selectMessageTimestamp({ created_at: createdAt, completed_at: 0 }), createdAt);
   assert.equal(selectMessageTimestamp({ created_at: 0 }), null);
   assert.equal(formatMessageTimestamp(createdAt, 'en-US', 'UTC'), 'Jan 2, 2025, 3:04 AM');
+  assert.equal(messageTimestampTitle({ created_at: createdAt }, 'en-US', 'UTC'), 'Jan 2, 2025, 3:04 AM');
+  assert.equal(messageTimestampTitle({ created_at: 0 }, 'en-US', 'UTC'), undefined);
 }
+
+const taskChatSource = await readFile('client/src/components/TaskChat.tsx', 'utf8');
+assert.match(taskChatSource, /import \{ messageTimestampTitle \} from ['"]\.\.\/lib\/messageTimestamps['"]/);
+assert.equal(
+  taskChatSource.match(/title=\{messageTimestampTitle\(msg\)\}/g)?.length,
+  2,
+  'both user questions and assistant replies expose their timestamp on hover',
+);
 
 console.log('Message timestamp tests passed');

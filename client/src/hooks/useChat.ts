@@ -412,6 +412,7 @@ export function useChat() {
       if (event.attachments) ensureAssistant(run).attachments = event.attachments.map((attachment) => ({ ...attachment }));
       if (event.sessionId) run.sessionId = event.sessionId;
       if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
+      ensureAssistant(run).completed_at = Date.now();
       if (event.context !== undefined) {
         run.context = event.context;
         liveContextRef.current = event.context;

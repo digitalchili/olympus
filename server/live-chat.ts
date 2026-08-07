@@ -236,6 +236,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     mergeToolProgress(assistant.tools, event);
   } else if (event.type === 'done') {
     if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
+    assistant.completed_at = Date.now();
     if (event.sessionId) run.sessionId = event.sessionId;
     if (event.context !== undefined) {
       run.context = event.context;
