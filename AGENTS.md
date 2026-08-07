@@ -50,7 +50,7 @@ Python worker (hermes_worker.py)
 Hermes AIAgent
 ```
 
-- **Server** (`server/`): Express + SQLite (better-sqlite3, WAL mode). All timestamps are epoch milliseconds.
+- **Server** (`server/`): Express + SQLite (better-sqlite3, WAL mode). All timestamps are epoch milliseconds. Listens on loopback unless `HOST` says otherwise, and ships no authentication — every route assumes a trusted local caller.
 - **Python worker** (`server/workers/hermes_worker.py`): JSONL bridge that imports Hermes `AIAgent` directly. Spawned as a subprocess by `HermesWorkerAdapter`, auto-restarts on crash. Manages concurrent agent runs via semaphore (default: 10).
 - **Client** (`client/`): React 19 + Vite + Tailwind CSS + Zustand + react-router. `@shared` path alias resolves to `../shared/`.
 - **Shared** (`shared/types.ts`): TypeScript types used by both client and server.
@@ -85,7 +85,11 @@ All persistent state lives under `OLYMPUS_DISPATCH_HOME` (default: `~/.olympus-d
 - **SSE board events**: `/api/events` broadcasts board-level events (task CRUD) to all clients. Separate from per-task live chat SSE.
 - **Disconnect resilience**: If the browser disconnects during a stream, the server continues draining the worker stream to completion. On successful completion, `last_agent_response_at` is recorded for the task.
 - **Scheduled Tasks**: Hermes manages the underlying cron job state internally. Olympus Dispatch exposes `/api/scheduled-tasks` endpoints to list, create, edit, pause, resume, trigger, remove, and read local output files. Scheduled tasks are standalone; Olympus Dispatch no longer links them to task IDs.
-- **File browser**: `server/routes/files.ts` exposes CRUD operations on the `OLYMPUS_DISPATCH_HOME/workspace/` directory (list, read, write, create, rename, delete, upload via multer). The client's `FileBrowserPage` provides a full file manager UI.
+- **File browser**: `server/routes/files.ts` exposes CRUD operations (list, read, write, create, rename, delete, download, upload via multer) restricted to the browsable roots: every profile workspace plus `OLYMPUS_DISPATCH_PROJECT_ROOT`. `resolveUserPath()` rejects anything outside those roots with `403 PATH_NOT_ALLOWED`, and `/list` reports `parentPath: null` at a root so the UI cannot navigate out. Olympus has no authentication of its own, so this containment is the boundary — never widen it to `~` or `/`. The client's `FileBrowserPage` provides a full file manager UI.
+- **Local profiles**: `server/local-profiles.ts` discovers the default and named Hermes profiles on this machine (`discoverLocalProfileTargets()`), each with its own `hermesHome`, `workspaceDir`, `skillsDir`, and lazily started worker. Requests carry the active profile in the `?profile=` query parameter; `server/profile-context.ts` resolves it once per request (`requestProfile`), scopes task lookups (`requireTaskForProfile`, `taskBelongsToProfile`), and gates mutations while a profile deletion takes its snapshot. `ProfileAgentAdapter` (`server/adapters/routing.ts`) routes agent calls to the right worker. Tasks store their profile in `tasks.profile_name`; `NULL` means the default profile.
+- **Collaboration**: `server/collaboration.ts` + `server/db/collaboration.ts` run a bounded, multi-round advisory exchange between invited profiles (proposal → review → chair synthesis). Contributor output is injected into the chair's context as explicitly untrusted advisory text, never as user instructions. Runs interrupted by a restart are marked failed at startup.
+- **Delegation**: `server/delegation-events.ts` + `server/db/delegations.ts` project child-session activity reported by the worker into `delegation_runs`, broadcast as `delegation_run_updated` board events. Rows left `queued`/`running`/`waiting` by a restart recover to `unknown`.
+- **Drain and maintenance**: `server/drain.ts` + `server/drain-http.ts` expose `/api/maintenance/*` behind `OLYMPUS_MAINTENANCE_TOKEN`, and `maintenanceGuard` rejects new work once draining. `/api/ready` reports readiness for deploys and installers. Shutdown drains active runs before closing (`OLYMPUS_DRAIN_TIMEOUT_MS`).
 - **Skills**: `server/routes/skills.ts` backs the client's `SkillsPage`. Skills install under `OLYMPUS_DISPATCH_HOME/skills/`, and that directory is registered as a Hermes `external_dirs` entry in `~/.hermes/config.yaml` (edited via the `yaml` library, idempotently) so agent runs load them. Two install sources: the ClawHub registry (`POST /skills/install` by slug — downloads files, verifies SHA-256 checksums, writes an `.olympus-dispatch-skill.json` sidecar with provider/version/source metadata) and local folder/`.zip` import (`POST /skills/import`, multipart via multer). ClawHub browsing is server-proxied through `GET /skills/registry/{search,browse,:slug/content,:slug/scan}` — the client never calls `clawhub.ai` directly. Other endpoints: `GET /skills` (list installed), `GET /skills/:id/content`, `DELETE /skills/:id`. Skills are pure Node + filesystem + HTTP — they do not go through the Python worker.
 - **Server imports**: Use `.js` extensions in import paths (ESM with tsx).
 
@@ -187,6 +191,10 @@ All optional — defaults work for local development.
 
 ```bash
 PORT=6969                        # Web server port
+HOST=127.0.0.1                   # Listen address. Loopback by default; Olympus has no auth
+                                 # of its own, so only widen this deliberately.
+                                 # Containers must set HOST=0.0.0.0 (the Dockerfile does)
+                                 # and control exposure with the published port binding.
 HERMES_PYTHON=                   # Path to Python with Hermes deps (auto-detected if unset)
 HERMES_AGENT_DIR=                # Path to Hermes agent dir (default: ~/.hermes/hermes-agent)
 HERMES_AGENT_RUN_LIMIT=10        # Max concurrent AIAgent.run_conversation calls
