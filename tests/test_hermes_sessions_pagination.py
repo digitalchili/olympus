@@ -91,6 +91,8 @@ def create_fixture(path: Path) -> FixtureSessionDB:
             ("assistant", "child-assistant-00"),
             ("user", "child-user-01"),
             ("assistant", "child-assistant-01"),
+            ("user", "[ASYNC DELEGATION BATCH COMPLETE]\ninternal worker reports"),
+            ("assistant", "automatic synthesis"),
         ]
         for role, content in child_rows:
             timestamp += 1
@@ -140,7 +142,14 @@ class MessagePaginationTest(unittest.TestCase):
         self.assertIn(hermes_sessions.COMPACTION_MARKER_TEXT, contents)
         self.assertNotIn("summary before marker", contents)
         self.assertNotIn("summary after marker", contents)
-        self.assertEqual(contents[-4:], ["child-user-00", "child-assistant-00", "child-user-01", "child-assistant-01"])
+        self.assertNotIn("[ASYNC DELEGATION BATCH COMPLETE]\ninternal worker reports", contents)
+        self.assertEqual(contents[-5:], [
+            "child-user-00",
+            "child-assistant-00",
+            "child-user-01",
+            "child-assistant-01",
+            "automatic synthesis",
+        ])
 
     def test_invalid_limits_and_cursors_are_rejected(self):
         for limit in (0, 101, True, 1.5, "not-an-int"):

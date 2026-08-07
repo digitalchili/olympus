@@ -60,6 +60,7 @@ def _sanitize_agent_history(history: Any) -> list[dict[str, Any]]:
 
 COMPACTION_REFERENCE_PREFIX = "[CONTEXT COMPACTION"
 COMPACTION_MARKER_TEXT = "Context compacted. Earlier conversation was summarized so the agent could continue."
+ASYNC_DELEGATION_CALLBACK_PREFIX = "[ASYNC DELEGATION "
 
 
 def open_session(session_id: str, *, resolve_live: bool = True) -> tuple[Any, str]:
@@ -217,6 +218,10 @@ def _is_compaction_reference(content: str) -> bool:
     )
 
 
+def _is_async_delegation_callback(content: str) -> bool:
+    return content.lstrip().startswith(ASYNC_DELEGATION_CALLBACK_PREFIX)
+
+
 def _timestamp_to_ms(timestamp: Any) -> int:
     try:
         value = float(timestamp)
@@ -277,6 +282,10 @@ def project_session_messages(session_id: Any, task_id: Any = None) -> dict[str, 
                     })
                     compaction_seen = True
                     child_user_seen = False
+                    continue
+                if _is_async_delegation_callback(content):
+                    if compaction_seen:
+                        child_user_seen = True
                     continue
                 if not compaction_seen:
                     continue
@@ -439,6 +448,8 @@ def _project_message_page_row(
                 "content": COMPACTION_MARKER_TEXT,
                 "created_at": _timestamp_to_ms(row.get("timestamp")),
             }
+        if _is_async_delegation_callback(content):
+            return None
 
     if child_boundary is not None:
         marker_id, first_user_id = child_boundary

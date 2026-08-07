@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -250,6 +251,74 @@ def project_delegation_event(
         ),
         "filesTouched": min(file_count, 10_000),
     }
+
+
+def background_delegation_id(result: Any) -> str | None:
+    """Return the durable ID only for a detached delegate_task dispatch."""
+    payload = result
+    if isinstance(result, str):
+        try:
+            payload = json.loads(result)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(payload, dict) or payload.get("status") != "dispatched":
+        return None
+    return _safe_protocol_identifier(payload.get("delegation_id"), 120)
+
+
+def background_delegation_was_dispatched(result: Any) -> bool:
+    """Compatibility predicate for tests and callers that only need status."""
+    return background_delegation_id(result) is not None
+
+
+def take_owned_delegation_notification(
+    session_id: str,
+    *,
+    delegation_ids: set[str] | None = None,
+    registry: Any = None,
+    timeout: float = 0.5,
+) -> dict[str, Any] | None:
+    """Take one completed delegation for this session without stealing others."""
+    if registry is None:
+        from tools.process_registry import process_registry
+
+        registry = process_registry
+
+    deferred: list[dict[str, Any]] = []
+    try:
+        first = registry.completion_queue.get(timeout=max(0.0, timeout))
+    except queue.Empty:
+        return None
+
+    candidates = [first]
+    for _ in range(registry.completion_queue.qsize()):
+        try:
+            candidates.append(registry.completion_queue.get_nowait())
+        except queue.Empty:
+            break
+
+    selected = None
+    for event in candidates:
+        owner_ids = {
+            string_or_none(event.get("session_key")),
+            string_or_none(event.get("origin_session_id")),
+            string_or_none(event.get("parent_session_id")),
+        }
+        event_delegation_id = _safe_protocol_identifier(event.get("delegation_id"), 120)
+        id_matches = delegation_ids is None or event_delegation_id in delegation_ids
+        if (
+            selected is None
+            and event.get("type") == "async_delegation"
+            and session_id in owner_ids
+            and id_matches
+        ):
+            selected = event
+        else:
+            deferred.append(event)
+
+    for event in deferred:
+        registry.completion_queue.put(event)
+    return selected
 
 
 def _result(request_id: str, data: dict[str, Any]) -> None:
@@ -1404,6 +1473,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
 
     state = {"text": "", "thinking": ""}
     active_delegation_id: str | None = None
+    pending_background_delegations: set[str] = set()
     child_delegation_ids: dict[str, str] = {}
     child_last_emit_at: dict[str, float] = {}
 
@@ -1424,7 +1494,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         _send({"id": request_id, "type": "thinking_delta", "content": chunk})
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
-        nonlocal active_delegation_id
+        nonlocal active_delegation_id, pending_background_delegations
         event_type = None
         name = None
         preview = None
@@ -1493,6 +1563,10 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 "label": None if tool_name == "delegate_task" else (str(preview) if preview else None),
             })
             if tool_name == "delegate_task":
+                if not kwargs.get("is_error"):
+                    dispatched_id = background_delegation_id(kwargs.get("result"))
+                    if dispatched_id:
+                        pending_background_delegations.add(dispatched_id)
                 active_delegation_id = None
 
     agent = _create_agent(
@@ -1525,44 +1599,134 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     except Exception:
         session_tokens = None
 
+    delivery_event = None
+    delivery_claim = None
+    next_message = message
     try:
-        result = agent.run_conversation(
-            user_message=message,
-            system_message=system_message,
-            conversation_history=history,
-            task_id=session_id,
-        )
+        while True:
+            text_before = len(state["text"])
+            thinking_before = len(state["thinking"])
+            result = agent.run_conversation(
+                user_message=next_message,
+                system_message=system_message,
+                conversation_history=history,
+                task_id=session_id,
+            )
+
+            if result.get("interrupted"):
+                # A stopped synthesis must not leave its durable delivery claim stuck.
+                if delivery_event is not None and delivery_claim is not None:
+                    from tools.async_delegation import complete_event_delivery
+
+                    complete_event_delivery(delivery_event, delivery_claim)
+                    delivery_event = None
+                    delivery_claim = None
+                # User-initiated stop: end the turn cleanly (the partial reply is already
+                # streamed and persisted by run_conversation) rather than as an error.
+                _send({
+                    "id": request_id,
+                    "type": "done",
+                    "sessionId": getattr(agent, "session_id", None) or session_id,
+                    "interrupted": True,
+                })
+                return
+
+            final_text = str(result.get("final_response") or "")
+            failure_message = _agent_failure_message(final_text)
+            if failure_message:
+                raise WorkerError(failure_message, code="provider_error")
+
+            if delivery_event is not None and delivery_claim is not None:
+                from tools.async_delegation import complete_event_delivery
+
+                complete_event_delivery(delivery_event, delivery_claim)
+                delivery_event = None
+                delivery_claim = None
+
+            if final_text and len(state["text"]) == text_before:
+                on_text_delta(final_text)
+            if result.get("last_reasoning") and len(state["thinking"]) == thinking_before:
+                on_reasoning_delta(str(result["last_reasoning"]))
+
+            if not pending_background_delegations:
+                break
+
+            event = None
+            while event is None:
+                owner_session_ids = _dedupe([
+                    string_or_none(getattr(agent, "session_id", None)) or "",
+                    session_id,
+                ])
+                if bool(getattr(agent, "_interrupt_requested", False)):
+                    from tools.async_delegation import interrupt_for_session
+
+                    for owner_session_id in owner_session_ids:
+                        interrupt_for_session(
+                            session_key=owner_session_id,
+                            parent_session_id=owner_session_id,
+                            reason="olympus_user_interrupt",
+                        )
+                    _send({
+                        "id": request_id,
+                        "type": "done",
+                        "sessionId": getattr(agent, "session_id", None) or session_id,
+                        "interrupted": True,
+                    })
+                    return
+                for owner_index, owner_session_id in enumerate(owner_session_ids):
+                    event = take_owned_delegation_notification(
+                        owner_session_id,
+                        delegation_ids=pending_background_delegations,
+                        timeout=0.5 if owner_index == 0 else 0,
+                    )
+                    if event is not None:
+                        break
+                if event is None:
+                    time.sleep(0.1)
+
+            completed_delegation_id = _safe_protocol_identifier(event.get("delegation_id"), 120)
+            if completed_delegation_id:
+                pending_background_delegations.discard(completed_delegation_id)
+            from tools.async_delegation import claim_event_delivery, complete_event_delivery
+            from tools.process_registry import format_process_notification
+
+            claim = claim_event_delivery(event, "olympus-worker")
+            if claim is None:
+                continue
+            delivery_event = event
+            delivery_claim = claim
+            notification = format_process_notification(event)
+            if not notification:
+                complete_event_delivery(event, claim)
+                delivery_event = None
+                delivery_claim = None
+                continue
+
+            if state["text"] and not state["text"].endswith("\n\n"):
+                on_text_delta("\n\n")
+            next_message = notification
+            session_db, session_id = open_session(
+                string_or_none(getattr(agent, "session_id", None)) or session_id
+            )
+            history = load_agent_history(session_db, session_id)
     finally:
+        if delivery_event is not None and delivery_claim is not None:
+            try:
+                from tools.async_delegation import release_event_delivery
+                from tools.process_registry import process_registry
+
+                release_event_delivery(delivery_event, delivery_claim)
+                process_registry.completion_queue.put(delivery_event)
+            except Exception:
+                pass
         if session_tokens is not None and clear_session_vars is not None:
             try:
                 clear_session_vars(session_tokens)
             except Exception:
                 pass
-
-    # From this point onward no model/tool work can consume another steer.
-    # Retire atomically before inspecting or draining pending steer content.
-    _unregister_active_agent(_task_key_for(request), request_id)
-
-    if result.get("interrupted"):
-        # User-initiated stop: end the turn cleanly (the partial reply is already
-        # streamed and persisted by run_conversation) rather than as an error.
-        _send({
-            "id": request_id,
-            "type": "done",
-            "sessionId": getattr(agent, "session_id", None) or session_id,
-            "interrupted": True,
-        })
-        return
-
-    final_text = str(result.get("final_response") or "")
-    failure_message = _agent_failure_message(final_text)
-    if failure_message:
-        raise WorkerError(failure_message, code="provider_error")
-
-    if final_text and not state["text"]:
-        _send({"id": request_id, "type": "text_delta", "content": final_text})
-    if result.get("last_reasoning") and not state["thinking"]:
-        _send({"id": request_id, "type": "thinking_delta", "content": str(result["last_reasoning"])})
+        # No model/tool work can consume another steer after the continuation
+        # loop exits (including return/error paths), so retire the agent here.
+        _unregister_active_agent(_task_key_for(request), request_id)
 
     context_engine = getattr(agent, "context_compressor", None)
     context_used = int(result.get("last_prompt_tokens") or 0)
