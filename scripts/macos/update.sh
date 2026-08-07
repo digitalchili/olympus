@@ -69,11 +69,11 @@ maintenance_request POST drain "$token" >/dev/null; drained=1
 wait_idle "$token" || { printf 'Drain timed out.\n' >&2; exit 1; }
 backup_native_release "$previous_current"
 plist_changed=1
-/usr/bin/plutil -replace ProgramArguments.0 -string "$node" "$plist"
 switched=1
 atomic_link "$release"
 [ "$(readlink "$current")" = "$release" ] || { printf 'Current release symlink did not select the candidate.\n' >&2; exit 1; }
 [ "$($node -p 'require(process.argv[1]).version' "$current/package.json")" = "$version" ] || { printf 'Current release version does not match the requested update.\n' >&2; exit 1; }
+set_launch_agent_program_arguments "$current/dist/server/server/index.js"
 restart_launchd
 wait_ready_mac "$version"
 rm -f "$plist_backup"

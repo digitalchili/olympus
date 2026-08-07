@@ -141,12 +141,27 @@ esac
   assert.match(launchCommands, /^kickstart -k /m);
   assert.equal(launchCommands.match(/^bootstrap /gm)?.length, 2, 'launchd bootstrap must retry after a transient race');
 
+  const plistFixture = join(fixture, 'program-arguments.plist');
+  await writeFile(plistFixture, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>ProgramArguments</key><array><string>old-node</string><string>old-entrypoint</string></array></dict></plist>`);
+  const programArguments = await run('sh', ['-c', '. ./scripts/macos/lib.sh; plist="$PLIST"; node="$NODE"; set_launch_agent_program_arguments "$ENTRYPOINT"; /usr/libexec/PlistBuddy -c "Print :ProgramArguments" "$PLIST"'], {
+    cwd: projectRoot,
+    env: { ...process.env, PLIST: plistFixture, NODE: process.execPath, ENTRYPOINT: '/tmp/olympus/server/index.js' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.equal(programArguments.code, 0, programArguments.stderr);
+  assert.match(programArguments.stdout, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(programArguments.stdout, /\/tmp\/olympus\/server\/index\.js/);
+  assert.doesNotMatch(programArguments.stdout, /old-node|old-entrypoint/);
+
   const updateSource = await readFile('scripts/macos/update.sh', 'utf8');
   assert.match(updateSource, /--version/);
   assert.match(updateSource, /fetch_release_source/);
   assert.match(updateSource, /wait_ready_mac "\$version"/);
   assert.match(updateSource, /Current release symlink did not select the candidate/);
   assert.match(updateSource, /Current release version does not match the requested update/);
+  assert.match(updateSource, /set_launch_agent_program_arguments/);
 
   const installSource = await readFile('scripts/macos/install.sh', 'utf8');
   const plistTemplate = await readFile('deploy/macos/com.olympus.dispatch.plist', 'utf8');
@@ -157,8 +172,11 @@ esac
   assert.match(plistTemplate, /<key>HOST<\/key><string>@@HOST@@<\/string>/);
   const macLib = await readFile('scripts/macos/lib.sh', 'utf8');
   assert.match(macLib, /local_probe_base_url/);
+  assert.match(macLib, /set_launch_agent_program_arguments/);
   assert.match(macLib, /Print :EnvironmentVariables:HOST/);
   assert.match(macLib, /\$\(local_probe_base_url\)\/api\/ready/);
+  assert.match(macLib, /header = "Authorization: Bearer %s"/);
+  assert.doesNotMatch(macLib, /Authorization: Bearer \*\*\*/);
 } finally {
   await rm(fixture, { recursive: true, force: true });
   await rm(stateHome, { recursive: true, force: true });
