@@ -44,6 +44,8 @@ Olympus discovers the default profile and valid named profiles from the Hermes i
 
 Tasks use the default local Hermes worker unless a local profile is selected explicitly. Each selected named profile runs in its own isolated, lazily started worker with that profile's Hermes home, settings, sessions, and credentials.
 
+If a profile tool normally targets a Docker-only service name or another endpoint that is unreachable from the Olympus process, put only the Olympus-specific values in `<profile-home>/.olympus-dispatch.env`. Olympus applies this file after the profile's native `.env` but before external secret sources, machine-managed environment policy, and profile plugin discovery; external and managed values therefore remain authoritative. Keep the file mode `0600`; never commit it. All `HERMES_*` and `OLYMPUS_*` variables, plus core process variables such as `HOME`, `PATH`, and `PYTHONPATH`, are rejected. Restart or evict the profile worker after changing the file.
+
 ## Development
 
 ```bash

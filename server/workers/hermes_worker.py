@@ -23,6 +23,7 @@ sys.modules.setdefault("hermes_worker", sys.modules[__name__])
 
 from hermes_worker_utils import (
     WorkerError,
+    apply_worker_environment_overrides,
     string_or_none,
     truncate_with_ellipsis,
 )
@@ -431,6 +432,39 @@ def _ensure_imports_unlocked() -> None:
     agent_dir_str = str(_AGENT_DIR)
     if agent_dir_str not in sys.path:
         sys.path.append(agent_dir_str)
+
+    hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+    try:
+        from hermes_cli import env_loader as hermes_env_loader
+    except ImportError as exc:
+        raise WorkerError(
+            f"Could not import Hermes environment loader: {exc}",
+            code="import_error",
+            hint="Use HERMES_PYTHON=~/.hermes/hermes-agent/venv/bin/python.",
+        ) from exc
+
+    apply_external_secret_sources = getattr(
+        hermes_env_loader,
+        "_apply_external_secret_sources",
+        None,
+    )
+    if not callable(apply_external_secret_sources):
+        raise WorkerError(
+            "Hermes environment loader does not expose the required pre-policy hook.",
+            code="hermes_incompatible",
+            hint="Update Olympus Dispatch or use a compatible Hermes Agent release.",
+        )
+
+    def apply_worker_overrides_before_secret_sources(home_path: Any) -> Any:
+        apply_worker_environment_overrides(hermes_home)
+        return apply_external_secret_sources(home_path)
+
+    # run_agent imports model_tools, which discovers profile plugins immediately.
+    # Inject after native dotenv but before external secrets and managed policy so
+    # plugin constants see the endpoint override without weakening either policy.
+    hermes_env_loader._apply_external_secret_sources = (
+        apply_worker_overrides_before_secret_sources
+    )
 
     try:
         from run_agent import AIAgent
