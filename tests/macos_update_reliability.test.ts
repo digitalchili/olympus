@@ -155,6 +155,10 @@ esac
   assert.match(installSource, /restart_launchd/);
   assert.match(installSource, /wait_ready_mac "\$version"/);
   assert.match(plistTemplate, /<key>HOST<\/key><string>@@HOST@@<\/string>/);
+  const macLib = await readFile('scripts/macos/lib.sh', 'utf8');
+  assert.match(macLib, /local_probe_base_url/);
+  assert.match(macLib, /Print :EnvironmentVariables:HOST/);
+  assert.match(macLib, /\$\(local_probe_base_url\)\/api\/ready/);
 } finally {
   await rm(fixture, { recursive: true, force: true });
   await rm(stateHome, { recursive: true, force: true });

@@ -89,7 +89,19 @@ atomic_link() {
 
 maintenance_request() {
   method=$1 path=$2 token=$3
-  { printf 'url="http://127.0.0.1:%s/api/maintenance/%s"\n' "${PORT:-6969}" "$path"; printf 'request="%s"\n' "$method"; printf 'header="Authorization: Bearer %s"\nfail\nsilent\nshow-error\n' "$token"; } | curl --config -
+  { printf 'url="%s/api/maintenance/%s"\n' "$(local_probe_base_url)" "$path"; printf 'request="%s"\n' "$method"; printf 'header="Authorization: Bearer ***"\nfail\nsilent\nshow-error\n' "$token"; } | curl --config -
+}
+
+local_probe_base_url() {
+  host=${OLYMPUS_PROBE_HOST:-}
+  if [ -z "$host" ] && [ -f "$plist" ]; then
+    host=$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:HOST' "$plist" 2>/dev/null || true)
+  fi
+  case "$host" in
+    ''|localhost|127.0.0.1|::1|'[::1]'|0.0.0.0|'::') host=127.0.0.1 ;;
+    *:*) host="[$host]" ;;
+  esac
+  printf 'http://%s:%s' "$host" "${PORT:-6969}"
 }
 
 wait_idle() {
@@ -124,9 +136,9 @@ wait_ready_mac() {
   expected_version=${1:-}
   i=0
   while [ "$i" -lt "${READY_ATTEMPTS:-30}" ]; do
-    if curl --fail --silent --show-error "http://127.0.0.1:${PORT:-6969}/api/ready" >/dev/null; then
+    if curl --fail --silent --show-error "$(local_probe_base_url)/api/ready" >/dev/null; then
       if [ -z "$expected_version" ]; then return 0; fi
-      live_version=$(curl --fail --silent --show-error "http://127.0.0.1:${PORT:-6969}/api/version" 2>/dev/null || true)
+      live_version=$(curl --fail --silent --show-error "$(local_probe_base_url)/api/version" 2>/dev/null || true)
       printf '%s' "$live_version" | tr -d '[:space:]' | grep -Fq "\"version\":\"$expected_version\"" && return 0
     fi
     i=$((i + 1)); sleep "${READY_INTERVAL_SECONDS:-2}"

@@ -23,6 +23,10 @@ done
 . "$(dirname "$0")/lib.sh"
 select_node
 if [ "$DRY_RUN" = 0 ] && [ -L "$current" ]; then
+  if [ "$HOST_VALUE" != "${OLYMPUS_HOST:-127.0.0.1}" ] || [ "$#" -gt 0 ]; then
+    printf 'Network binding is configured during first install only; use a dedicated reconfigure command for an existing installation.\n' >&2
+    exit 2
+  fi
   exec "$source_root/scripts/macos/update.sh"
 fi
 hermes=${HERMES_AGENT_DIR:-$HOME/.hermes/hermes-agent}

@@ -65,9 +65,10 @@ async function main() {
   }
   const boundPort = await listenWithFallback(httpServer, HOST, PORT, PORT_FALLBACK_ATTEMPTS);
 
+  const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;
   console.log(`Olympus Dispatch by Digital Chili running on http://${displayHost}:${boundPort}`);
-  if (displayHost !== HOST) {
+  if (!loopbackHosts.has(HOST)) {
     console.warn(`HOST=${HOST} exposes Olympus beyond loopback — it has no authentication of its own.`);
   }
 }
