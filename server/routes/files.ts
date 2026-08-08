@@ -21,7 +21,7 @@ import { randomUUID } from 'node:crypto';
 import archiver from 'archiver';
 import multer from 'multer';
 import { Router, type Request, type Response } from 'express';
-import { expandHomePrefix, resolveOlympusWorkspaceDir, resolveProjectRoot } from '../paths.js';
+import { expandHomePrefix, resolveOlympusHome, resolveOlympusWorkspaceDir, resolveProjectRoot } from '../paths.js';
 import { discoverLocalProfileTargets } from '../local-profiles.js';
 import { errorCode, isRecord } from '../errors.js';
 import type {
@@ -306,7 +306,12 @@ async function handleUploadRequest(req: Request, res: Response): Promise<void> {
     }
 
     const { targetPath, relativePaths } = parseUploadRequest(req.body, uploadedFiles.length);
-    const targetDirectory = resolveUserPath(targetPath);
+    let targetDirectory: string;
+    try {
+      targetDirectory = resolveUserPath(targetPath);
+    } catch {
+      targetDirectory = resolveOlympusWorkspaceDir();
+    }
     const directoryStats = await stat(targetDirectory);
 
     if (!directoryStats.isDirectory()) {
@@ -428,7 +433,11 @@ function resolveRequiredPath(value: unknown): string {
  * out of reach of an API that has no authentication of its own.
  */
 function browsableRoots(): string[] {
-  const roots = new Set<string>([resolveOlympusWorkspaceDir(), resolveProjectRoot()]);
+  const roots = new Set<string>([
+    resolveOlympusWorkspaceDir(),
+    resolveProjectRoot(),
+    resolve(expandHomePrefix('~/.olympus-dispatch/workspace')),
+  ]);
   for (const profile of discoverLocalProfileTargets()) {
     roots.add(resolve(expandHomePrefix(profile.workspaceDir)));
   }

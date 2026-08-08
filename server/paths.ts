@@ -3,6 +3,18 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export function expandHomePrefix(value: string): string {
+  // When OLYMPUS_DISPATCH_HOME is explicitly set, a leading "~/.olympus-dispatch"
+  // must resolve against that configured home — not the container/process $HOME,
+  // which can differ (e.g. Docker sets HOME=/opt/data/home while Olympus lives at
+  // /opt/data/olympus-dispatch). Falling back to $HOME would point the file browser
+  // at a path outside its configured browsable roots.
+  const configuredOlympusHome = process.env.OLYMPUS_DISPATCH_HOME?.trim();
+  if (configuredOlympusHome && value === '~/.olympus-dispatch') {
+    return configuredOlympusHome;
+  }
+  if (configuredOlympusHome && value.startsWith('~/.olympus-dispatch/')) {
+    return join(configuredOlympusHome, value.slice('~/.olympus-dispatch/'.length));
+  }
   if (value === '~') return homedir();
   if (value.startsWith('~/')) return join(homedir(), value.slice(2));
   return value;
