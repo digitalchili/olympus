@@ -11,7 +11,9 @@ import {
 } from 'react';
 import {
   AlertCircle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
@@ -57,6 +59,9 @@ type DeleteDialog = {
   error: string | null;
 };
 
+type SortField = 'name' | 'modifiedAt' | 'size' | 'type';
+type SortOrder = 'asc' | 'desc';
+
 type InlineNameBase = { name: string; busy: boolean; error: string | null };
 type InlineNameOperation =
   | (InlineNameBase & { mode: 'create'; type: FileCreateType })
@@ -92,9 +97,50 @@ export function FileBrowserPage() {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [backStack, setBackStack] = useState<string[]>([]);
   const [forwardStack, setForwardStack] = useState<string[]>([]);
+  const [sortField, setSortField] = useState<SortField>('modifiedAt');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
-  const isDirty = openFile ? content !== openFile.content : false;
-  const selectedPath = selectedEntry?.path ?? null;
+  const handleToggleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder(field === 'modifiedAt' ? 'desc' : 'asc');
+    }
+  };
+
+  const sortedDirectory = useMemo(() => {
+    if (!directory) return null;
+    const entries = [...directory.entries];
+    entries.sort((a, b) => {
+      // Directories first
+      if (a.type === 'directory' && b.type !== 'directory') return -1;
+      if (a.type !== 'directory' && b.type === 'directory') return 1;
+
+      let valA: string | number = '';
+      let valB: string | number = '';
+
+      if (sortField === 'modifiedAt') {
+        valA = a.modifiedAt ?? 0;
+        valB = b.modifiedAt ?? 0;
+      } else if (sortField === 'size') {
+        valA = a.size ?? 0;
+        valB = b.size ?? 0;
+      } else if (sortField === 'type') {
+        valA = a.type;
+        valB = b.type;
+      } else {
+        valA = a.name.toLowerCase();
+        valB = b.name.toLowerCase();
+      }
+
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+
+    return { ...directory, entries };
+  }, [directory, sortField, sortOrder]);
   const downloadTargetPath = selectedEntry?.path ?? directory?.path ?? null;
   const breadcrumbLabel = parentBreadcrumbLabel(directory);
   const inlineNameKey = inlineName
@@ -622,7 +668,10 @@ export function FileBrowserPage() {
             />
           ) : (
             <FileListView
-              directory={directory}
+              directory={sortedDirectory}
+              sortField={sortField}
+              sortOrder={sortOrder}
+              onToggleSort={handleToggleSort}
               selectedPath={selectedPath}
               inlineName={inlineName}
               inlineNameInputRef={inlineNameInputRef}
@@ -754,6 +803,9 @@ function UploadMenu({
 
 function FileListView({
   directory,
+  sortField,
+  sortOrder,
+  onToggleSort,
   selectedPath,
   inlineName,
   inlineNameInputRef,
@@ -771,6 +823,9 @@ function FileListView({
   onInlineNameCancel,
 }: {
   directory: FileListResponse | null;
+  sortField: SortField;
+  sortOrder: SortOrder;
+  onToggleSort: (field: SortField) => void;
   selectedPath: string | null;
   inlineName: InlineNameOperation | null;
   inlineNameInputRef: RefObject<HTMLInputElement | null>;
@@ -796,11 +851,39 @@ function FileListView({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-950">
-      <div className={`grid h-8 shrink-0 ${FILE_LIST_GRID} items-center gap-4 border-b border-zinc-200 bg-zinc-50 px-4 text-[11px] font-bold uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500`}>
-        <span>Name</span>
-        <span className="max-md:hidden">Modified</span>
-        <span>Size</span>
-        <span className="max-md:hidden">Kind</span>
+      <div className={`grid h-8 shrink-0 ${FILE_LIST_GRID} items-center gap-4 border-b border-zinc-200 bg-zinc-50 px-4 text-[11px] font-bold uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500 select-none`}>
+        <button
+          type="button"
+          className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-200 text-left"
+          onClick={() => onToggleSort('name')}
+        >
+          <span>Name</span>
+          {sortField === 'name' && (sortOrder === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+        </button>
+        <button
+          type="button"
+          className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-200 text-left max-md:hidden"
+          onClick={() => onToggleSort('modifiedAt')}
+        >
+          <span>Modified</span>
+          {sortField === 'modifiedAt' && (sortOrder === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+        </button>
+        <button
+          type="button"
+          className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-200 text-left"
+          onClick={() => onToggleSort('size')}
+        >
+          <span>Size</span>
+          {sortField === 'size' && (sortOrder === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+        </button>
+        <button
+          type="button"
+          className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-200 text-left max-md:hidden"
+          onClick={() => onToggleSort('type')}
+        >
+          <span>Kind</span>
+          {sortField === 'type' && (sortOrder === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+        </button>
       </div>
 
       <div

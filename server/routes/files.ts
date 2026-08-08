@@ -87,7 +87,8 @@ filesRouter.get('/list', async (req, res) => {
       dirents.map((dirent) => entryFromDirent(directoryPath, dirent)),
     );
 
-    entries.sort(compareEntries);
+    const isUploadsFolder = directoryPath.replaceAll('\\', '/').split('/').includes('uploads');
+    entries.sort((a, b) => compareEntries(a, b, isUploadsFolder));
 
     // Stop "up one level" at a browsable root so the UI never offers a path it cannot open.
     const parentPath = dirname(directoryPath);
@@ -614,9 +615,18 @@ function fileEntryType(entry: { isSymbolicLink(): boolean; isDirectory(): boolea
 
 const ENTRY_RANK: Record<FileEntryType, number> = { directory: 0, file: 1, symlink: 2, other: 3 };
 
-function compareEntries(a: FileEntry, b: FileEntry): number {
+function compareEntries(a: FileEntry, b: FileEntry, isUploadsFolder = false): number {
   const typeDifference = (ENTRY_RANK[a.type] ?? 3) - (ENTRY_RANK[b.type] ?? 3);
   if (typeDifference !== 0) return typeDifference;
+
+  if (isUploadsFolder && a.type === 'file' && b.type === 'file') {
+    const timeA = a.modifiedAt ?? 0;
+    const timeB = b.modifiedAt ?? 0;
+    if (timeA !== timeB) {
+      return timeB - timeA; // newest modified on top
+    }
+  }
+
   return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 }
 
