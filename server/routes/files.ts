@@ -8,6 +8,7 @@ import {
   open,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   rmdir,
@@ -44,6 +45,11 @@ interface FileCreateRequest {
   content?: string;
 }
 
+interface ResolvedUserPath {
+  path: string;
+  realPath: string;
+}
+
 const HOME = resolve(homedir());
 const TEXT_SAMPLE_BYTES = 8192;
 const MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024;
@@ -75,14 +81,17 @@ export const filesRouter = Router();
 
 filesRouter.get('/list', async (req, res) => {
   try {
-    const directoryPath = resolveUserPath(req.query.path, defaultBrowsePath());
-    const directoryStats = await stat(directoryPath);
+    const { path: directoryPath, realPath: directoryRealPath } = await resolveExistingUserPath(
+      req.query.path,
+      defaultBrowsePath(),
+    );
+    const directoryStats = await stat(directoryRealPath);
 
     if (!directoryStats.isDirectory()) {
       throw new FileRouteError(400, 'Path is not a directory', 'NOT_DIRECTORY');
     }
 
-    const dirents = await readdir(directoryPath, { withFileTypes: true });
+    const dirents = await readdir(directoryRealPath, { withFileTypes: true });
     const entries = await Promise.all(
       dirents.map((dirent) => entryFromDirent(directoryPath, dirent)),
     );
@@ -106,8 +115,8 @@ filesRouter.get('/list', async (req, res) => {
 
 filesRouter.get('/read', async (req, res) => {
   try {
-    const filePath = resolveRequiredPath(req.query.path);
-    const fileStats = await stat(filePath);
+    const { path: filePath, realPath } = await resolveRequiredPath(req.query.path);
+    const fileStats = await stat(realPath);
 
     if (fileStats.isDirectory()) {
       throw new FileRouteError(400, 'Cannot open a directory as text', 'IS_DIRECTORY');
@@ -118,11 +127,11 @@ filesRouter.get('/read', async (req, res) => {
     if (fileStats.size > MAX_TEXT_FILE_SIZE) {
       throw new FileRouteError(413, `File is too large to open as text. Maximum size is ${MAX_TEXT_FILE_SIZE_DISPLAY}.`, 'FILE_TOO_LARGE');
     }
-    if (await looksBinary(filePath, fileStats.size)) {
+    if (await looksBinary(realPath, fileStats.size)) {
       throw new FileRouteError(415, 'Binary files cannot be opened as text', 'BINARY_FILE');
     }
 
-    const content = await readFile(filePath, 'utf8');
+    const content = await readFile(realPath, 'utf8');
     res.json({
       path: filePath,
       displayPath: displayPath(filePath),
@@ -140,8 +149,8 @@ filesRouter.get('/read', async (req, res) => {
 
 filesRouter.get('/preview', async (req, res) => {
   try {
-    const targetPath = resolveRequiredPath(req.query.path);
-    const targetStats = await stat(targetPath);
+    const { path: targetPath, realPath } = await resolveRequiredPath(req.query.path);
+    const targetStats = await stat(realPath);
     if (!targetStats.isFile()) {
       throw new FileRouteError(400, 'Path is not a previewable file', 'NOT_PREVIEWABLE');
     }
@@ -149,7 +158,7 @@ filesRouter.get('/preview', async (req, res) => {
       throw new FileRouteError(415, 'Only image files can be previewed inline', 'UNSUPPORTED_PREVIEW');
     }
 
-    res.sendFile(targetPath, (previewError) => {
+    res.sendFile(realPath, (previewError) => {
       if (previewError) sendStreamingFileError(res, previewError, 'Failed to preview file');
     });
   } catch (error) {
@@ -159,8 +168,8 @@ filesRouter.get('/preview', async (req, res) => {
 
 filesRouter.get('/download', async (req, res) => {
   try {
-    const targetPath = resolveRequiredPath(req.query.path);
-    const targetStats = await stat(targetPath);
+    const { path: targetPath, realPath } = await resolveRequiredPath(req.query.path);
+    const targetStats = await stat(realPath);
     const targetName = basename(targetPath) || 'download';
 
     if (targetStats.isDirectory()) {
@@ -177,7 +186,7 @@ filesRouter.get('/download', async (req, res) => {
 
       archive.on('error', handleArchiveError);
       archive.pipe(res);
-      archive.directory(targetPath, targetName);
+      archive.directory(realPath, targetName);
       archive.finalize().catch(handleArchiveError);
       return;
     }
@@ -186,7 +195,7 @@ filesRouter.get('/download', async (req, res) => {
       throw new FileRouteError(400, 'Path is not a downloadable file or folder', 'NOT_DOWNLOADABLE');
     }
 
-    res.download(targetPath, targetName, (downloadError) => {
+    res.download(realPath, targetName, (downloadError) => {
       if (downloadError) sendStreamingFileError(res, downloadError, 'Failed to download file');
     });
   } catch (error) {
@@ -197,8 +206,8 @@ filesRouter.get('/download', async (req, res) => {
 filesRouter.put('/write', async (req, res) => {
   try {
     const body = parseWriteRequest(req.body);
-    const filePath = resolveUserPath(body.path);
-    const currentStats = await stat(filePath);
+    const { path: filePath, realPath } = await resolveExistingUserPath(body.path);
+    const currentStats = await stat(realPath);
 
     if (currentStats.isDirectory()) {
       throw new FileRouteError(400, 'Cannot write text to a directory', 'IS_DIRECTORY');
@@ -214,8 +223,8 @@ filesRouter.put('/write', async (req, res) => {
       throw new FileRouteError(409, 'File changed on disk', 'FILE_CHANGED');
     }
 
-    await writeFile(filePath, body.content, 'utf8');
-    const nextStats = await stat(filePath);
+    await writeFile(realPath, body.content, 'utf8');
+    const nextStats = await stat(realPath);
 
     res.json({
       path: filePath,
@@ -231,7 +240,7 @@ filesRouter.put('/write', async (req, res) => {
 filesRouter.post('/create', async (req, res) => {
   try {
     const body = parseCreateRequest(req.body);
-    const parentPath = resolveUserPath(body.parentPath);
+    const { realPath: parentPath } = await resolveExistingUserPath(body.parentPath);
     const name = validateFileName(body.name);
     const targetPath = join(parentPath, name);
 
@@ -261,7 +270,7 @@ filesRouter.post('/upload', (req, res) => {
 filesRouter.patch('/rename', async (req, res) => {
   try {
     const body = parseRenameRequest(req.body);
-    const sourcePath = resolveUserPath(body.path);
+    const { realPath: sourcePath } = await resolveUserEntryPath(body.path);
     const newName = validateFileName(body.newName);
     const targetPath = join(dirname(sourcePath), newName);
 
@@ -279,7 +288,7 @@ filesRouter.patch('/rename', async (req, res) => {
 filesRouter.delete('/', async (req, res) => {
   try {
     const body = parseDeleteRequest(req.body);
-    const targetPath = resolveUserPath(body.path);
+    const { realPath: targetPath } = await resolveUserEntryPath(body.path);
     const targetStats = await lstat(targetPath);
 
     if (targetStats.isDirectory() && !targetStats.isSymbolicLink()) {
@@ -309,9 +318,9 @@ async function handleUploadRequest(req: Request, res: Response): Promise<void> {
     const { targetPath, relativePaths } = parseUploadRequest(req.body, uploadedFiles.length);
     let targetDirectory: string;
     try {
-      targetDirectory = resolveUserPath(targetPath);
+      targetDirectory = (await resolveExistingUserPath(targetPath)).realPath;
     } catch {
-      targetDirectory = resolveOlympusWorkspaceDir();
+      targetDirectory = (await resolveExistingUserPath(resolveOlympusWorkspaceDir())).realPath;
     }
     const directoryStats = await stat(targetDirectory);
 
@@ -323,14 +332,13 @@ async function handleUploadRequest(req: Request, res: Response): Promise<void> {
 
     for (const [index, file] of uploadedFiles.entries()) {
       const segments = sanitizeUploadRelativePath(relativePaths[index] ?? file.originalname);
-      const destinationPath = join(targetDirectory, ...segments);
+      const destinationPath = await resolveUploadDestination(targetDirectory, segments);
 
       if (!isSameOrChildPath(targetDirectory, destinationPath)) {
         throw new FileRouteError(400, 'Upload path cannot escape the target directory', 'BAD_REQUEST');
       }
 
       await assertWritableUploadTarget(destinationPath);
-      await mkdir(dirname(destinationPath), { recursive: true });
       try {
         await rename(file.path, destinationPath);
       } catch {
@@ -421,11 +429,11 @@ function parseDeleteRequest(value: unknown): { path: string; recursive: boolean 
   return { path: value.path, recursive: value.recursive === true };
 }
 
-function resolveRequiredPath(value: unknown): string {
+async function resolveRequiredPath(value: unknown): Promise<ResolvedUserPath> {
   if (typeof value !== 'string' || value.length === 0) {
     throw new FileRouteError(400, 'Path is required', 'BAD_REQUEST');
   }
-  return resolveUserPath(value);
+  return resolveExistingUserPath(value);
 }
 
 /**
@@ -459,6 +467,26 @@ function assertBrowsable(target: string): string {
     throw new FileRouteError(403, 'Path is outside the Olympus file browser roots', 'PATH_NOT_ALLOWED');
   }
   return target;
+}
+
+async function resolveExistingUserPath(value: unknown, fallback?: string): Promise<ResolvedUserPath> {
+  const path = resolveUserPath(value, fallback);
+  const realPath = await realpath(path);
+  const roots = (await Promise.all(
+    browsableRoots().map((root) => realpath(root).catch(() => null)),
+  )).filter((root): root is string => root !== null);
+
+  if (!roots.some((root) => isWithinRoot(root, realPath))) {
+    throw new FileRouteError(403, 'Path is outside the Olympus file browser roots', 'PATH_NOT_ALLOWED');
+  }
+  return { path, realPath };
+}
+
+/** Resolve the containing directory without following the final entry if it is a symlink. */
+async function resolveUserEntryPath(value: unknown): Promise<ResolvedUserPath> {
+  const path = resolveUserPath(value);
+  const { realPath: realParentPath } = await resolveExistingUserPath(dirname(path));
+  return { path, realPath: join(realParentPath, basename(path)) };
 }
 
 function defaultBrowsePath(): string {
@@ -503,11 +531,36 @@ function sanitizeUploadRelativePath(value: string): string[] {
   return segments;
 }
 
+async function resolveUploadDestination(targetDirectory: string, segments: string[]): Promise<string> {
+  let currentDirectory = targetDirectory;
+
+  for (const segment of segments.slice(0, -1)) {
+    const nextDirectory = join(currentDirectory, segment);
+    try {
+      const nextStats = await lstat(nextDirectory);
+      if (nextStats.isSymbolicLink() || !nextStats.isDirectory()) {
+        throw new FileRouteError(409, 'Upload path contains a non-directory entry', 'EEXIST');
+      }
+    } catch (error) {
+      if (error instanceof FileRouteError) throw error;
+      if (errorCode(error) !== 'ENOENT') throw error;
+      await mkdir(nextDirectory);
+    }
+
+    currentDirectory = await realpath(nextDirectory);
+    if (!isSameOrChildPath(targetDirectory, currentDirectory)) {
+      throw new FileRouteError(403, 'Upload path is outside the target directory', 'PATH_NOT_ALLOWED');
+    }
+  }
+
+  return join(currentDirectory, segments.at(-1)!);
+}
+
 async function assertWritableUploadTarget(destinationPath: string): Promise<void> {
   try {
     const destinationStats = await lstat(destinationPath);
-    if (destinationStats.isDirectory()) {
-      throw new FileRouteError(409, 'A directory already exists at the upload target', 'EEXIST');
+    if (destinationStats.isDirectory() || destinationStats.isSymbolicLink()) {
+      throw new FileRouteError(409, 'A non-file entry already exists at the upload target', 'EEXIST');
     }
   } catch (error) {
     if (error instanceof FileRouteError) throw error;

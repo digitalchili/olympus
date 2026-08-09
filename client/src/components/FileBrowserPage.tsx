@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -99,6 +100,8 @@ export function FileBrowserPage() {
   const [forwardStack, setForwardStack] = useState<string[]>([]);
   const [sortField, setSortField] = useState<SortField>('modifiedAt');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const isDirty = openFile !== null && content !== openFile.content;
+  const selectedPath = selectedEntry?.path ?? null;
 
   const handleToggleSort = (field: SortField) => {
     if (sortField === field) {

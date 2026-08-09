@@ -149,7 +149,7 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
     }
   });
 
-  router.get('/:id/settings', async (req, res) => {
+  router.get('/:id/settings', targetProfileGate, async (req, res) => {
     try {
       res.json({ settings: await readProfileSettings(localProfileRegistry.require(routeProfileId(req))) });
     } catch (error) {
