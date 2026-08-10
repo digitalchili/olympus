@@ -322,6 +322,17 @@ export type CollaborationRunStatus = (typeof COLLABORATION_RUN_STATUSES)[number]
 export type CollaborationContributionPhase = 'proposal' | 'review';
 export type CollaborationContributionStatus = 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 
+export type CollaborationInvitationScope = 'discussion' | 'task' | 'project';
+
+export interface PersistentCollaborationGrant {
+  scope: Exclude<CollaborationInvitationScope, 'discussion'>;
+  scopeId: string;
+  profileId: string;
+  grantedBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface CollaborationContribution {
   id: string;
   run_id: string;

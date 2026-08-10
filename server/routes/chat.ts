@@ -4,8 +4,11 @@ import {
   cancelCollaborationRun,
   completeCollaborationContribution,
   createCollaborationRun,
+  grantPersistentCollaboration,
   getCollaborationRun,
   listCollaborationRuns,
+  listPersistentCollaborationGrants,
+  revokePersistentCollaborationGrant,
   startCollaborationPhase,
   updateCollaborationRun,
 } from '../db/collaboration.js';
@@ -47,10 +50,11 @@ import {
 } from '../collaboration.js';
 import { LocalProfileError } from '../local-profiles.js';
 import { acquireProfileWork } from '../profile-deletion.js';
-import { requireTaskForProfile } from '../profile-context.js';
+import { requestProfile, requireTaskForProfile } from '../profile-context.js';
+import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
 chatRouter.use('/:id', requireTaskForProfile(getTask));
@@ -149,6 +153,33 @@ chatRouter.get('/:id/messages', async (req, res) => {
 chatRouter.get('/:id/collaborations', (req, res) => {
   const task = res.locals.task as Task;
   res.json({ runs: listCollaborationRuns(task.id) });
+});
+
+chatRouter.get('/:id/collaboration-grants', (_req, res) => {
+  const task = res.locals.task as Task;
+  res.json({ grants: listPersistentCollaborationGrants({ taskId: task.id, projectId: task.project_id }) });
+});
+
+chatRouter.delete('/:id/collaboration-grants/:scope/:profileId', (req, res) => {
+  const task = res.locals.task as Task;
+  const scope = req.params.scope;
+  if (scope !== 'task' && scope !== 'project') {
+    return res.status(400).json({ error: 'scope must be task or project', code: 'INVALID_COLLABORATION_SCOPE' });
+  }
+  try {
+    const scopeId = scope === 'task' ? task.id : task.project_id;
+    if (!scopeId) {
+      return res.status(400).json({ error: 'This task is not linked to a Project', code: 'PROJECT_REQUIRED' });
+    }
+    if (scope === 'project') requireProfileProjectAccess(scopeId, requestProfile(req).id, 'manage');
+    const revoked = revokePersistentCollaborationGrant(scope, scopeId, req.params.profileId);
+    return res.json({ revoked });
+  } catch (error) {
+    if (error instanceof ProjectAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    return res.status(500).json({ error: 'Could not revoke collaboration grant' });
+  }
 });
 
 chatRouter.get('/:id/session', async (req, res) => {
@@ -571,19 +602,45 @@ chatRouter.post('/:id/messages', async (req, res) => {
 
   let runSettings: ReturnType<typeof parseRunSettingsBody>;
   let mode: ChatRunMode;
+  let invitationScope: CollaborationInvitationScope;
   let collaborationInvites: ReturnType<typeof validateCollaborationInvites>;
   try {
     runSettings = parseRunSettingsBody(req.body);
     mode = parseChatRunMode(req.body);
-    parseCollaborationInvitationScope(req.body?.collaborationScope);
-    collaborationInvites = validateCollaborationInvites(
-      req.body?.invitedProfileIds,
-      task.profile_name ?? 'default',
+    invitationScope = parseCollaborationInvitationScope(
+      req.body?.collaborationScope,
+      req.body?.confirmPersistentCollaboration === true,
     );
+    const ownerProfileId = task.profile_name ?? 'default';
+    const requestedInvites = validateCollaborationInvites(req.body?.invitedProfileIds, ownerProfileId);
+    if (invitationScope === 'project') {
+      if (!task.project_id) {
+        throw new LocalProfileError(400, 'Project collaboration requires a Project task', 'PROJECT_REQUIRED');
+      }
+      requireProfileProjectAccess(task.project_id, requestProfile(req).id, 'manage');
+    }
+    const persistentProfileIds = listPersistentCollaborationGrants({ taskId: task.id, projectId: task.project_id })
+      .map((grant) => grant.profileId);
+    const effectiveProfileIds = [...new Set([
+      ...persistentProfileIds,
+      ...requestedInvites.participants.map((profile) => profile.id),
+      ...(requestedInvites.ownerInvited ? [ownerProfileId] : []),
+    ])];
+    collaborationInvites = validateCollaborationInvites(effectiveProfileIds, ownerProfileId);
     if ((collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited) && mode === 'goal') {
       throw new LocalProfileError(400, 'Collaboration is available in task mode, not goal mode', 'COLLABORATION_GOAL_MODE');
     }
+    if (invitationScope !== 'discussion') {
+      const scopeId = invitationScope === 'task' ? task.id : task.project_id!;
+      const grantedBy = requestProfile(req).id;
+      for (const profile of requestedInvites.participants) {
+        grantPersistentCollaboration({ scope: invitationScope, scopeId, profileId: profile.id, grantedBy });
+      }
+    }
   } catch (error) {
+    if (error instanceof ProjectAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     if (error instanceof LocalProfileError) {
       return res.status(error.status).json({ error: error.message, code: error.code });
     }

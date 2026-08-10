@@ -236,3 +236,21 @@ CREATE TABLE IF NOT EXISTS project_repository_links (
   updated_at             INTEGER NOT NULL,
   UNIQUE(provider, provider_repository_id)
 );
+
+CREATE TABLE IF NOT EXISTS task_collaboration_grants (
+  task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL,
+  granted_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY(task_id, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_collaboration_grants (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL,
+  granted_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY(project_id, profile_id)
+);

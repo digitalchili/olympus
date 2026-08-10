@@ -377,6 +377,7 @@ export function TaskDetailPage() {
           )}
           <TaskChat
             taskId={task.id}
+            projectId={task.project_id}
             initialMessage={initialMessage}
             initialSettings={initialSettings}
             initialInvitedProfileIds={initialInvitedProfileIds}

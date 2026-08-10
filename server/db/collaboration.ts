@@ -6,6 +6,7 @@ import type {
   CollaborationContributionStatus,
   CollaborationRun,
   CollaborationRunStatus,
+  PersistentCollaborationGrant,
 } from '../../shared/types.js';
 
 type RunRow = Omit<CollaborationRun, 'owner_invited' | 'contributions'> & { owner_invited: number };
@@ -191,4 +192,80 @@ export function cancelCollaborationRun(id: string, reason = 'Stopped by user'): 
     return true;
   });
   return cancel() ? getCollaborationRun(id) : undefined;
+}
+
+type PersistentScope = PersistentCollaborationGrant['scope'];
+type GrantRow = {
+  scope_id: string;
+  profile_id: string;
+  granted_by: string;
+  created_at: number;
+  updated_at: number;
+};
+
+function grantTable(scope: PersistentScope): { table: string; idColumn: string } {
+  return scope === 'task'
+    ? { table: 'task_collaboration_grants', idColumn: 'task_id' }
+    : { table: 'project_collaboration_grants', idColumn: 'project_id' };
+}
+
+function grantFromRow(scope: PersistentScope, row: GrantRow): PersistentCollaborationGrant {
+  return {
+    scope,
+    scopeId: row.scope_id,
+    profileId: row.profile_id,
+    grantedBy: row.granted_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function grantPersistentCollaboration(input: {
+  scope: PersistentScope;
+  scopeId: string;
+  profileId: string;
+  grantedBy: string;
+}, now = Date.now()): PersistentCollaborationGrant {
+  const { table, idColumn } = grantTable(input.scope);
+  db.prepare(`
+    INSERT INTO ${table} (${idColumn}, profile_id, granted_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(${idColumn}, profile_id) DO UPDATE SET
+      granted_by = excluded.granted_by,
+      updated_at = excluded.updated_at
+  `).run(input.scopeId, input.profileId, input.grantedBy, now, now);
+  const row = db.prepare(`
+    SELECT ${idColumn} AS scope_id, profile_id, granted_by, created_at, updated_at
+    FROM ${table} WHERE ${idColumn} = ? AND profile_id = ?
+  `).get(input.scopeId, input.profileId) as GrantRow;
+  return grantFromRow(input.scope, row);
+}
+
+export function listPersistentCollaborationGrants(input: {
+  taskId: string;
+  projectId?: string | null;
+}): PersistentCollaborationGrant[] {
+  const taskRows = db.prepare(`
+    SELECT task_id AS scope_id, profile_id, granted_by, created_at, updated_at
+    FROM task_collaboration_grants WHERE task_id = ? ORDER BY profile_id
+  `).all(input.taskId) as GrantRow[];
+  const grants = taskRows.map((row) => grantFromRow('task', row));
+  if (input.projectId) {
+    const projectRows = db.prepare(`
+      SELECT project_id AS scope_id, profile_id, granted_by, created_at, updated_at
+      FROM project_collaboration_grants WHERE project_id = ? ORDER BY profile_id
+    `).all(input.projectId) as GrantRow[];
+    grants.push(...projectRows.map((row) => grantFromRow('project', row)));
+  }
+  return grants;
+}
+
+export function revokePersistentCollaborationGrant(
+  scope: PersistentScope,
+  scopeId: string,
+  profileId: string,
+): boolean {
+  const { table, idColumn } = grantTable(scope);
+  return db.prepare(`DELETE FROM ${table} WHERE ${idColumn} = ? AND profile_id = ?`)
+    .run(scopeId, profileId).changes > 0;
 }

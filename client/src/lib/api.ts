@@ -37,6 +37,7 @@ import type {
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
   ProfileBuilderSuggestion,
+  PersistentCollaborationGrant,
   ProjectAccessRole,
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
@@ -165,6 +166,21 @@ export function fetchMessages(taskId: string, before?: string | null) {
 
 export function fetchCollaborations(taskId: string) {
   return request<{ runs: CollaborationRun[] }>(`/tasks/${taskId}/collaborations`);
+}
+
+export function fetchCollaborationGrants(taskId: string) {
+  return request<{ grants: PersistentCollaborationGrant[] }>(`/tasks/${encodeURIComponent(taskId)}/collaboration-grants`);
+}
+
+export function revokeCollaborationGrant(
+  taskId: string,
+  scope: PersistentCollaborationGrant['scope'],
+  profileId: string,
+) {
+  return request<{ revoked: boolean }>(
+    `/tasks/${encodeURIComponent(taskId)}/collaboration-grants/${scope}/${encodeURIComponent(profileId)}`,
+    { method: 'DELETE' },
+  );
 }
 
 export function fetchSession(taskId: string) {

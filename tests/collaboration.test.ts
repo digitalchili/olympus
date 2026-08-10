@@ -40,6 +40,8 @@ try {
     () => parseCollaborationInvitationScope('project'),
     (error) => error instanceof LocalProfileError && error.code === 'PERSISTENT_COLLABORATION_CONFIRMATION_REQUIRED',
   );
+  assert.equal(parseCollaborationInvitationScope('task', true), 'task');
+  assert.equal(parseCollaborationInvitationScope('project', true), 'project');
   assert.throws(
     () => parseCollaborationInvitationScope('forever'),
     (error) => error instanceof LocalProfileError && error.code === 'INVALID_COLLABORATION_SCOPE',
