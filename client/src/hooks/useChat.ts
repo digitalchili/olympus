@@ -572,7 +572,10 @@ export function useChat() {
         body: JSON.stringify({
           content,
           ...(runSettings ? { settings: runSettings } : {}),
-          ...(options?.invitedProfileIds?.length ? { invitedProfileIds: options.invitedProfileIds } : {}),
+          ...(options?.invitedProfileIds?.length ? {
+            invitedProfileIds: options.invitedProfileIds,
+            collaborationScope: 'discussion',
+          } : {}),
         }),
         signal: abort.signal,
       });

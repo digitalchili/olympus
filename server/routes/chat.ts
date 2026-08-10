@@ -41,6 +41,7 @@ import {
   collectContributors,
   contributorSystemMessage,
   isPrivateCollaborationEvent,
+  parseCollaborationInvitationScope,
   reviewContributorMessage,
   validateCollaborationInvites,
 } from '../collaboration.js';
@@ -574,6 +575,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
   try {
     runSettings = parseRunSettingsBody(req.body);
     mode = parseChatRunMode(req.body);
+    parseCollaborationInvitationScope(req.body?.collaborationScope);
     collaborationInvites = validateCollaborationInvites(
       req.body?.invitedProfileIds,
       task.profile_name ?? 'default',

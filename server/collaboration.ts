@@ -12,6 +12,20 @@ const MAX_VISIBLE_CONTRIBUTION_CHARS = 8_000;
 const MAX_VISIBLE_TASK_MESSAGES = 20;
 const MAX_VISIBLE_TASK_CONTEXT_CHARS = 12_000;
 
+export type CollaborationInvitationScope = 'discussion' | 'task' | 'project';
+
+export function parseCollaborationInvitationScope(value: unknown): CollaborationInvitationScope {
+  if (value === undefined || value === null || value === 'discussion') return 'discussion';
+  if (value === 'task' || value === 'project') {
+    throw new LocalProfileError(
+      409,
+      `Persistent ${value} collaboration requires explicit grant confirmation`,
+      'PERSISTENT_COLLABORATION_CONFIRMATION_REQUIRED',
+    );
+  }
+  throw new LocalProfileError(400, 'collaborationScope must be discussion, task, or project', 'INVALID_COLLABORATION_SCOPE');
+}
+
 export interface ValidatedCollaborationInvites {
   participants: LocalProfileTarget[];
   ownerInvited: boolean;
