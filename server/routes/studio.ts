@@ -231,6 +231,15 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
         throw new Error('GitHub returned a different installation than the authorized callback.');
       }
       upsertGitHubInstallation(installation, now());
+      try {
+        const repositories = await options.github.listRepositories(installation.id);
+        if (repositories.length === 1) {
+          importGitHubProject(installation.id, repositories[0], now());
+        }
+      } catch {
+        // Installation ownership is already verified. Repository discovery can
+        // be retried from Studio without forcing the user through OAuth again.
+      }
       return res.redirect(302, `/studio?installationId=${installation.id}`);
     } catch {
       return res.status(502).json({ error: 'GitHub installation ownership could not be verified.' });

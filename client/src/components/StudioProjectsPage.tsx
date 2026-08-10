@@ -62,7 +62,7 @@ export function StudioProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [githubOwnerType, setGitHubOwnerType] = useState<'personal' | 'organization'>('personal');
+  const [githubOwnerType, setGitHubOwnerType] = useState<'' | 'personal' | 'organization'>('');
   const [organizationHandle, setOrganizationHandle] = useState('');
 
   const validOrganizationHandle = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(
@@ -119,7 +119,11 @@ export function StudioProjectsPage() {
   }, [projects, repositories, selectableRepositories]);
 
   async function connectGitHub() {
-    if (githubOwnerType === 'organization' && !validOrganizationHandle) {
+    if (!configured && !githubOwnerType) {
+      setError('Choose a personal account or organization.');
+      return;
+    }
+    if (!configured && githubOwnerType === 'organization' && !validOrganizationHandle) {
       setError('Enter a valid GitHub organization handle.');
       return;
     }
@@ -135,7 +139,7 @@ export function StudioProjectsPage() {
     }
   }
 
-  async function approveRepository() {
+  async function addProject() {
     if (!installationId || !repositoryId) return;
     setWorking(true);
     setError(null);
@@ -161,15 +165,17 @@ export function StudioProjectsPage() {
               Connect selected GitHub repositories. Imported projects remain read-only until a separately reviewed executor capability is approved.
             </p>
           </div>
-          <button
-            type="button"
-            disabled={working || (!configured && githubOwnerType === 'organization' && !validOrganizationHandle)}
-            onClick={() => void connectGitHub()}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-          >
-            <Code2 size={16} />
-            {configured ? 'Connect GitHub' : 'Continue with GitHub'}
-          </button>
+          {configured && (
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => void connectGitHub()}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+            >
+              <Code2 size={16} />
+              Connect another GitHub account
+            </button>
+          )}
         </div>
 
         {!configured && !loading && (
@@ -184,9 +190,10 @@ export function StudioProjectsPage() {
                 App owner
                 <select
                   value={githubOwnerType}
-                  onChange={(event) => setGitHubOwnerType(event.target.value as 'personal' | 'organization')}
+                  onChange={(event) => setGitHubOwnerType(event.target.value as '' | 'personal' | 'organization')}
                   className="mt-1 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
                 >
+                  <option value="">Select owner type</option>
                   <option value="personal">Personal account</option>
                   <option value="organization">Organization</option>
                 </select>
@@ -210,6 +217,17 @@ export function StudioProjectsPage() {
                 </label>
               )}
             </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                disabled={working || !githubOwnerType || (githubOwnerType === 'organization' && !validOrganizationHandle)}
+                onClick={() => void connectGitHub()}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+              >
+                <Code2 size={16} />
+                Continue with GitHub
+              </button>
+            </div>
           </div>
         )}
 
@@ -223,7 +241,7 @@ export function StudioProjectsPage() {
           <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex items-center gap-2">
               <Plus size={17} className="text-zinc-500" />
-              <h2 className="font-semibold text-zinc-900 dark:text-zinc-100">Add an approved repository</h2>
+              <h2 className="font-semibold text-zinc-900 dark:text-zinc-100">Add a repository</h2>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
               <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
@@ -256,10 +274,10 @@ export function StudioProjectsPage() {
               <button
                 type="button"
                 disabled={!repositoryId || working}
-                onClick={() => void approveRepository()}
+                onClick={() => void addProject()}
                 className="self-end rounded-lg border border-zinc-300 px-3.5 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-900"
               >
-                Approve repository
+                Add project
               </button>
             </div>
           </section>
@@ -272,7 +290,7 @@ export function StudioProjectsPage() {
           </div>
           {projects.length === 0 && !loading ? (
             <div className="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-              No Studio projects yet. Connect GitHub and approve one repository.
+              Connect GitHub to add a read-only project.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">

@@ -187,6 +187,13 @@ try {
   assert.equal(oauthCallback.status, 302);
   assert.equal(oauthCallback.headers.location, '/studio?installationId=44');
 
+  const automaticallyImported = await call('/api/studio/projects');
+  assert.equal((automaticallyImported.body.projects as unknown[]).length, 1);
+  assert.equal(
+    ((automaticallyImported.body.projects as Array<Record<string, unknown>>)[0]).fullName,
+    repositories[0].fullName,
+  );
+
   const oauthReplay = await call(`/api/studio/github/oauth/callback?code=verified-user-code&state=${encodeURIComponent(oauthState)}`);
   assert.equal(oauthReplay.status, 400);
   assert.match(String(oauthReplay.body.error), /invalid or expired/i);
@@ -209,7 +216,7 @@ try {
   assert.equal(missingRepository.status, 404);
 
   const imported = await call('/api/studio/projects', 'POST', { installationId: 44, repositoryId: 101 });
-  assert.equal(imported.status, 201);
+  assert.equal(imported.status, 200);
   const project = imported.body.project as Record<string, unknown>;
   assert.equal(project.fullName, 'leakim69/olympus-dispatch');
   assert.equal(project.mode, 'read_only');
