@@ -21,7 +21,7 @@ try {
     keyPath: join(root, 'data', 'studio-github-app.key'),
   });
   const gateway = createGitHubAppGateway({
-    env: { OLYMPUS_STUDIO_GITHUB_APP_OWNER: 'digitalchili' },
+    env: {},
     credentialStore,
     fetchImpl: async (input, init) => {
       const url = String(input);
@@ -33,7 +33,7 @@ try {
       if (url === 'https://api.github.com/app-manifests/temporary-code/conversions') {
         return Response.json({
           id: 12345,
-          slug: 'olympus-studio-digital-chili',
+          slug: 'olympus-studio-example-org',
           pem,
           client_id: 'Iv1.client-id',
           client_secret: 'generated-client-secret',
@@ -44,8 +44,8 @@ try {
   });
 
   assert.equal(gateway.configured, false);
-  const registration = gateway.manifestRegistration('opaque-state', 'https://olympus.example');
-  assert.equal(registration.url, 'https://github.com/organizations/digitalchili/settings/apps/new');
+  const registration = gateway.manifestRegistration('opaque-state', 'https://olympus.example', 'example-org');
+  assert.equal(registration.url, 'https://github.com/organizations/example-org/settings/apps/new');
   assert.equal(registration.method, 'POST');
   assert.equal(registration.fields.state, 'opaque-state');
 
@@ -60,6 +60,13 @@ try {
   assert.equal(manifest.request_oauth_on_install, false);
   assert.equal(JSON.stringify(manifest).includes('secret'), false);
 
+  const personalRegistration = gateway.manifestRegistration('personal-state', 'https://olympus.example', null);
+  assert.equal(personalRegistration.url, 'https://github.com/settings/apps/new');
+  assert.throws(
+    () => gateway.manifestRegistration('invalid-state', 'https://olympus.example', 'not/a/github-org'),
+    /owner is invalid/i,
+  );
+
   await gateway.completeManifest('temporary-code');
   assert.equal(gateway.configured, true);
   assert.equal(requests.length, 1);
@@ -70,7 +77,7 @@ try {
   });
   assert.equal(
     gateway.installationUrl('install-state'),
-    'https://github.com/apps/olympus-studio-digital-chili/installations/new?state=install-state',
+    'https://github.com/apps/olympus-studio-example-org/installations/new?state=install-state',
   );
   assert.equal(credentialStore.load()?.clientSecret, 'generated-client-secret');
 

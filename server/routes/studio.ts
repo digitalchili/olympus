@@ -13,7 +13,7 @@ import {
 
 export interface StudioGitHubGateway {
   configured: boolean;
-  manifestRegistration(state: string, publicUrl: string): {
+  manifestRegistration(state: string, publicUrl: string, owner: string | null): {
     url: string;
     method: 'POST';
     fields: { state: string; manifest: string };
@@ -44,6 +44,16 @@ const OAUTH_STATE_COOKIE = 'studio_github_oauth_state';
 function positiveSafeInteger(value: unknown): number | null {
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+function githubOrganizationOwner(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new Error('invalid GitHub organization owner');
+  const owner = value.trim();
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
+    throw new Error('invalid GitHub organization owner');
+  }
+  return owner;
 }
 
 function cookieValue(header: string | undefined, name: string): string {
@@ -104,6 +114,7 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
     const state = randomBytes(32).toString('base64url');
     if (!options.github.configured) {
       try {
+        const owner = githubOrganizationOwner(req.body?.owner);
         const publicUrl = requestPublicUrl(req, options.publicUrl);
         createGitHubConnectionState(state, 'manifest', now() + stateTtlMs);
         res.cookie(MANIFEST_STATE_COOKIE, state, {
@@ -113,7 +124,7 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
           maxAge: stateTtlMs,
           path: '/api/studio/github/manifest/callback',
         });
-        return res.json(options.github.manifestRegistration(state, publicUrl));
+        return res.json(options.github.manifestRegistration(state, publicUrl, owner));
       } catch {
         return res.status(400).json({ error: 'Olympus could not start secure GitHub App setup.' });
       }

@@ -174,12 +174,15 @@ export function fetchStudioGitHubStatus() {
   return request<{ configured: boolean; installations: StudioGitHubInstallation[] }>('/studio/github/status', undefined, false);
 }
 
-export function connectStudioGitHub() {
+export function connectStudioGitHub(owner: string | null) {
   return request<{
     url: string;
     method: 'GET' | 'POST';
     fields: Record<string, string>;
-  }>('/studio/github/connect', { method: 'POST' }, false);
+  }>('/studio/github/connect', {
+    method: 'POST',
+    body: JSON.stringify({ owner }),
+  }, false);
 }
 
 export function fetchStudioRepositories(installationId: number) {

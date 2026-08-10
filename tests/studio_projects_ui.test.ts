@@ -10,12 +10,17 @@ const page = await readFile('client/src/components/StudioProjectsPage.tsx', 'utf
 assert.match(app, /app\.use\('\/api\/studio', createStudioRouter\(\{[\s\S]*github: createGitHubAppGateway\(\{ credentialStore: createGitHubCredentialStore\(\) \}\),[\s\S]*publicUrl: process\.env\.OLYMPUS_STUDIO_PUBLIC_URL/);
 assert.match(clientApp, /path="\/studio" element=\{<StudioProjectsPage \/>\}/);
 assert.match(sidebar, /label="Projects"[\s\S]*to="\/studio"/);
-assert.match(api, /export function connectStudioGitHub\(\)/);
+assert.match(api, /export function connectStudioGitHub\(owner: string \| null\)/);
+assert.match(api, /JSON\.stringify\(\{ owner \}\)/);
 assert.match(api, /method: 'GET' \| 'POST'/);
 assert.match(api, /fields: Record<string, string>/);
 assert.match(api, /export function fetchStudioRepositories\(installationId: number\)/);
 assert.match(api, /export function importStudioProject\(installationId: number, repositoryId: number\)/);
 assert.match(page, /Connect GitHub/);
+assert.match(page, /Personal account/);
+assert.match(page, /Organization/);
+assert.match(page, /Organization handle/);
+assert.match(page, /connectStudioGitHub\(\s*githubOwnerType === 'organization' \? organizationHandle\.trim\(\) : null,?\s*\)/);
 assert.match(page, /document\.createElement\('form'\)/);
 assert.match(page, /form\.method = 'POST'/);
 assert.match(page, /form\.submit\(\)/);

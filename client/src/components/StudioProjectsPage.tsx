@@ -62,6 +62,12 @@ export function StudioProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [githubOwnerType, setGitHubOwnerType] = useState<'personal' | 'organization'>('personal');
+  const [organizationHandle, setOrganizationHandle] = useState('');
+
+  const validOrganizationHandle = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(
+    organizationHandle.trim(),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -113,10 +119,16 @@ export function StudioProjectsPage() {
   }, [projects, repositories, selectableRepositories]);
 
   async function connectGitHub() {
+    if (githubOwnerType === 'organization' && !validOrganizationHandle) {
+      setError('Enter a valid GitHub organization handle.');
+      return;
+    }
     setWorking(true);
     setError(null);
     try {
-      followGitHubAction(await connectStudioGitHub());
+      followGitHubAction(await connectStudioGitHub(
+        githubOwnerType === 'organization' ? organizationHandle.trim() : null,
+      ));
     } catch (cause) {
       setError(errorMessage(cause));
       setWorking(false);
@@ -151,12 +163,12 @@ export function StudioProjectsPage() {
           </div>
           <button
             type="button"
-            disabled={working}
+            disabled={working || (!configured && githubOwnerType === 'organization' && !validOrganizationHandle)}
             onClick={() => void connectGitHub()}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
           >
             <Code2 size={16} />
-            Connect GitHub
+            {configured ? 'Connect GitHub' : 'Continue with GitHub'}
           </button>
         </div>
 
@@ -167,6 +179,37 @@ export function StudioProjectsPage() {
               Choose which repositories Olympus can access. You can revoke access at any time.
               GitHub will ask you to create and install the read-only Olympus App on the first connection.
             </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                App owner
+                <select
+                  value={githubOwnerType}
+                  onChange={(event) => setGitHubOwnerType(event.target.value as 'personal' | 'organization')}
+                  className="mt-1 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                >
+                  <option value="personal">Personal account</option>
+                  <option value="organization">Organization</option>
+                </select>
+              </label>
+              {githubOwnerType === 'organization' && (
+                <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  Organization handle
+                  <input
+                    type="text"
+                    value={organizationHandle}
+                    onChange={(event) => setOrganizationHandle(event.target.value)}
+                    placeholder="github-organization"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={organizationHandle.length > 0 && !validOrganizationHandle}
+                    className="mt-1 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 aria-[invalid=true]:border-red-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                  />
+                  <span className="mt-1 block font-normal text-zinc-500">
+                    GitHub will verify that your account may create and install Apps for this organization.
+                  </span>
+                </label>
+              )}
+            </div>
           </div>
         )}
 

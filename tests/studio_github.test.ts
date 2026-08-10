@@ -233,10 +233,11 @@ try {
   unconfiguredApp.use('/api/studio', createStudioRouter({
     github: {
       get configured() { return generatedAppConfigured; },
-      manifestRegistration(state, publicUrl) {
+      manifestRegistration(state, publicUrl, owner) {
         assert.equal(publicUrl, 'https://olympus.example');
+        assert.equal(owner, 'example-org');
         return {
-          url: 'https://github.com/organizations/digitalchili/settings/apps/new',
+          url: 'https://github.com/organizations/example-org/settings/apps/new',
           method: 'POST' as const,
           fields: { state, manifest: '{"metadata":"read"}' },
         };
@@ -261,11 +262,16 @@ try {
     const unconfiguredAddress = unconfiguredServer.address();
     assert.ok(unconfiguredAddress && typeof unconfiguredAddress === 'object');
     const unconfigured = await new Promise<ResponseResult>((resolve, reject) => {
+      const payload = JSON.stringify({ owner: 'example-org' });
       const req = request({
         host: '127.0.0.1',
         port: unconfiguredAddress.port,
         path: '/api/studio/github/connect',
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
       }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
@@ -276,11 +282,11 @@ try {
         }));
       });
       req.on('error', reject);
-      req.end();
+      req.end(payload);
     });
     assert.equal(unconfigured.status, 200);
     assert.equal(unconfigured.body.method, 'POST');
-    assert.equal(unconfigured.body.url, 'https://github.com/organizations/digitalchili/settings/apps/new');
+    assert.equal(unconfigured.body.url, 'https://github.com/organizations/example-org/settings/apps/new');
     const fields = unconfigured.body.fields as Record<string, string>;
     assert.equal(fields.manifest, '{"metadata":"read"}');
     assert.ok(fields.state);

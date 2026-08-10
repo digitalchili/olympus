@@ -174,14 +174,13 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
       return activeConfig() !== null;
     },
 
-    manifestRegistration(state: string, publicUrl: string) {
+    manifestRegistration(state: string, publicUrl: string, owner: string | null) {
       if (activeConfig()) throw new Error('The Studio GitHub App is already configured.');
       const origin = new URL(publicUrl);
       if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
         throw new Error('The Olympus public URL is invalid.');
       }
       const baseUrl = origin.origin;
-      const owner = env.OLYMPUS_STUDIO_GITHUB_APP_OWNER?.trim();
       if (owner && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
         throw new Error('The Studio GitHub App owner is invalid.');
       }

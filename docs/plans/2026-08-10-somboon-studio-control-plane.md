@@ -134,9 +134,7 @@
 
 No GitHub credentials are required for first-run setup. The Connect GitHub button starts GitHub's App Manifest flow, exchanges GitHub's temporary code server-side, and stores the generated app ID, slug, private key, client ID, and client secret as AES-256-GCM ciphertext. The local encryption key is generated once in the persistent Olympus data directory with mode `0600`.
 
-For an organization-owned private app, configure only the non-secret owner slug:
-
-- `OLYMPUS_STUDIO_GITHUB_APP_OWNER=digitalchili`
+For first-run setup, the user chooses **Personal account** or **Organization** in Olympus. Organization mode requires a valid GitHub organization handle; GitHub then verifies that the signed-in user may create and install Apps for that organization. No organization name is embedded in the public application.
 
 `OLYMPUS_STUDIO_PUBLIC_URL` is an optional canonical-origin override. Without it, Olympus requires the browser `Origin` to match the public proxy host and requires HTTPS in production.
 
