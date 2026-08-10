@@ -58,6 +58,15 @@ export interface StudioProject {
 export const PROJECT_ACCESS_ROLES = ['view', 'contribute', 'manage'] as const;
 export type ProjectAccessRole = (typeof PROJECT_ACCESS_ROLES)[number];
 
+export interface ProjectProfileGrant {
+  projectId: string;
+  profileId: string;
+  role: ProjectAccessRole;
+  grantedBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface Project {
   id: string;
   name: string;

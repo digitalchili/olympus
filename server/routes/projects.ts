@@ -5,9 +5,11 @@ import {
   getProject,
   grantProjectProfileAccess,
   listProjectManagerHistory,
+  listProjectProfileGrants,
   listProjects,
   reassignProject,
   revokeProjectProfileAccess,
+  updateProject,
 } from '../db/projects.js';
 import { getTasksForProject } from '../db/queries.js';
 import {
@@ -52,7 +54,7 @@ function sendError(res: Response, error: unknown): Response {
   const message = error instanceof Error ? error.message : 'Project request failed';
   if (/Project not found/i.test(message)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
   if (/already exists/i.test(message)) return res.status(409).json({ error: message, code: 'PROJECT_NAME_EXISTS' });
-  if (/required|too long|invalid control/i.test(message)) return res.status(400).json({ error: message, code: 'INVALID_PROJECT' });
+  if (/required|too long|invalid control|invalid.*role/i.test(message)) return res.status(400).json({ error: message, code: 'INVALID_PROJECT' });
   return res.status(500).json({ error: 'Project request failed', code: 'PROJECT_ERROR' });
 }
 
@@ -147,6 +149,82 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     }
   });
 
+  router.patch('/:id', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      if (!getProject(projectId)) {
+        return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      }
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
+      const purpose = typeof req.body?.purpose === 'string' ? req.body.purpose : undefined;
+      if (name === undefined && purpose === undefined) {
+        return res.status(400).json({ error: 'name or purpose is required', code: 'INVALID_PROJECT' });
+      }
+      const project = updateProject(projectId, { name, purpose }, now());
+      return res.json({ project: await projectResponse(project, registry) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/grants', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      if (!getProject(projectId)) {
+        return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      }
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      return res.json({ grants: listProjectProfileGrants(projectId) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.put('/:id/grants/:profileId', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      const project = getProject(projectId);
+      if (!project) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      const profileId = routeId(req.params.profileId).trim();
+      if (profileId === project.managerProfileId) {
+        return res.status(400).json({ error: 'The Project manager already has manage access', code: 'PROJECT_MANAGER_ACCESS_IMPLICIT' });
+      }
+      registry.requireActive(profileId);
+      const grant = grantProjectProfileAccess({
+        projectId,
+        profileId,
+        role: req.body?.role as ProjectAccessRole,
+        grantedBy: actor ?? changedBy,
+      }, now());
+      return res.json({ grant });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.delete('/:id/grants/:profileId', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      const project = getProject(projectId);
+      if (!project) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      const profileId = routeId(req.params.profileId).trim();
+      if (profileId === project.managerProfileId) {
+        return res.status(400).json({ error: 'The Project manager has implicit manage access', code: 'PROJECT_MANAGER_ACCESS_IMPLICIT' });
+      }
+      revokeProjectProfileAccess(projectId, profileId);
+      return res.status(204).end();
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
   router.get('/:id', async (req, res) => {
     try {
       const project = getProject(routeId(req.params.id));
@@ -199,19 +277,12 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       }
 
       const changeActor = actor ?? changedBy;
-      const project = reassignProject({ projectId, managerProfileId, changedBy: changeActor }, now());
-      if (current.managerProfileId !== project.managerProfileId) {
-        if (previousManagerRole === 'view' || previousManagerRole === 'contribute') {
-          grantProjectProfileAccess({
-            projectId,
-            profileId: current.managerProfileId,
-            role: previousManagerRole as ProjectAccessRole,
-            grantedBy: changeActor,
-          }, now());
-        } else {
-          revokeProjectProfileAccess(projectId, current.managerProfileId);
-        }
-      }
+      const project = reassignProject({
+        projectId,
+        managerProfileId,
+        changedBy: changeActor,
+        previousManagerRole: previousManagerRole as 'view' | 'contribute' | null | undefined,
+      }, now());
       return res.json({ project: await projectResponse(project, registry) });
     } catch (error) {
       return sendError(res, error);

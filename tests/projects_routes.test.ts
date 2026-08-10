@@ -28,7 +28,7 @@ await profile('inactive', 'Inactive Manager', false, 'openai', 'gpt-5');
 const { LocalProfileRegistry } = await import('../server/local-profiles.js');
 const { createProjectsRouter } = await import('../server/routes/projects.js');
 const { default: db } = await import('../server/db/index.js');
-const { getProfileProjectRole, grantProjectProfileAccess } = await import('../server/db/projects.js');
+const { getProfileProjectRole } = await import('../server/db/projects.js');
 const { ProjectAccessError, requireProfileProjectAccess } = await import('../server/project-access.js');
 const registry = new LocalProfileRegistry(hermesHome, dispatchHome);
 
@@ -112,6 +112,20 @@ try {
   assert.equal(profileCreate.status, 403);
   assert.equal(profileCreate.body.code, 'PROJECT_OPERATOR_ONLY');
 
+  const unrelatedPatch = await call(`/api/projects/${projectId}?profile=claude-manager`, 'PATCH', {
+    purpose: 'Must not be accepted without manage access',
+  });
+  assert.equal(unrelatedPatch.status, 404);
+
+  now = 1_250;
+  const managerPatch = await call(`/api/projects/${projectId}?profile=studio`, 'PATCH', {
+    name: 'Renamed Example Project',
+    purpose: 'Updated by the current Project manager',
+  });
+  assert.equal(managerPatch.status, 200);
+  assert.equal((managerPatch.body.project as Record<string, unknown>).name, 'Renamed Example Project');
+  assert.equal((managerPatch.body.project as Record<string, unknown>).purpose, 'Updated by the current Project manager');
+
   assert.equal(getProfileProjectRole(projectId, 'studio'), 'manage');
   assert.equal(getProfileProjectRole(projectId, 'claude-manager'), null);
   assert.throws(
@@ -119,14 +133,21 @@ try {
     (error) => error instanceof ProjectAccessError && error.status === 404,
   );
 
-  grantProjectProfileAccess({
-    projectId,
-    profileId: 'claude-manager',
-    role: 'view',
-    grantedBy: 'local-user',
-  }, 1_500);
+  now = 1_500;
+  const granted = await call(`/api/projects/${projectId}/grants/claude-manager`, 'PUT', { role: 'view' });
+  assert.equal(granted.status, 200);
+  assert.equal((granted.body.grant as Record<string, unknown>).profileId, 'claude-manager');
+  assert.equal((granted.body.grant as Record<string, unknown>).role, 'view');
+  const grants = await call(`/api/projects/${projectId}/grants`);
+  assert.equal(grants.status, 200);
+  assert.deepEqual((grants.body.grants as Array<Record<string, unknown>>).map((grant) => ({
+    profileId: grant.profileId,
+    role: grant.role,
+  })), [{ profileId: 'claude-manager', role: 'view' }]);
   assert.equal((await call('/api/projects?profile=claude-manager')).body.projects instanceof Array, true);
   assert.equal((await call(`/api/projects/${projectId}?profile=claude-manager`)).status, 200);
+  const forbiddenGrant = await call(`/api/projects/${projectId}/grants/default?profile=claude-manager`, 'PUT', { role: 'manage' });
+  assert.equal(forbiddenGrant.status, 404);
   const forbiddenProfileReassign = await call(`/api/projects/${projectId}/reassign?profile=claude-manager`, 'POST', {
     managerProfileId: 'claude-manager',
   });
@@ -160,8 +181,12 @@ try {
   assert.equal(history[0].effectiveTo, 2_000);
   assert.equal(history[1].effectiveTo, null);
 
+  const revoked = await call(`/api/projects/${projectId}/grants/studio`, 'DELETE');
+  assert.equal(revoked.status, 204);
+  assert.equal(getProfileProjectRole(projectId, 'studio'), null);
+
   const duplicate = await call('/api/projects', 'POST', {
-    name: ' example project ',
+    name: ' renamed example project ',
     purpose: 'Duplicate',
     managerProfileId: 'default',
   });

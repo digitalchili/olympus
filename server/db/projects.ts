@@ -3,6 +3,7 @@ import type {
   Project,
   ProjectAccessRole,
   ProjectManagerHistoryEntry,
+  ProjectProfileGrant,
 } from '../../shared/types.js';
 import { PROJECT_ACCESS_ROLES } from '../../shared/types.js';
 import db from './index.js';
@@ -25,6 +26,15 @@ type HistoryRow = {
   changed_by: string;
 };
 
+type GrantRow = {
+  project_id: string;
+  profile_id: string;
+  role: ProjectAccessRole;
+  granted_by: string;
+  created_at: number;
+  updated_at: number;
+};
+
 function projectFromRow(row: ProjectRow): Project {
   return {
     id: row.id,
@@ -44,6 +54,17 @@ function historyFromRow(row: HistoryRow): ProjectManagerHistoryEntry {
     effectiveFrom: row.effective_from,
     effectiveTo: row.effective_to,
     changedBy: row.changed_by,
+  };
+}
+
+function grantFromRow(row: GrantRow): ProjectProfileGrant {
+  return {
+    projectId: row.project_id,
+    profileId: row.profile_id,
+    role: row.role,
+    grantedBy: row.granted_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -115,10 +136,32 @@ export function createProject(input: {
   return getProject(id)!;
 }
 
+export function updateProject(
+  projectId: string,
+  input: { name?: string; purpose?: string },
+  now = Date.now(),
+): Project {
+  const current = getProject(projectId);
+  if (!current) throw new Error('Project not found');
+  const name = input.name === undefined ? current.name : requiredText(input.name, 'name', 120);
+  const purpose = input.purpose === undefined ? current.purpose : requiredText(input.purpose, 'purpose', 2_000);
+  const nameKey = normalizeProjectName(name);
+  const duplicate = db.prepare('SELECT id FROM projects WHERE name_key = ? AND id <> ?')
+    .get(nameKey, projectId) as { id: string } | undefined;
+  if (duplicate) throw new Error(`A Project named ${name} already exists`);
+  db.prepare(`
+    UPDATE projects
+    SET name = ?, name_key = ?, purpose = ?, updated_at = ?
+    WHERE id = ?
+  `).run(name, nameKey, purpose, now, projectId);
+  return getProject(projectId)!;
+}
+
 export function reassignProject(input: {
   projectId: string;
   managerProfileId: string;
   changedBy: string;
+  previousManagerRole?: 'view' | 'contribute' | null;
 }, now = Date.now()): Project {
   const managerProfileId = requiredText(input.managerProfileId, 'managerProfileId', 64);
   const changedBy = requiredText(input.changedBy, 'changedBy', 120);
@@ -147,6 +190,29 @@ export function reassignProject(input: {
       DELETE FROM project_profile_grants
       WHERE project_id = ? AND profile_id = ?
     `).run(input.projectId, managerProfileId);
+    if (input.previousManagerRole === 'view' || input.previousManagerRole === 'contribute') {
+      db.prepare(`
+        INSERT INTO project_profile_grants (
+          project_id, profile_id, role, granted_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, profile_id) DO UPDATE SET
+          role = excluded.role,
+          granted_by = excluded.granted_by,
+          updated_at = excluded.updated_at
+      `).run(
+        input.projectId,
+        current.managerProfileId,
+        input.previousManagerRole,
+        changedBy,
+        now,
+        now,
+      );
+    } else {
+      db.prepare(`
+        DELETE FROM project_profile_grants
+        WHERE project_id = ? AND profile_id = ?
+      `).run(input.projectId, current.managerProfileId);
+    }
   })();
   return getProject(input.projectId)!;
 }
@@ -161,12 +227,22 @@ export function listProjectManagerHistory(projectId: string): ProjectManagerHist
   return rows.map(historyFromRow);
 }
 
+export function listProjectProfileGrants(projectId: string): ProjectProfileGrant[] {
+  const rows = db.prepare(`
+    SELECT project_id, profile_id, role, granted_by, created_at, updated_at
+    FROM project_profile_grants
+    WHERE project_id = ?
+    ORDER BY profile_id COLLATE NOCASE
+  `).all(projectId) as GrantRow[];
+  return rows.map(grantFromRow);
+}
+
 export function grantProjectProfileAccess(input: {
   projectId: string;
   profileId: string;
   role: ProjectAccessRole;
   grantedBy: string;
-}, now = Date.now()): void {
+}, now = Date.now()): ProjectProfileGrant | null {
   if (!(PROJECT_ACCESS_ROLES as readonly string[]).includes(input.role)) {
     throw new Error('Invalid Project access role');
   }
@@ -177,7 +253,7 @@ export function grantProjectProfileAccess(input: {
   if (profileId === project.managerProfileId) {
     db.prepare('DELETE FROM project_profile_grants WHERE project_id = ? AND profile_id = ?')
       .run(input.projectId, profileId);
-    return;
+    return null;
   }
   db.prepare(`
     INSERT INTO project_profile_grants (
@@ -188,6 +264,12 @@ export function grantProjectProfileAccess(input: {
       granted_by = excluded.granted_by,
       updated_at = excluded.updated_at
   `).run(input.projectId, profileId, input.role, grantedBy, now, now);
+  const row = db.prepare(`
+    SELECT project_id, profile_id, role, granted_by, created_at, updated_at
+    FROM project_profile_grants
+    WHERE project_id = ? AND profile_id = ?
+  `).get(input.projectId, profileId) as GrantRow;
+  return grantFromRow(row);
 }
 
 export function revokeProjectProfileAccess(projectId: string, profileId: string): void {

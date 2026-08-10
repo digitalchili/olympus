@@ -14,9 +14,12 @@ try {
     getProject,
     getProfileProjectRole,
     grantProjectProfileAccess,
+    listProjectProfileGrants,
     listProjectManagerHistory,
     listProjects,
     reassignProject,
+    revokeProjectProfileAccess,
+    updateProject,
   } = await import('../server/db/projects.js');
   const { default: db } = await import('../server/db/index.js');
 
@@ -37,6 +40,25 @@ try {
   assert.equal(getProfileProjectRole(created.id, 'somchai'), null);
   assert.equal(countProjectsManagedByProfile('somboon-studio'), 1);
 
+  const updated = updateProject(created.id, {
+    name: '  Updated Project  ',
+    purpose: '  Updated purpose  ',
+  }, 1_050);
+  assert.equal(updated.name, 'Updated Project');
+  assert.equal(updated.purpose, 'Updated purpose');
+  assert.equal(updated.updatedAt, 1_050);
+
+  createProject({
+    name: 'Second Project',
+    purpose: 'Used to verify normalized update collisions',
+    managerProfileId: 'default',
+    changedBy: 'local-user',
+  }, 1_060);
+  assert.throws(
+    () => updateProject(created.id, { name: ' second project ' }, 1_070),
+    /already exists/i,
+  );
+
   const initialHistory = listProjectManagerHistory(created.id);
   assert.equal(initialHistory.length, 1);
   assert.equal(initialHistory[0].profileId, 'somboon-studio');
@@ -51,6 +73,23 @@ try {
     grantedBy: 'local-user',
   }, 1_100);
   assert.equal(getProfileProjectRole(created.id, 'somchai'), 'view');
+  assert.deepEqual(listProjectProfileGrants(created.id).map((grant) => ({
+    profileId: grant.profileId,
+    role: grant.role,
+    grantedBy: grant.grantedBy,
+    createdAt: grant.createdAt,
+    updatedAt: grant.updatedAt,
+  })), [{
+    profileId: 'somchai', role: 'view', grantedBy: 'local-user', createdAt: 1_100, updatedAt: 1_100,
+  }]);
+  revokeProjectProfileAccess(created.id, 'somchai');
+  assert.deepEqual(listProjectProfileGrants(created.id), []);
+  grantProjectProfileAccess({
+    projectId: created.id,
+    profileId: 'somchai',
+    role: 'view',
+    grantedBy: 'local-user',
+  }, 1_200);
 
   const reassigned = reassignProject({
     projectId: created.id,
@@ -78,7 +117,7 @@ try {
 
   assert.throws(
     () => createProject({
-      name: 'example project',
+      name: 'updated project',
       purpose: 'Duplicate normalized name',
       managerProfileId: 'default',
       changedBy: 'local-user',

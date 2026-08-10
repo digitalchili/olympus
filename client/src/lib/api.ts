@@ -37,7 +37,9 @@ import type {
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
   ProfileBuilderSuggestion,
+  ProjectAccessRole,
   ProjectManagerHistoryEntry,
+  ProjectProfileGrant,
   ProjectSummary,
   StudioGitHubInstallation,
   StudioGitHubRepository,
@@ -234,6 +236,37 @@ export function fetchProject(projectId: string) {
   return request<{ project: ProjectSummary; managerHistory: ProjectManagerHistoryEntry[] }>(
     `/projects/${encodeURIComponent(projectId)}`,
     undefined,
+    false,
+  );
+}
+
+export function updateProject(projectId: string, input: { name?: string; purpose?: string }) {
+  return request<{ project: ProjectSummary }>(`/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  }, false);
+}
+
+export function fetchProjectGrants(projectId: string) {
+  return request<{ grants: ProjectProfileGrant[] }>(
+    `/projects/${encodeURIComponent(projectId)}/grants`,
+    undefined,
+    false,
+  );
+}
+
+export function setProjectGrant(projectId: string, profileId: string, role: ProjectAccessRole) {
+  return request<{ grant: ProjectProfileGrant }>(
+    `/projects/${encodeURIComponent(projectId)}/grants/${encodeURIComponent(profileId)}`,
+    { method: 'PUT', body: JSON.stringify({ role }) },
+    false,
+  );
+}
+
+export function revokeProjectGrant(projectId: string, profileId: string) {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/grants/${encodeURIComponent(profileId)}`,
+    { method: 'DELETE' },
     false,
   );
 }
