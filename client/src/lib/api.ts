@@ -147,6 +147,7 @@ export function createTask(
 
 export interface TaskSearchResult {
   taskId: string;
+  handlingProfileId: string;
   taskTitle: string;
   taskStatus: TaskStatus;
   role: 'task' | 'user' | 'assistant' | 'system' | 'tool';
@@ -154,8 +155,10 @@ export interface TaskSearchResult {
   timestamp: number;
 }
 
-export function searchTasks(query: string) {
-  return request<{ results: TaskSearchResult[] }>(`/search?q=${encodeURIComponent(query)}`);
+export function searchTasks(query: string, projectId?: string) {
+  const params = new URLSearchParams({ q: query });
+  if (projectId) params.set('projectId', projectId);
+  return request<{ results: TaskSearchResult[] }>(`/search?${params.toString()}`);
 }
 
 export function fetchMessages(taskId: string, before?: string | null) {

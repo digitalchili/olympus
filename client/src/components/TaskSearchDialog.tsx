@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import { searchTasks, type TaskSearchResult } from '../lib/api';
-import { useProfileNavigate } from '../contexts/ProfileContext';
+import { useNavigate } from 'react-router';
+import type { ProjectSummary } from '@shared/types';
+import { fetchProjects, searchTasks, type TaskSearchResult } from '../lib/api';
+import { toWithProfile } from '../lib/profileQuery';
 
 function roleLabel(role: TaskSearchResult['role']): string {
   return role === 'task' ? 'Task' : role.charAt(0).toUpperCase() + role.slice(1);
@@ -22,17 +24,19 @@ function HighlightedSnippet({ snippet }: { snippet: string }) {
 }
 
 export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const navigate = useProfileNavigate();
+  const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TaskSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectId, setProjectId] = useState('');
   const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const openResult = useCallback((result: TaskSearchResult) => {
-    navigate(`/tasks/${result.taskId}`);
+    navigate(toWithProfile(`/tasks/${result.taskId}`, result.handlingProfileId));
     onClose();
   }, [navigate, onClose]);
 
@@ -41,6 +45,8 @@ export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: ()
     setQuery('');
     setResults([]);
     setError(null);
+    setProjectId('');
+    void fetchProjects().then((response) => setProjects(response.projects)).catch(() => setProjects([]));
     window.requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
@@ -51,7 +57,7 @@ export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: ()
       setLoading(true);
       setError(null);
       try {
-        const response = await searchTasks(query);
+        const response = await searchTasks(query, projectId || undefined);
         if (!cancelled) setResults(response.results);
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : 'Search is unavailable');
@@ -60,7 +66,7 @@ export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: ()
       }
     }, 120);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [query]);
+  }, [projectId, query]);
 
   useEffect(() => {
     setSelectedIndex(results.length ? 0 : -1);
@@ -121,6 +127,15 @@ export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: ()
             placeholder="Search every task and conversation…"
             className="h-14 min-w-0 flex-1 bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100"
           />
+          <select
+            aria-label="Search scope"
+            value={projectId}
+            onChange={(event) => setProjectId(event.target.value)}
+            className="max-w-44 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+          >
+            <option value="">Current profile</option>
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </select>
           <button type="button" onClick={onClose} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200" aria-label="Close search">
             <X size={18} />
           </button>
