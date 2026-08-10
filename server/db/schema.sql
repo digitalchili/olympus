@@ -128,3 +128,44 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 
 CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
   ON channel_messages(thread_id, created_at, hermes_message_id);
+
+CREATE TABLE IF NOT EXISTS studio_github_connection_states (
+  state_hash TEXT PRIMARY KEY,
+  flow TEXT NOT NULL CHECK(flow IN ('install', 'oauth')),
+  installation_id INTEGER,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  CHECK(
+    (flow = 'install' AND installation_id IS NULL)
+    OR (flow = 'oauth' AND installation_id > 0)
+  )
+);
+
+CREATE TABLE IF NOT EXISTS studio_github_installations (
+  id INTEGER PRIMARY KEY CHECK(id > 0),
+  account_login TEXT NOT NULL,
+  account_type TEXT NOT NULL CHECK(account_type IN ('User', 'Organization')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS studio_projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider = 'github'),
+  provider_repository_id INTEGER NOT NULL CHECK(provider_repository_id > 0),
+  installation_id INTEGER NOT NULL CHECK(installation_id > 0) REFERENCES studio_github_installations(id),
+  owner TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
+  default_branch TEXT NOT NULL,
+  html_url TEXT NOT NULL,
+  clone_url TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'read_only' CHECK(mode = 'read_only'),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(provider, provider_repository_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_studio_projects_updated
+  ON studio_projects(updated_at DESC);

@@ -9,6 +9,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { ScheduledTasksPage } from './components/ScheduledTasksPage';
 import { SkillsPage } from './components/SkillsPage';
 import { FileBrowserPage } from './components/FileBrowserPage';
+import { StudioProjectsPage } from './components/StudioProjectsPage';
 import { ChannelsPage } from './components/ChannelsPage';
 import { TaskSearchDialog } from './components/TaskSearchDialog';
 import { Toaster } from 'sonner';
@@ -41,6 +42,7 @@ function AppShell() {
             <Route path="/skills" element={<ProfileNavigate to="/skills/browse" replace />} />
             <Route path="/skills/:tab" element={<SkillsPage />} />
             <Route path="/files" element={<FileBrowserPage />} />
+            <Route path="/studio" element={<StudioProjectsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

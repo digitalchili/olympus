@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router';
-import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search, MessageCircle } from 'lucide-react';
+import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search, MessageCircle, Code2 } from 'lucide-react';
 import type { HermesChannel } from '@shared/types';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
@@ -162,6 +162,13 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             label="Recurring"
             to="/scheduled-tasks"
             active={isActive('/scheduled-tasks')}
+            collapsed={desktopCollapsed}
+          />
+          <SidebarLink
+            icon={<Code2 size={18} />}
+            label="Projects"
+            to="/studio"
+            active={isActive('/studio')}
             collapsed={desktopCollapsed}
           />
           <SidebarLink

@@ -19,6 +19,42 @@ export interface UpdateStatus {
   error?: string;
 }
 
+export interface StudioGitHubInstallation {
+  id: number;
+  accountLogin: string;
+  accountType: 'User' | 'Organization';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface StudioGitHubRepository {
+  id: number;
+  name: string;
+  fullName: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+}
+
+export interface StudioProject {
+  id: string;
+  name: string;
+  provider: 'github';
+  providerRepositoryId: number;
+  installationId: number;
+  owner: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  mode: 'read_only';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export const CHAT_RUN_MODES = ['task', 'goal'] as const;
 export type ChatRunMode = (typeof CHAT_RUN_MODES)[number];
 export const OLYMPUS_GOAL_MAX_TURNS = 20;

@@ -37,6 +37,9 @@ import type {
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
   ProfileBuilderSuggestion,
+  StudioGitHubInstallation,
+  StudioGitHubRepository,
+  StudioProject,
   UpdateStatus,
 } from '@shared/types';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
@@ -165,6 +168,33 @@ export function fetchUpdateStatus(refresh = false) {
 
 export function applyUpdate() {
   return request<{ accepted: true }>('/updates/apply', { method: 'POST' }, false);
+}
+
+export function fetchStudioGitHubStatus() {
+  return request<{ configured: boolean; installations: StudioGitHubInstallation[] }>('/studio/github/status', undefined, false);
+}
+
+export function connectStudioGitHub() {
+  return request<{ url: string }>('/studio/github/connect', { method: 'POST' }, false);
+}
+
+export function fetchStudioRepositories(installationId: number) {
+  return request<{ repositories: StudioGitHubRepository[] }>(
+    `/studio/github/repositories?installationId=${encodeURIComponent(installationId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function fetchStudioProjects() {
+  return request<{ projects: StudioProject[] }>('/studio/projects', undefined, false);
+}
+
+export function importStudioProject(installationId: number, repositoryId: number) {
+  return request<{ project: StudioProject }>('/studio/projects', {
+    method: 'POST',
+    body: JSON.stringify({ installationId, repositoryId }),
+  }, false);
 }
 
 export interface InstallationSettings {
