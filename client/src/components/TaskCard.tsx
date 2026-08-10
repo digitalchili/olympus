@@ -1,14 +1,16 @@
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { Loader2, MoreHorizontal, Target } from 'lucide-react';
-import { ProfileLink, useProfile } from '../contexts/ProfileContext';
-import type { Task, TaskRunState } from '@shared/types';
+import { Link } from 'react-router';
+import { useProfile } from '../contexts/ProfileContext';
+import { DEFAULT_PROFILE_NAME, type Task, type TaskRunState, type TaskStatus } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
 import { isActiveRun } from '../lib/store';
 import { hasUnseenAgentResponse } from '../lib/taskState';
 import { taskProfileLabel } from '../lib/profiles';
 import { TaskContextMenu } from './TaskContextMenu';
 import { RenameTitle } from './RenameTitle';
+import { toWithProfile } from '../lib/profileQuery';
 
 const BUSY_LABELS: Record<string, string> = { compact: 'Compacting...', goal: 'Working toward goal...' };
 
@@ -80,7 +82,17 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
   );
 }
 
-export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
+export function TaskCard({
+  task,
+  run,
+  onMoveTask,
+  onDeleteTask,
+}: {
+  task: Task;
+  run?: TaskRunState;
+  onMoveTask: (task: Task, status: TaskStatus) => Promise<void>;
+  onDeleteTask: (task: Task) => Promise<void>;
+}) {
   const {
     attributes,
     listeners,
@@ -130,15 +142,15 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
                 : 'border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
         }`}
       >
-        <ProfileLink
-          to={`/tasks/${task.id}`}
+        <Link
+          to={toWithProfile(`/tasks/${task.id}`, task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)}
           ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
           className="block p-3.5 pr-8 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/60 dark:focus-visible:ring-zinc-500/70"
         >
           <TaskCardBody task={task} run={run} />
-        </ProfileLink>
+        </Link>
         <button
           type="button"
           onPointerDown={stopPropagation}
@@ -159,6 +171,8 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={closeContextMenu}
+          onMoveTask={onMoveTask}
+          onDeleteTask={onDeleteTask}
         />
       )}
     </>

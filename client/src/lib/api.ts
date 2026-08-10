@@ -90,15 +90,17 @@ export function fetchTasks() {
   return request<{ tasks: Task[] }>('/tasks');
 }
 
-export function moveTask(id: string, status: TaskStatus) {
-  return request<{ task: Task }>(`/tasks/${id}/move`, {
+export function moveTask(id: string, status: TaskStatus, profileId?: string | null) {
+  const path = profileId ? apiPathWithProfile(`/tasks/${id}/move`, profileId) : `/tasks/${id}/move`;
+  return request<{ task: Task }>(path, {
     method: 'POST',
     body: JSON.stringify({ status }),
-  });
+  }, !profileId);
 }
 
-export function deleteTask(id: string) {
-  return request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' });
+export function deleteTask(id: string, profileId?: string | null) {
+  const path = profileId ? apiPathWithProfile(`/tasks/${id}`, profileId) : `/tasks/${id}`;
+  return request<{ ok: boolean }>(path, { method: 'DELETE' }, !profileId);
 }
 
 export function patchTask(id: string, fields: { title?: string; description?: string; status?: TaskStatus; workdir?: string | null }) {

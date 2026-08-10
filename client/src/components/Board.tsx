@@ -10,14 +10,16 @@ import {
 } from '@dnd-kit/core';
 import { AlertTriangle, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { ProfileLink } from '../contexts/ProfileContext';
-import type { ScheduledTask, Task, TaskStatus } from '@shared/types';
+import type { To } from 'react-router';
+import { ProfileLink, useProfile } from '../contexts/ProfileContext';
+import type { ScheduledTask, Task, TaskRunState, TaskStatus } from '@shared/types';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
-import { useStore, optimisticMoveTask } from '../lib/store';
+import { useStore } from '../lib/store';
 import { deleteTask, fetchScheduledTasks, moveTask } from '../lib/api';
 import { buildScheduledTaskFixDraft } from '../lib/scheduledTaskFix';
 import { relativeTime } from '../lib/schedule';
+import { toWithProfile } from '../lib/profileQuery';
 import { Column } from './Column';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { TaskCardOverlay } from './TaskCard';
@@ -91,35 +93,38 @@ function RecurringSummaryStrip({ scheduledTasks }: { scheduledTasks: ScheduledTa
   );
 }
 
-export function Board() {
-  const tasks = useStore((s) => s.tasks);
-  const taskRuns = useStore((s) => s.taskRuns);
-  const upsertTask = useStore((s) => s.upsertTask);
-  const removeTask = useStore((s) => s.removeTask);
-  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+interface TaskKanbanProps {
+  tasks: Task[];
+  taskRuns: Map<string, TaskRunState>;
+  createTaskTo: To;
+  onMoveTask: (task: Task, status: TaskStatus) => Promise<Task>;
+  onDeleteTask: (task: Task) => Promise<void>;
+  className?: string;
+}
+
+export function TaskKanban({
+  tasks,
+  taskRuns,
+  createTaskTo,
+  onMoveTask,
+  onDeleteTask,
+  className = 'flex flex-1 gap-4 overflow-x-auto p-3 min-h-0 sm:gap-6 sm:p-6',
+}: TaskKanbanProps) {
+  const [visibleTasks, setVisibleTasks] = useState(tasks);
   const grouped = useMemo(() => {
     const buckets: Record<TaskStatus, Task[]> = { in_progress: [], in_review: [], done: [] };
-    for (const t of tasks) {
-      if (t.status in buckets) buckets[t.status].push(t);
+    for (const task of visibleTasks) {
+      if (task.status in buckets) buckets[task.status].push(task);
     }
-    for (const s of TASK_STATUSES) buckets[s].sort((a, b) => b.updated_at - a.updated_at);
+    for (const status of TASK_STATUSES) buckets[status].sort((a, b) => b.updated_at - a.updated_at);
     return buckets;
-  }, [tasks]);
+  }, [visibleTasks]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [deleteAllStatus, setDeleteAllStatus] = useState<TaskStatus | null>(null);
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    void fetchScheduledTasks(true)
-      .then((result) => { if (!cancelled) setScheduledTasks(result.scheduledTasks); })
-      .catch(console.error);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => setVisibleTasks(tasks), [tasks]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -128,6 +133,23 @@ export function Board() {
   function handleDragStart(event: DragStartEvent) {
     const task = (event.active.data.current as { task: Task } | undefined)?.task ?? null;
     setActiveTask(task);
+  }
+
+  async function handleMoveTask(task: Task, status: TaskStatus) {
+    if (task.status === status) return;
+    const optimistic = { ...task, status, updated_at: Date.now() };
+    setVisibleTasks((current) => current.map((item) => item.id === task.id ? optimistic : item));
+    try {
+      const updated = await onMoveTask(task, status);
+      setVisibleTasks((current) => current.map((item) => item.id === task.id ? updated : item));
+    } catch {
+      setVisibleTasks((current) => current.map((item) => item.id === task.id ? task : item));
+    }
+  }
+
+  async function handleDeleteTask(task: Task) {
+    await onDeleteTask(task);
+    setVisibleTasks((current) => current.filter((item) => item.id !== task.id));
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -139,7 +161,7 @@ export function Board() {
     const task = (active.data.current as { task: Task })?.task;
     if (!task || task.status === targetStatus) return;
 
-    await optimisticMoveTask(task, targetStatus, upsertTask, moveTask);
+    await handleMoveTask(task, targetStatus);
   }
 
   function handleRequestDeleteAll(status: TaskStatus) {
@@ -165,17 +187,8 @@ export function Board() {
     setIsBulkDeleting(true);
     setBulkDeleteError(null);
     try {
-      const results = await Promise.allSettled(targets.map((task) => deleteTask(task.id)));
-      let failed = 0;
-
-      results.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          removeTask(targets[index].id);
-        } else {
-          failed += 1;
-        }
-      });
-
+      const results = await Promise.allSettled(targets.map(handleDeleteTask));
+      const failed = results.filter((result) => result.status === 'rejected').length;
       if (failed === 0) {
         setDeleteAllStatus(null);
       } else {
@@ -198,20 +211,20 @@ export function Board() {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className="flex flex-1 min-h-0 flex-col">
-        <RecurringSummaryStrip scheduledTasks={scheduledTasks} />
-        <div className="flex flex-1 gap-4 overflow-x-auto p-3 min-h-0 sm:gap-6 sm:p-6">
-          {TASK_STATUSES.map((status, index) => (
-            <Column
-              key={status}
-              status={status}
-              tasks={grouped[status]}
-              taskRuns={taskRuns}
-              isLast={index === TASK_STATUSES.length - 1}
-              onRequestDeleteAll={handleRequestDeleteAll}
-            />
-          ))}
-        </div>
+      <div className={className}>
+        {TASK_STATUSES.map((status, index) => (
+          <Column
+            key={status}
+            status={status}
+            tasks={grouped[status]}
+            taskRuns={taskRuns}
+            isLast={index === TASK_STATUSES.length - 1}
+            onRequestDeleteAll={handleRequestDeleteAll}
+            createTaskTo={createTaskTo}
+            onMoveTask={handleMoveTask}
+            onDeleteTask={handleDeleteTask}
+          />
+        ))}
       </div>
       <DragOverlay dropAnimation={dropAnimation}>
         {activeTask && (
@@ -237,5 +250,51 @@ export function Board() {
         />
       )}
     </DndContext>
+  );
+}
+
+export function Board() {
+  const tasks = useStore((state) => state.tasks);
+  const taskRuns = useStore((state) => state.taskRuns);
+  const upsertTask = useStore((state) => state.upsertTask);
+  const removeTask = useStore((state) => state.removeTask);
+  const { activeProfileId } = useProfile();
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetchScheduledTasks(true)
+      .then((result) => { if (!cancelled) setScheduledTasks(result.scheduledTasks); })
+      .catch(console.error);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleMoveTask(task: Task, status: TaskStatus): Promise<Task> {
+    const profileId = task.handling_profile_id ?? task.profile_name ?? activeProfileId;
+    const result = await moveTask(task.id, status, profileId);
+    upsertTask(result.task);
+    return result.task;
+  }
+
+  async function handleDeleteTask(task: Task) {
+    const profileId = task.handling_profile_id ?? task.profile_name ?? activeProfileId;
+    await deleteTask(task.id, profileId);
+    removeTask(task.id);
+  }
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col">
+      <RecurringSummaryStrip scheduledTasks={scheduledTasks} />
+      <TaskKanban
+        tasks={tasks}
+        taskRuns={taskRuns}
+        createTaskTo={toWithProfile('/tasks/new', activeProfileId)}
+        onMoveTask={handleMoveTask}
+        onDeleteTask={handleDeleteTask}
+      />
+    </div>
   );
 }
