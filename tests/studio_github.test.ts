@@ -39,6 +39,8 @@ app.use(express.json());
 app.use('/api/studio', createStudioRouter({
   github: {
     configured: true,
+    manifestRegistration() { throw new Error('must not run'); },
+    async completeManifest() { throw new Error('must not run'); },
     installationUrl(state: string) {
       return `https://github.com/apps/somboon-studio/installations/new?state=${encodeURIComponent(state)}`;
     },
@@ -121,8 +123,23 @@ try {
   assert.match(installCookie, /HttpOnly/i);
   assert.match(installCookie, /SameSite=Lax/i);
 
-  const callback = await call(
+  const installMissingCookie = await call(
+    `/api/studio/github/callback?installation_id=44&setup_action=install&state=${encodeURIComponent(state)}`,
+  );
+  assert.equal(installMissingCookie.status, 400);
+  assert.match(String(installMissingCookie.body.error), /invalid or expired/i);
+
+  const installMissingQueryState = await call(
     '/api/studio/github/callback?installation_id=44&setup_action=install',
+    'GET',
+    undefined,
+    { Cookie: installCookie.split(';', 1)[0] },
+  );
+  assert.equal(installMissingQueryState.status, 400);
+  assert.match(String(installMissingQueryState.body.error), /invalid or expired/i);
+
+  const callback = await call(
+    `/api/studio/github/callback?installation_id=44&setup_action=install&state=${encodeURIComponent(state)}`,
     'GET',
     undefined,
     { Cookie: installCookie.split(';', 1)[0] },
@@ -133,9 +150,15 @@ try {
   assert.equal(authorizationUrl.pathname, '/login/oauth/authorize');
   const oauthState = authorizationUrl.searchParams.get('state');
   assert.ok(oauthState);
+  const callbackCookies = callback.headers['set-cookie'];
+  assert.ok(Array.isArray(callbackCookies));
+  const oauthCookie = callbackCookies.find((value) => value.startsWith('studio_github_oauth_state='));
+  assert.ok(oauthCookie);
+  assert.match(oauthCookie, /HttpOnly/i);
+  assert.match(oauthCookie, /SameSite=Lax/i);
 
   const replay = await call(
-    '/api/studio/github/callback?installation_id=44&setup_action=install',
+    `/api/studio/github/callback?installation_id=44&setup_action=install&state=${encodeURIComponent(state)}`,
     'GET',
     undefined,
     { Cookie: installCookie.split(';', 1)[0] },
@@ -151,7 +174,16 @@ try {
   );
   assert.equal(malformedCookie.status, 400);
 
-  const oauthCallback = await call(`/api/studio/github/oauth/callback?code=verified-user-code&state=${encodeURIComponent(oauthState)}`);
+  const oauthMissingCookie = await call(`/api/studio/github/oauth/callback?code=verified-user-code&state=${encodeURIComponent(oauthState)}`);
+  assert.equal(oauthMissingCookie.status, 400);
+  assert.match(String(oauthMissingCookie.body.error), /invalid or expired/i);
+
+  const oauthCallback = await call(
+    `/api/studio/github/oauth/callback?code=verified-user-code&state=${encodeURIComponent(oauthState)}`,
+    'GET',
+    undefined,
+    { Cookie: oauthCookie.split(';', 1)[0] },
+  );
   assert.equal(oauthCallback.status, 302);
   assert.equal(oauthCallback.headers.location, '/studio?installationId=44');
 
@@ -195,22 +227,40 @@ try {
   const unknownInstallation = await call('/api/studio/github/repositories?installationId=45');
   assert.equal(unknownInstallation.status, 404);
 
+  let generatedAppConfigured = false;
   const unconfiguredApp = express();
   unconfiguredApp.use(express.json());
   unconfiguredApp.use('/api/studio', createStudioRouter({
     github: {
-      configured: false,
-      installationUrl() { throw new Error('must not run'); },
+      get configured() { return generatedAppConfigured; },
+      manifestRegistration(state, publicUrl) {
+        assert.equal(publicUrl, 'https://olympus.example');
+        return {
+          url: 'https://github.com/organizations/digitalchili/settings/apps/new',
+          method: 'POST' as const,
+          fields: { state, manifest: '{"metadata":"read"}' },
+        };
+      },
+      async completeManifest(code) {
+        assert.equal(code, 'temporary-manifest-code');
+        generatedAppConfigured = true;
+      },
+      installationUrl(state) {
+        assert.equal(generatedAppConfigured, true);
+        return `https://github.com/apps/olympus-studio/installations/new?state=${encodeURIComponent(state)}`;
+      },
       authorizationUrl() { throw new Error('must not run'); },
       async authorizeInstallation() { throw new Error('must not run'); },
       async listRepositories() { throw new Error('must not run'); },
     },
+    publicUrl: 'https://olympus.example',
+    stateTtlMs: 60_000,
   }));
   const unconfiguredServer = unconfiguredApp.listen(0);
   try {
     const unconfiguredAddress = unconfiguredServer.address();
     assert.ok(unconfiguredAddress && typeof unconfiguredAddress === 'object');
-    const unconfigured = await new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+    const unconfigured = await new Promise<ResponseResult>((resolve, reject) => {
       const req = request({
         host: '127.0.0.1',
         port: unconfiguredAddress.port,
@@ -221,14 +271,69 @@ try {
         res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
         res.on('end', () => resolve({
           status: res.statusCode ?? 0,
+          headers: res.headers,
           body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
         }));
       });
       req.on('error', reject);
       req.end();
     });
-    assert.equal(unconfigured.status, 503);
-    assert.match(String(unconfigured.body.error), /GitHub App is not configured/i);
+    assert.equal(unconfigured.status, 200);
+    assert.equal(unconfigured.body.method, 'POST');
+    assert.equal(unconfigured.body.url, 'https://github.com/organizations/digitalchili/settings/apps/new');
+    const fields = unconfigured.body.fields as Record<string, string>;
+    assert.equal(fields.manifest, '{"metadata":"read"}');
+    assert.ok(fields.state);
+    const manifestCookie = String(unconfigured.headers['set-cookie']);
+    assert.match(manifestCookie, /studio_github_manifest_state=/);
+    assert.match(manifestCookie, /HttpOnly/i);
+
+    const manifestMissingCookie = await new Promise<ResponseResult>((resolve, reject) => {
+      const req = request({
+        host: '127.0.0.1',
+        port: unconfiguredAddress.port,
+        path: `/api/studio/github/manifest/callback?code=temporary-manifest-code&state=${encodeURIComponent(fields.state)}`,
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
+        }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(manifestMissingCookie.status, 400);
+
+    const manifestCallback = await new Promise<ResponseResult>((resolve, reject) => {
+      const req = request({
+        host: '127.0.0.1',
+        port: unconfiguredAddress.port,
+        path: `/api/studio/github/manifest/callback?code=temporary-manifest-code&state=${encodeURIComponent(fields.state)}`,
+        headers: { Cookie: manifestCookie.split(';', 1)[0] },
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: raw.trim().startsWith('{') ? JSON.parse(raw) as Record<string, unknown> : {},
+          });
+        });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(manifestCallback.status, 302);
+    const generatedInstallUrl = new URL(String(manifestCallback.headers.location));
+    assert.equal(generatedInstallUrl.pathname, '/apps/olympus-studio/installations/new');
+    assert.ok(generatedInstallUrl.searchParams.get('state'));
+    assert.match(String(manifestCallback.headers['set-cookie']), /studio_github_install_state=/);
+    assert.equal(generatedAppConfigured, true);
   } finally {
     unconfiguredServer.close();
   }

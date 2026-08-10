@@ -132,7 +132,15 @@
 
 ## GitHub App deployment configuration
 
-The app remains disabled until all values are configured in the server environment:
+No GitHub credentials are required for first-run setup. The Connect GitHub button starts GitHub's App Manifest flow, exchanges GitHub's temporary code server-side, and stores the generated app ID, slug, private key, client ID, and client secret as AES-256-GCM ciphertext. The local encryption key is generated once in the persistent Olympus data directory with mode `0600`.
+
+For an organization-owned private app, configure only the non-secret owner slug:
+
+- `OLYMPUS_STUDIO_GITHUB_APP_OWNER=digitalchili`
+
+`OLYMPUS_STUDIO_PUBLIC_URL` is an optional canonical-origin override. Without it, Olympus requires the browser `Origin` to match the public proxy host and requires HTTPS in production.
+
+Existing app credentials remain supported as an advanced override. If used, provide all five values:
 
 - `OLYMPUS_STUDIO_GITHUB_APP_ID`
 - `OLYMPUS_STUDIO_GITHUB_APP_SLUG`
@@ -140,4 +148,4 @@ The app remains disabled until all values are configured in the server environme
 - `OLYMPUS_STUDIO_GITHUB_CLIENT_ID`
 - `OLYMPUS_STUDIO_GITHUB_CLIENT_SECRET`
 
-Set the GitHub App setup URL to `/api/studio/github/callback` and its OAuth callback URL to `/api/studio/github/oauth/callback` on the public Olympus origin.
+The manifest supplies `/api/studio/github/manifest/callback` as the app-creation redirect, `/api/studio/github/callback` as the post-install setup URL, and `/api/studio/github/oauth/callback` as the user authorization callback. The app requests repository Metadata: Read only and no events or webhooks.

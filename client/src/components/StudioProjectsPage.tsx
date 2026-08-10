@@ -22,6 +22,30 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Studio request failed.';
 }
 
+function followGitHubAction(action: {
+  url: string;
+  method: 'GET' | 'POST';
+  fields: Record<string, string>;
+}) {
+  if (action.method === 'GET') {
+    window.location.assign(action.url);
+    return;
+  }
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = action.url;
+  form.hidden = true;
+  for (const [name, value] of Object.entries(action.fields)) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
+}
+
 export function StudioProjectsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const callbackInstallationId = Number(searchParams.get('installationId'));
@@ -92,8 +116,7 @@ export function StudioProjectsPage() {
     setWorking(true);
     setError(null);
     try {
-      const { url } = await connectStudioGitHub();
-      window.location.assign(url);
+      followGitHubAction(await connectStudioGitHub());
     } catch (cause) {
       setError(errorMessage(cause));
       setWorking(false);
@@ -128,7 +151,7 @@ export function StudioProjectsPage() {
           </div>
           <button
             type="button"
-            disabled={!configured || working}
+            disabled={working}
             onClick={() => void connectGitHub()}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
           >
@@ -138,8 +161,12 @@ export function StudioProjectsPage() {
         </div>
 
         {!configured && !loading && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
-            Configure the Studio GitHub App ID, slug, private key, client ID, and client secret on the server before connecting repositories.
+          <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+            <p className="font-medium text-zinc-900 dark:text-zinc-100">Connect GitHub</p>
+            <p className="mt-1">
+              Choose which repositories Olympus can access. You can revoke access at any time.
+              GitHub will ask you to create and install the read-only Olympus App on the first connection.
+            </p>
           </div>
         )}
 

@@ -1,6 +1,10 @@
 import { createSign } from 'node:crypto';
 import type { StudioGitHubRepository } from '../../shared/types.js';
 import type { StudioGitHubGateway } from '../routes/studio.js';
+import type {
+  GitHubCredentialStore,
+  StudioGitHubAppConfig,
+} from './github-credentials.js';
 
 const GITHUB_API = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -11,17 +15,10 @@ interface GitHubAppOptions {
   env?: Environment;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  credentialStore?: GitHubCredentialStore;
 }
 
-interface GitHubAppConfig {
-  appId: string;
-  appSlug: string;
-  privateKey: string;
-  clientId: string;
-  clientSecret: string;
-}
-
-function readConfig(env: Environment): GitHubAppConfig | null {
+function readConfig(env: Environment): StudioGitHubAppConfig | null {
   const appId = env.OLYMPUS_STUDIO_GITHUB_APP_ID?.trim();
   const appSlug = env.OLYMPUS_STUDIO_GITHUB_APP_SLUG?.trim();
   const privateKey = env.OLYMPUS_STUDIO_GITHUB_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
@@ -36,7 +33,7 @@ function encodeJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
 
-function appJwt(config: GitHubAppConfig, nowMs: number): string {
+function appJwt(config: StudioGitHubAppConfig, nowMs: number): string {
   const issuedAt = Math.floor(nowMs / 1000) - 60;
   const encodedHeader = encodeJson({ alg: 'RS256', typ: 'JWT' });
   const encodedPayload = encodeJson({
@@ -74,9 +71,15 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? Date.now;
-  const config = readConfig(env);
+  const environmentConfig = readConfig(env);
+  const credentialStore = options.credentialStore;
 
-  function requireConfig(): GitHubAppConfig {
+  function activeConfig(): StudioGitHubAppConfig | null {
+    return environmentConfig ?? credentialStore?.load() ?? null;
+  }
+
+  function requireConfig(): StudioGitHubAppConfig {
+    const config = activeConfig();
     if (!config) throw new Error('The Studio GitHub App is not configured.');
     return config;
   }
@@ -167,7 +170,70 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
   }
 
   return {
-    configured: config !== null,
+    get configured() {
+      return activeConfig() !== null;
+    },
+
+    manifestRegistration(state: string, publicUrl: string) {
+      if (activeConfig()) throw new Error('The Studio GitHub App is already configured.');
+      const origin = new URL(publicUrl);
+      if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
+        throw new Error('The Olympus public URL is invalid.');
+      }
+      const baseUrl = origin.origin;
+      const owner = env.OLYMPUS_STUDIO_GITHUB_APP_OWNER?.trim();
+      if (owner && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
+        throw new Error('The Studio GitHub App owner is invalid.');
+      }
+      const url = owner
+        ? `https://github.com/organizations/${encodeURIComponent(owner)}/settings/apps/new`
+        : 'https://github.com/settings/apps/new';
+      const manifest = {
+        name: 'Olympus Studio',
+        url: baseUrl,
+        redirect_url: `${baseUrl}/api/studio/github/manifest/callback`,
+        callback_urls: [`${baseUrl}/api/studio/github/oauth/callback`],
+        setup_url: `${baseUrl}/api/studio/github/callback`,
+        public: false,
+        default_permissions: { metadata: 'read' },
+        default_events: [],
+        request_oauth_on_install: false,
+      };
+      return {
+        url,
+        method: 'POST' as const,
+        fields: { state, manifest: JSON.stringify(manifest) },
+      };
+    },
+
+    async completeManifest(code: string) {
+      if (activeConfig()) throw new Error('The Studio GitHub App is already configured.');
+      if (!credentialStore) throw new Error('Secure Studio GitHub credential storage is unavailable.');
+      const response = await fetchImpl(`${GITHUB_API}/app-manifests/${encodeURIComponent(code)}/conversions`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'olympus-dispatch-studio',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`GitHub App manifest conversion failed (${response.status}).`);
+      const payload = await response.json() as {
+        id?: unknown;
+        slug?: unknown;
+        pem?: unknown;
+        client_id?: unknown;
+        client_secret?: unknown;
+      };
+      credentialStore.save({
+        appId: String(requiredSafeInteger(payload.id, 'app id')),
+        appSlug: requiredString(payload.slug, 'app slug'),
+        privateKey: requiredString(payload.pem, 'private key'),
+        clientId: requiredString(payload.client_id, 'client id'),
+        clientSecret: requiredString(payload.client_secret, 'client secret'),
+      }, now());
+    },
 
     installationUrl(state: string): string {
       const activeConfig = requireConfig();

@@ -131,12 +131,12 @@ CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
 
 CREATE TABLE IF NOT EXISTS studio_github_connection_states (
   state_hash TEXT PRIMARY KEY,
-  flow TEXT NOT NULL CHECK(flow IN ('install', 'oauth')),
+  flow TEXT NOT NULL CHECK(flow IN ('manifest', 'install', 'oauth')),
   installation_id INTEGER,
   expires_at INTEGER NOT NULL,
   consumed_at INTEGER,
   CHECK(
-    (flow = 'install' AND installation_id IS NULL)
+    (flow IN ('manifest', 'install') AND installation_id IS NULL)
     OR (flow = 'oauth' AND installation_id > 0)
   )
 );
@@ -145,6 +145,13 @@ CREATE TABLE IF NOT EXISTS studio_github_installations (
   id INTEGER PRIMARY KEY CHECK(id > 0),
   account_login TEXT NOT NULL,
   account_type TEXT NOT NULL CHECK(account_type IN ('User', 'Organization')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS studio_github_app_config (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  encrypted_payload TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

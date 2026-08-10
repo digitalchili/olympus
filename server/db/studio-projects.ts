@@ -67,7 +67,7 @@ function stateHash(state: string): string {
 
 export function createGitHubConnectionState(
   state: string,
-  flow: 'install' | 'oauth',
+  flow: 'manifest' | 'install' | 'oauth',
   expiresAt: number,
   installationId: number | null = null,
 ): void {
@@ -80,7 +80,7 @@ export function createGitHubConnectionState(
 
 export function consumeGitHubConnectionState(
   state: string,
-  flow: 'install' | 'oauth',
+  flow: 'manifest' | 'install' | 'oauth',
   now: number,
 ): { installationId: number | null } | null {
   return db.transaction(() => {

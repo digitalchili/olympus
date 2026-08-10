@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import type { StudioGitHubRepository } from '../../shared/types.js';
 import {
   consumeGitHubConnectionState,
@@ -13,6 +13,12 @@ import {
 
 export interface StudioGitHubGateway {
   configured: boolean;
+  manifestRegistration(state: string, publicUrl: string): {
+    url: string;
+    method: 'POST';
+    fields: { state: string; manifest: string };
+  };
+  completeManifest(code: string): Promise<void>;
   installationUrl(state: string): string;
   authorizationUrl(state: string): string;
   authorizeInstallation(code: string, installationId: number): Promise<{
@@ -28,9 +34,12 @@ interface StudioRouterOptions {
   stateTtlMs?: number;
   now?: () => number;
   secureCookies?: boolean;
+  publicUrl?: string;
 }
 
 const INSTALL_STATE_COOKIE = 'studio_github_install_state';
+const MANIFEST_STATE_COOKIE = 'studio_github_manifest_state';
+const OAUTH_STATE_COOKIE = 'studio_github_oauth_state';
 
 function positiveSafeInteger(value: unknown): number | null {
   const number = typeof value === 'number' ? value : Number(value);
@@ -51,6 +60,33 @@ function cookieValue(header: string | undefined, name: string): string {
   return '';
 }
 
+function normalizedOrigin(value: string): string {
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('invalid public URL');
+  }
+  return url.origin;
+}
+
+function requestPublicUrl(req: Request, configured: string | undefined): string {
+  const configuredOrigin = configured?.trim() ? normalizedOrigin(configured.trim()) : null;
+  if (configuredOrigin) {
+    if (process.env.NODE_ENV === 'production' && !configuredOrigin.startsWith('https://')) throw new Error('HTTPS is required');
+    return configuredOrigin;
+  }
+  const originHeader = req.get('origin');
+  if (!originHeader) throw new Error('missing request origin');
+  const origin = normalizedOrigin(originHeader);
+  const forwardedHost = req.get('x-forwarded-host')?.split(',', 1)[0]?.trim();
+  const requestHost = forwardedHost || req.get('host');
+  const forwardedProtocol = req.get('x-forwarded-proto')?.split(',', 1)[0]?.trim();
+  const requestProtocol = forwardedProtocol || req.protocol;
+  const expected = normalizedOrigin(`${requestProtocol}://${requestHost}`);
+  if (origin !== expected) throw new Error('request origin does not match public host');
+  if (process.env.NODE_ENV === 'production' && !origin.startsWith('https://')) throw new Error('HTTPS is required');
+  return origin;
+}
+
 export function createStudioRouter(options: StudioRouterOptions): Router {
   const router = Router();
   const now = options.now ?? Date.now;
@@ -64,11 +100,24 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
     });
   });
 
-  router.post('/github/connect', (_req, res) => {
-    if (!options.github.configured) {
-      return res.status(503).json({ error: 'The Studio GitHub App is not configured.' });
-    }
+  router.post('/github/connect', (req, res) => {
     const state = randomBytes(32).toString('base64url');
+    if (!options.github.configured) {
+      try {
+        const publicUrl = requestPublicUrl(req, options.publicUrl);
+        createGitHubConnectionState(state, 'manifest', now() + stateTtlMs);
+        res.cookie(MANIFEST_STATE_COOKIE, state, {
+          httpOnly: true,
+          sameSite: 'lax',
+          secure: secureCookies,
+          maxAge: stateTtlMs,
+          path: '/api/studio/github/manifest/callback',
+        });
+        return res.json(options.github.manifestRegistration(state, publicUrl));
+      } catch {
+        return res.status(400).json({ error: 'Olympus could not start secure GitHub App setup.' });
+      }
+    }
     createGitHubConnectionState(state, 'install', now() + stateTtlMs);
     res.cookie(INSTALL_STATE_COOKIE, state, {
       httpOnly: true,
@@ -77,13 +126,48 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
       maxAge: stateTtlMs,
       path: '/api/studio/github/callback',
     });
-    return res.json({ url: options.github.installationUrl(state) });
+    return res.json({ url: options.github.installationUrl(state), method: 'GET', fields: {} });
+  });
+
+  router.get('/github/manifest/callback', async (req, res) => {
+    const queryState = typeof req.query.state === 'string' ? req.query.state : '';
+    const cookieState = cookieValue(req.headers.cookie, MANIFEST_STATE_COOKIE);
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    res.clearCookie(MANIFEST_STATE_COOKIE, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: secureCookies,
+      path: '/api/studio/github/manifest/callback',
+    });
+    if (
+      !code
+      || !queryState
+      || !cookieState
+      || cookieState !== queryState
+      || !consumeGitHubConnectionState(queryState, 'manifest', now())
+    ) {
+      return res.status(400).json({ error: 'The GitHub App setup state is invalid or expired.' });
+    }
+    try {
+      await options.github.completeManifest(code);
+      const installState = randomBytes(32).toString('base64url');
+      createGitHubConnectionState(installState, 'install', now() + stateTtlMs);
+      res.cookie(INSTALL_STATE_COOKIE, installState, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: secureCookies,
+        maxAge: stateTtlMs,
+        path: '/api/studio/github/callback',
+      });
+      return res.redirect(302, options.github.installationUrl(installState));
+    } catch {
+      return res.status(502).json({ error: 'GitHub App setup could not be completed.' });
+    }
   });
 
   router.get('/github/callback', async (req, res) => {
     const queryState = typeof req.query.state === 'string' ? req.query.state : '';
     const cookieState = cookieValue(req.headers.cookie, INSTALL_STATE_COOKIE);
-    const state = cookieState || queryState;
     const installationId = positiveSafeInteger(req.query.installation_id);
     res.clearCookie(INSTALL_STATE_COOKIE, {
       httpOnly: true,
@@ -92,24 +176,41 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
       path: '/api/studio/github/callback',
     });
     if (
-      !state
-      || (cookieState && queryState && cookieState !== queryState)
+      !queryState
+      || !cookieState
+      || cookieState !== queryState
       || !installationId
-      || !consumeGitHubConnectionState(state, 'install', now())
+      || !consumeGitHubConnectionState(queryState, 'install', now())
     ) {
       return res.status(400).json({ error: 'The GitHub connection state is invalid or expired.' });
     }
     const oauthState = randomBytes(32).toString('base64url');
     createGitHubConnectionState(oauthState, 'oauth', now() + stateTtlMs, installationId);
+    res.cookie(OAUTH_STATE_COOKIE, oauthState, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: secureCookies,
+      maxAge: stateTtlMs,
+      path: '/api/studio/github/oauth/callback',
+    });
     // GitHub documents setup-url installation_id as attacker-spoofable. The OAuth
     // callback must prove this installation is visible to the authorizing user.
     return res.redirect(302, options.github.authorizationUrl(oauthState));
   });
 
   router.get('/github/oauth/callback', async (req, res) => {
-    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    const queryState = typeof req.query.state === 'string' ? req.query.state : '';
+    const cookieState = cookieValue(req.headers.cookie, OAUTH_STATE_COOKIE);
     const code = typeof req.query.code === 'string' ? req.query.code : '';
-    const connection = state ? consumeGitHubConnectionState(state, 'oauth', now()) : null;
+    res.clearCookie(OAUTH_STATE_COOKIE, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: secureCookies,
+      path: '/api/studio/github/oauth/callback',
+    });
+    const connection = queryState && cookieState === queryState
+      ? consumeGitHubConnectionState(queryState, 'oauth', now())
+      : null;
     if (!code || !connection?.installationId) {
       return res.status(400).json({ error: 'The GitHub authorization state is invalid or expired.' });
     }

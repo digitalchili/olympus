@@ -65,6 +65,41 @@ function ensureCollaborationContributionIndex(): void {
   `);
 }
 
+function migrateStudioGitHubConnectionStates(): void {
+  const row = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'studio_github_connection_states'
+  `).get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'manifest'")) return;
+
+  const columns = db.prepare('PRAGMA table_info(studio_github_connection_states)').all() as Array<{ name: string }>;
+  const hasFlow = columns.some((column) => column.name === 'flow');
+  const hasInstallationId = columns.some((column) => column.name === 'installation_id');
+  const legacyFlow = hasFlow ? 'flow' : "'install'";
+  const legacyInstallationId = hasInstallationId ? 'installation_id' : 'NULL';
+
+  db.exec(`
+    ALTER TABLE studio_github_connection_states RENAME TO studio_github_connection_states_legacy;
+    CREATE TABLE studio_github_connection_states (
+      state_hash TEXT PRIMARY KEY,
+      flow TEXT NOT NULL CHECK(flow IN ('manifest', 'install', 'oauth')),
+      installation_id INTEGER,
+      expires_at INTEGER NOT NULL,
+      consumed_at INTEGER,
+      CHECK(
+        (flow IN ('manifest', 'install') AND installation_id IS NULL)
+        OR (flow = 'oauth' AND installation_id > 0)
+      )
+    );
+    INSERT INTO studio_github_connection_states (
+      state_hash, flow, installation_id, expires_at, consumed_at
+    )
+    SELECT state_hash, ${legacyFlow}, ${legacyInstallationId}, expires_at, consumed_at
+    FROM studio_github_connection_states_legacy;
+    DROP TABLE studio_github_connection_states_legacy;
+  `);
+}
+
 function recoverInterruptedCollaborations(): void {
   const now = Date.now();
   db.prepare(`
@@ -97,6 +132,7 @@ try {
   db.exec(schema);
   migrateCollaborationContributions();
   ensureCollaborationContributionIndex();
+  migrateStudioGitHubConnectionStates();
   ensureColumn('tasks', 'agent_provider', 'TEXT');
   ensureColumn('tasks', 'workdir', 'TEXT');
   ensureColumn('tasks', 'profile_name', 'TEXT');

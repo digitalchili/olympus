@@ -16,6 +16,7 @@ import { projectFoldersRouter } from './project-folders.js';
 import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { createStudioRouter } from './routes/studio.js';
 import { createGitHubAppGateway } from './studio/github-app.js';
+import { createGitHubCredentialStore } from './studio/github-credentials.js';
 import { getTask } from './db/queries.js';
 import { listDelegationRunsForProfile, markProfileDelegationsUnknown, recordDelegationEvent } from './db/delegations.js';
 import { normalizeDelegationEvent } from './delegation-events.js';
@@ -111,7 +112,10 @@ app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/updates', createUpdatesRouter());
-app.use('/api/studio', createStudioRouter({ github: createGitHubAppGateway() }));
+app.use('/api/studio', createStudioRouter({
+  github: createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() }),
+  publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,
+}));
 app.use('/api/profiles', createProfilesRouter(adapter));
 app.use('/api/channels', createChannelsRouter());
 app.use('/api/channels', createChannelHistoryRouter());

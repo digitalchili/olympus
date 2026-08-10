@@ -175,7 +175,11 @@ export function fetchStudioGitHubStatus() {
 }
 
 export function connectStudioGitHub() {
-  return request<{ url: string }>('/studio/github/connect', { method: 'POST' }, false);
+  return request<{
+    url: string;
+    method: 'GET' | 'POST';
+    fields: Record<string, string>;
+  }>('/studio/github/connect', { method: 'POST' }, false);
 }
 
 export function fetchStudioRepositories(installationId: number) {
