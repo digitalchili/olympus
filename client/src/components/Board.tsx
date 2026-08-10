@@ -8,15 +8,15 @@ import {
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import { AlertTriangle, Wrench } from 'lucide-react';
+import { AlertTriangle, FolderKanban, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { To } from 'react-router';
 import { ProfileLink, useProfile } from '../contexts/ProfileContext';
-import type { ScheduledTask, Task, TaskRunState, TaskStatus } from '@shared/types';
+import type { ProjectSummary, ScheduledTask, Task, TaskRunState, TaskStatus } from '@shared/types';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { useStore } from '../lib/store';
-import { deleteTask, fetchScheduledTasks, moveTask } from '../lib/api';
+import { deleteTask, fetchProjects, fetchScheduledTasks, moveTask } from '../lib/api';
 import { buildScheduledTaskFixDraft } from '../lib/scheduledTaskFix';
 import { relativeTime } from '../lib/schedule';
 import { toWithProfile } from '../lib/profileQuery';
@@ -260,6 +260,8 @@ export function Board() {
   const removeTask = useStore((state) => state.removeTask);
   const { activeProfileId } = useProfile();
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [locationFilter, setLocationFilter] = useState('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -271,6 +273,27 @@ export function Board() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchProjects()
+      .then((result) => { if (!cancelled) setProjects(result.projects); })
+      .catch(console.error);
+    return () => { cancelled = true; };
+  }, []);
+
+  const visibleTasks = useMemo(() => {
+    if (locationFilter === 'all') return tasks;
+    if (locationFilter === 'inbox') return tasks.filter((task) => !task.project_id);
+    return tasks.filter((task) => task.project_id === locationFilter);
+  }, [locationFilter, tasks]);
+  const selectedProject = projects.find((project) => project.id === locationFilter);
+  const createTaskTo = selectedProject
+    ? toWithProfile(
+        { pathname: '/tasks/new', search: `?project=${encodeURIComponent(selectedProject.id)}` },
+        selectedProject.managerProfileId,
+      )
+    : toWithProfile('/tasks/new', activeProfileId);
 
   async function handleMoveTask(task: Task, status: TaskStatus): Promise<Task> {
     const profileId = task.handling_profile_id ?? task.profile_name ?? activeProfileId;
@@ -288,10 +311,18 @@ export function Board() {
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <RecurringSummaryStrip scheduledTasks={scheduledTasks} />
+      <div className="mx-3 mt-3 flex items-center justify-between gap-3 sm:mx-6 sm:mt-4">
+        <div className="flex items-center gap-2 text-xs font-medium text-zinc-500"><FolderKanban size={14} /> Location</div>
+        <select aria-label="Project filter" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)} className="h-8 max-w-64 rounded-lg border border-zinc-200 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+          <option value="all">All tasks</option>
+          <option value="inbox">Inbox</option>
+          {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select>
+      </div>
       <TaskKanban
-        tasks={tasks}
+        tasks={visibleTasks}
         taskRuns={taskRuns}
-        createTaskTo={toWithProfile('/tasks/new', activeProfileId)}
+        createTaskTo={createTaskTo}
         onMoveTask={handleMoveTask}
         onDeleteTask={handleDeleteTask}
       />

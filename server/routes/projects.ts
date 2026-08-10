@@ -11,7 +11,9 @@ import {
   revokeProjectProfileAccess,
   updateProject,
 } from '../db/projects.js';
-import { getTasksForProject } from '../db/queries.js';
+import { getTask, getTasksForProject } from '../db/queries.js';
+import { addProjectClient, initSSE, sendEvent } from '../events.js';
+import { getRunStatuses } from '../live-chat.js';
 import {
   LocalProfileError,
   localProfileRegistry,
@@ -249,6 +251,24 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const actor = profileActor(req, registry);
       if (actor) requireProfileProjectAccess(projectId, actor, 'view');
       return res.json({ tasks: getTasksForProject(projectId) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/events', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      if (!getProject(projectId)) {
+        return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      }
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'view');
+      const runs = getRunStatuses().filter((run) => getTask(run.taskId)?.project_id === projectId);
+      initSSE(res);
+      addProjectClient(res, projectId);
+      sendEvent(res, { type: 'task_runs_snapshot', runs });
+      return undefined;
     } catch (error) {
       return sendError(res, error);
     }

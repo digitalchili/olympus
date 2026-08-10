@@ -23,7 +23,7 @@ import {
 import { useProfile } from '../contexts/ProfileContext';
 import { toWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
-import { useStore } from '../lib/store';
+import { useProjectBoardEvents } from '../hooks/useProjectBoardEvents';
 import { TaskKanban } from './Board';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
@@ -45,7 +45,7 @@ export function ProjectDetailPage() {
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const taskRuns = useStore((state) => state.taskRuns);
+
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +68,7 @@ export function ProjectDetailPage() {
   }, [projectId]);
 
   useEffect(() => { void load(); }, [load]);
+  const taskRuns = useProjectBoardEvents(projectId, setTasks, load);
 
   const eligibleGrantProfiles = useMemo(
     () => profiles.filter((profile) => profile.active && profile.id !== project?.managerProfileId),
