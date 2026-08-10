@@ -1,4 +1,4 @@
-import { createSign } from 'node:crypto';
+import { createHash, createSign } from 'node:crypto';
 import type { StudioGitHubRepository } from '../../shared/types.js';
 import type { StudioGitHubGateway } from '../routes/studio.js';
 import type {
@@ -181,6 +181,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
         throw new Error('The Olympus public URL is invalid.');
       }
       const baseUrl = origin.origin;
+      const instanceSuffix = createHash('sha256').update(baseUrl).digest('hex').slice(0, 8);
       if (owner && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
         throw new Error('The Studio GitHub App owner is invalid.');
       }
@@ -188,7 +189,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
         ? `https://github.com/organizations/${encodeURIComponent(owner)}/settings/apps/new`
         : 'https://github.com/settings/apps/new';
       const manifest = {
-        name: 'Olympus Studio',
+        name: `Olympus Studio ${instanceSuffix}`,
         url: baseUrl,
         redirect_url: `${baseUrl}/api/studio/github/manifest/callback`,
         callback_urls: [`${baseUrl}/api/studio/github/oauth/callback`],

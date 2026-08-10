@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,6 +50,8 @@ try {
   assert.equal(registration.fields.state, 'opaque-state');
 
   const manifest = JSON.parse(registration.fields.manifest) as Record<string, unknown>;
+  const instanceSuffix = createHash('sha256').update('https://olympus.example').digest('hex').slice(0, 8);
+  assert.equal(manifest.name, `Olympus Studio ${instanceSuffix}`);
   assert.equal(manifest.url, 'https://olympus.example');
   assert.equal(manifest.redirect_url, 'https://olympus.example/api/studio/github/manifest/callback');
   assert.deepEqual(manifest.callback_urls, ['https://olympus.example/api/studio/github/oauth/callback']);
@@ -62,6 +64,17 @@ try {
 
   const personalRegistration = gateway.manifestRegistration('personal-state', 'https://olympus.example', null);
   assert.equal(personalRegistration.url, 'https://github.com/settings/apps/new');
+  assert.equal(
+    (JSON.parse(personalRegistration.fields.manifest) as Record<string, unknown>).name,
+    manifest.name,
+    'retries for one installation must keep the same App name',
+  );
+  const otherInstance = gateway.manifestRegistration('other-state', 'https://other-olympus.example', null);
+  assert.notEqual(
+    (JSON.parse(otherInstance.fields.manifest) as Record<string, unknown>).name,
+    manifest.name,
+    'independent Olympus installations must not compete for one global GitHub App name',
+  );
   assert.throws(
     () => gateway.manifestRegistration('invalid-state', 'https://olympus.example', 'not/a/github-org'),
     /owner is invalid/i,
