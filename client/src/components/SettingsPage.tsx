@@ -9,6 +9,7 @@ import { toErrorMessage } from '../lib/format';
 import { ProfilesSettings } from './ProfilesSettings';
 import { ChannelSettings } from './ChannelSettings';
 import { UpdateSettings } from './UpdateSettings';
+import { GitHubSettings } from './GitHubSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
 import {
   REASONING_EFFORTS,
@@ -194,6 +195,8 @@ export function SettingsPage() {
             </select>
           </div>
         </section>
+
+        <GitHubSettings />
 
         <ChannelSettings />
 

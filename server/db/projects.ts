@@ -4,6 +4,8 @@ import type {
   ProjectAccessRole,
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
+  ProjectRepositoryLink,
+  StudioGitHubRepository,
 } from '../../shared/types.js';
 import { PROJECT_ACCESS_ROLES } from '../../shared/types.js';
 import db from './index.js';
@@ -24,6 +26,22 @@ type HistoryRow = {
   effective_from: number;
   effective_to: number | null;
   changed_by: string;
+};
+
+type RepositoryLinkRow = {
+  project_id: string;
+  provider: 'github';
+  provider_repository_id: number;
+  installation_id: number;
+  owner: string;
+  full_name: string;
+  private: number;
+  default_branch: string;
+  html_url: string;
+  clone_url: string;
+  mode: 'read_only';
+  created_at: number;
+  updated_at: number;
 };
 
 type GrantRow = {
@@ -54,6 +72,24 @@ function historyFromRow(row: HistoryRow): ProjectManagerHistoryEntry {
     effectiveFrom: row.effective_from,
     effectiveTo: row.effective_to,
     changedBy: row.changed_by,
+  };
+}
+
+function repositoryLinkFromRow(row: RepositoryLinkRow): ProjectRepositoryLink {
+  return {
+    projectId: row.project_id,
+    provider: row.provider,
+    providerRepositoryId: row.provider_repository_id,
+    installationId: row.installation_id,
+    owner: row.owner,
+    fullName: row.full_name,
+    private: row.private === 1,
+    defaultBranch: row.default_branch,
+    htmlUrl: row.html_url,
+    cloneUrl: row.clone_url,
+    mode: row.mode,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -105,12 +141,14 @@ export function listProjects(): Project[] {
   return rows.map(projectFromRow);
 }
 
-export function createProject(input: {
+export interface CreateProjectInput {
   name: string;
   purpose: string;
   managerProfileId: string;
   changedBy: string;
-}, now = Date.now()): Project {
+}
+
+export function createProject(input: CreateProjectInput, now = Date.now()): Project {
   const name = requiredText(input.name, 'name', 120);
   const purpose = requiredText(input.purpose, 'purpose', 2_000);
   const managerProfileId = requiredText(input.managerProfileId, 'managerProfileId', 64);
@@ -215,6 +253,99 @@ export function reassignProject(input: {
     }
   })();
   return getProject(input.projectId)!;
+}
+
+
+export function getProjectRepositoryLink(projectId: string): ProjectRepositoryLink | null {
+  const row = db.prepare(`
+    SELECT project_id, provider, provider_repository_id, installation_id, owner, full_name,
+      private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    FROM project_repository_links
+    WHERE project_id = ?
+  `).get(projectId) as RepositoryLinkRow | undefined;
+  return row ? repositoryLinkFromRow(row) : null;
+}
+
+export function listProjectRepositoryLinks(): ProjectRepositoryLink[] {
+  const rows = db.prepare(`
+    SELECT project_id, provider, provider_repository_id, installation_id, owner, full_name,
+      private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    FROM project_repository_links
+    ORDER BY updated_at DESC, full_name COLLATE NOCASE
+  `).all() as RepositoryLinkRow[];
+  return rows.map(repositoryLinkFromRow);
+}
+
+export function upsertProjectRepositoryLink(
+  projectId: string,
+  installationId: number,
+  repository: StudioGitHubRepository,
+  now = Date.now(),
+): ProjectRepositoryLink {
+  if (!getProject(projectId)) throw new Error('Project not found');
+  db.prepare(`
+    INSERT INTO project_repository_links (
+      project_id, provider, provider_repository_id, installation_id, owner, full_name,
+      private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    ) VALUES (?, 'github', ?, ?, ?, ?, ?, ?, ?, ?, 'read_only', ?, ?)
+    ON CONFLICT(project_id) DO UPDATE SET
+      provider_repository_id = excluded.provider_repository_id,
+      installation_id = excluded.installation_id,
+      owner = excluded.owner,
+      full_name = excluded.full_name,
+      private = excluded.private,
+      default_branch = excluded.default_branch,
+      html_url = excluded.html_url,
+      clone_url = excluded.clone_url,
+      mode = 'read_only',
+      updated_at = excluded.updated_at
+  `).run(
+    projectId,
+    repository.id,
+    installationId,
+    requiredText(repository.owner, 'owner', 120),
+    requiredText(repository.fullName, 'fullName', 240),
+    repository.private ? 1 : 0,
+    requiredText(repository.defaultBranch, 'defaultBranch', 240),
+    requiredText(repository.htmlUrl, 'htmlUrl', 500),
+    requiredText(repository.cloneUrl, 'cloneUrl', 500),
+    now,
+    now,
+  );
+  return getProjectRepositoryLink(projectId)!;
+}
+
+export function deleteProjectRepositoryLink(projectId: string): void {
+  db.prepare('DELETE FROM project_repository_links WHERE project_id = ?').run(projectId);
+}
+
+export function createProjectWithRepository(
+  input: CreateProjectInput,
+  repositoryLink: { installationId: number; repository: StudioGitHubRepository },
+  now = Date.now(),
+): Project {
+  return db.transaction(() => {
+    const project = createProject(input, now);
+    upsertProjectRepositoryLink(project.id, repositoryLink.installationId, repositoryLink.repository, now);
+    return project;
+  })();
+}
+
+export function updateProjectWithRepository(
+  projectId: string,
+  fields: { name?: string; purpose?: string },
+  repositoryLink: null | { installationId: number; repository: StudioGitHubRepository },
+  now = Date.now(),
+): Project {
+  return db.transaction(() => {
+    const project = fields.name === undefined && fields.purpose === undefined
+      ? getProject(projectId)
+      : updateProject(projectId, fields, now);
+    if (!project) throw new Error('Project not found');
+    if (repositoryLink === null) deleteProjectRepositoryLink(projectId);
+    else upsertProjectRepositoryLink(projectId, repositoryLink.installationId, repositoryLink.repository, now);
+    return project;
+  })();
 }
 
 export function listProjectManagerHistory(projectId: string): ProjectManagerHistoryEntry[] {

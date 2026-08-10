@@ -42,6 +42,7 @@ import type {
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
   ProjectSummary,
+  ProjectRepositoryLink,
   StudioGitHubInstallation,
   StudioGitHubRepository,
   StudioProject,
@@ -244,7 +245,7 @@ export function fetchProjects() {
   return request<{ projects: ProjectSummary[] }>('/projects', undefined, false);
 }
 
-export function createProject(input: { name: string; purpose: string; managerProfileId: string }) {
+export function createProject(input: { name: string; purpose: string; managerProfileId: string; repositoryLink?: { installationId: number; repositoryId: number } | null }) {
   return request<{ project: ProjectSummary }>('/projects', {
     method: 'POST',
     body: JSON.stringify(input),
@@ -259,11 +260,36 @@ export function fetchProject(projectId: string) {
   );
 }
 
-export function updateProject(projectId: string, input: { name?: string; purpose?: string }) {
+export function updateProject(projectId: string, input: { name?: string; purpose?: string; repositoryLink?: { installationId: number; repositoryId: number } | null }) {
   return request<{ project: ProjectSummary }>(`/projects/${encodeURIComponent(projectId)}`, {
     method: 'PATCH',
     body: JSON.stringify(input),
   }, false);
+}
+
+
+export function fetchProjectRepositoryLink(projectId: string) {
+  return request<{ repositoryLink: ProjectRepositoryLink | null }>(
+    `/projects/${encodeURIComponent(projectId)}/repository`,
+    undefined,
+    false,
+  );
+}
+
+export function upsertProjectRepositoryLink(projectId: string, installationId: number, repositoryId: number) {
+  return request<{ repositoryLink: ProjectRepositoryLink }>(
+    `/projects/${encodeURIComponent(projectId)}/repository`,
+    { method: 'PUT', body: JSON.stringify({ installationId, repositoryId }) },
+    false,
+  );
+}
+
+export function deleteProjectRepositoryLink(projectId: string) {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/repository`,
+    { method: 'DELETE' },
+    false,
+  );
 }
 
 export function fetchProjectGrants(projectId: string) {

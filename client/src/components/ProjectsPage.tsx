@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, FolderKanban, Plus, X } from 'lucide-react';
-import type { ProjectSummary } from '@shared/types';
-import { createProject, fetchProjects } from '../lib/api';
+import { ArrowRight, FolderKanban, GitBranch, Plus, X } from 'lucide-react';
+import type { ProjectSummary, StudioGitHubInstallation, StudioGitHubRepository } from '@shared/types';
+import { createProject, fetchProjects, fetchStudioGitHubStatus, fetchStudioRepositories } from '../lib/api';
 import { ProfileLink, useProfile } from '../contexts/ProfileContext';
 import { toErrorMessage } from '../lib/format';
+import { selectableStudioRepositories } from '../lib/studio-projects';
 
 export function ProjectsPage() {
   const { profiles } = useProfile();
@@ -14,9 +15,19 @@ export function ProjectsPage() {
   const [purpose, setPurpose] = useState('');
   const [managerProfileId, setManagerProfileId] = useState('');
   const [saving, setSaving] = useState(false);
+  const [installations, setInstallations] = useState<StudioGitHubInstallation[]>([]);
+  const [repositories, setRepositories] = useState<StudioGitHubRepository[]>([]);
+  const [repositoryInstallationId, setRepositoryInstallationId] = useState<number | null>(null);
+  const [repositoryId, setRepositoryId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    fetchStudioGitHubStatus()
+      .then(({ installations: next }) => {
+        setInstallations(next);
+        if (next.length === 1) setRepositoryInstallationId(next[0].id);
+      })
+      .catch(() => undefined);
     fetchProjects()
       .then(({ projects: next }) => setProjects(next))
       .catch((cause) => setError(toErrorMessage(cause, 'Could not load Projects')))
@@ -30,6 +41,31 @@ export function ProjectsPage() {
     }
   }, [managerProfileId, profiles]);
 
+
+  useEffect(() => {
+    if (!repositoryInstallationId) {
+      setRepositories([]);
+      setRepositoryId(null);
+      return;
+    }
+    let cancelled = false;
+    fetchStudioRepositories(repositoryInstallationId)
+      .then(({ repositories: next }) => {
+        if (!cancelled) {
+          setRepositories(next);
+          const selectable = selectableStudioRepositories(next, projects.map((project) => project.repositoryLink).filter((link) => link !== null && link !== undefined));
+          setRepositoryId((current) => current && selectable.some((repo) => repo.id === current) ? current : selectable[0]?.id ?? null);
+        }
+      })
+      .catch(() => { if (!cancelled) setRepositories([]); });
+    return () => { cancelled = true; };
+  }, [repositoryInstallationId, projects]);
+
+  const selectableRepositories = selectableStudioRepositories(
+    repositories,
+    projects.map((project) => project.repositoryLink).filter((link) => link !== null && link !== undefined),
+  );
+
   const submit = async () => {
     if (!name.trim() || !purpose.trim() || !managerProfileId) return;
     setSaving(true);
@@ -39,10 +75,12 @@ export function ProjectsPage() {
         name: name.trim(),
         purpose: purpose.trim(),
         managerProfileId,
+        repositoryLink: repositoryInstallationId && repositoryId ? { installationId: repositoryInstallationId, repositoryId } : null,
       });
       setProjects((current) => [project, ...current]);
       setName('');
       setPurpose('');
+      setRepositoryId(null);
       setShowCreate(false);
     } catch (cause) {
       setError(toErrorMessage(cause, 'Could not create Project'));
@@ -83,6 +121,23 @@ export function ProjectsPage() {
                   {profiles.filter((profile) => profile.active).map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName}</option>)}
                 </select>
               </label>
+
+              {installations.length > 0 && (
+                <>
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">GitHub connection (optional)
+                    <select value={repositoryInstallationId ?? ''} onChange={(event) => setRepositoryInstallationId(Number(event.target.value) || null)} className="mt-1.5 h-10 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700">
+                      <option value="">No repository</option>
+                      {installations.map((installation) => <option key={installation.id} value={installation.id}>{installation.accountLogin}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Repository
+                    <select value={repositoryId ?? ''} disabled={!repositoryInstallationId} onChange={(event) => setRepositoryId(Number(event.target.value) || null)} className="mt-1.5 h-10 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm disabled:opacity-50 dark:border-zinc-700">
+                      <option value="">No repository</option>
+                      {selectableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.fullName}</option>)}
+                    </select>
+                  </label>
+                </>
+              )}
               <label className="sm:col-span-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">Purpose
                 <textarea value={purpose} onChange={(event) => setPurpose(event.target.value)} maxLength={2000} rows={3} className="mt-1.5 w-full resize-none rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm dark:border-zinc-700" placeholder="What this Project exists to accomplish" />
               </label>
@@ -102,6 +157,7 @@ export function ProjectsPage() {
               <div className="mt-4 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
                 <span className="font-medium text-zinc-700 dark:text-zinc-300">Managed by</span> {project.manager.displayName}
                 {(project.manager.provider || project.manager.model) && <span className="ml-1 text-zinc-400">· {[project.manager.provider, project.manager.model].filter(Boolean).join(' · ')}</span>}
+                {project.repositoryLink && <span className="mt-1 flex items-center gap-1 text-zinc-500"><GitBranch size={12} /> {project.repositoryLink.fullName} · read-only</span>}
               </div>
             </ProfileLink>
           ))}

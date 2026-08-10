@@ -6,6 +6,8 @@ import type {
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
   ProjectSummary,
+  StudioGitHubInstallation,
+  StudioGitHubRepository,
   Task,
   TaskStatus,
 } from '@shared/types';
@@ -14,6 +16,8 @@ import {
   fetchProject,
   fetchProjectGrants,
   fetchProjectTasks,
+  fetchStudioGitHubStatus,
+  fetchStudioRepositories,
   moveTask,
   reassignProjectManager,
   revokeProjectGrant,
@@ -24,6 +28,7 @@ import { useProfile } from '../contexts/ProfileContext';
 import { toWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
 import { useProjectBoardEvents } from '../hooks/useProjectBoardEvents';
+import { selectableStudioRepositories } from '../lib/studio-projects';
 import { TaskKanban } from './Board';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
@@ -42,6 +47,10 @@ export function ProjectDetailPage() {
   const [draftPurpose, setDraftPurpose] = useState('');
   const [grantProfileId, setGrantProfileId] = useState('');
   const [grantRole, setGrantRole] = useState<ProjectAccessRole>('view');
+  const [installations, setInstallations] = useState<StudioGitHubInstallation[]>([]);
+  const [repositories, setRepositories] = useState<StudioGitHubRepository[]>([]);
+  const [repositoryInstallationId, setRepositoryInstallationId] = useState<number | null>(null);
+  const [repositoryId, setRepositoryId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -62,6 +71,8 @@ export function ProjectDetailPage() {
       setNextManager(detail.project.managerProfileId);
       setDraftName(detail.project.name);
       setDraftPurpose(detail.project.purpose);
+      setRepositoryInstallationId(detail.project.repositoryLink?.installationId ?? null);
+      setRepositoryId(detail.project.repositoryLink?.providerRepositoryId ?? null);
     } catch (cause) {
       setLoadError(toErrorMessage(cause, 'Could not load Project'));
     }
@@ -69,6 +80,31 @@ export function ProjectDetailPage() {
 
   useEffect(() => { void load(); }, [load]);
   const taskRuns = useProjectBoardEvents(projectId, setTasks, load);
+
+
+  useEffect(() => {
+    fetchStudioGitHubStatus()
+      .then(({ installations: next }) => setInstallations(next))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!repositoryInstallationId) {
+      setRepositories([]);
+      if (!project?.repositoryLink) setRepositoryId(null);
+      return;
+    }
+    let cancelled = false;
+    fetchStudioRepositories(repositoryInstallationId)
+      .then(({ repositories: next }) => { if (!cancelled) setRepositories(next); })
+      .catch(() => { if (!cancelled) setRepositories([]); });
+    return () => { cancelled = true; };
+  }, [repositoryInstallationId, project?.repositoryLink]);
+
+  const selectableRepositories = selectableStudioRepositories(
+    repositories,
+    [],
+  );
 
   const eligibleGrantProfiles = useMemo(
     () => profiles.filter((profile) => profile.active && profile.id !== project?.managerProfileId),
@@ -84,7 +120,8 @@ export function ProjectDetailPage() {
     setBusy(true);
     setActionError(null);
     try {
-      const result = await updateProject(project.id, { name: draftName, purpose: draftPurpose });
+      const repositoryLink = repositoryInstallationId && repositoryId ? { installationId: repositoryInstallationId, repositoryId } : null;
+      const result = await updateProject(project.id, { name: draftName, purpose: draftPurpose, repositoryLink });
       setProject(result.project);
       setDraftName(result.project.name);
       setDraftPurpose(result.project.purpose);
@@ -185,6 +222,13 @@ export function ProjectDetailPage() {
             <div className="grid gap-3 sm:grid-cols-[minmax(0,280px)_minmax(0,1fr)_auto] sm:items-end">
               <label className="text-xs font-medium text-zinc-500">Name<input value={draftName} onChange={(event) => setDraftName(event.target.value)} maxLength={120} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700" /></label>
               <label className="text-xs font-medium text-zinc-500">Purpose<textarea value={draftPurpose} onChange={(event) => setDraftPurpose(event.target.value)} maxLength={2000} rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm dark:border-zinc-700" /></label>
+
+              {installations.length > 0 && (
+                <>
+                  <label className="text-xs font-medium text-zinc-500">GitHub connection<select value={repositoryInstallationId ?? ''} onChange={(event) => setRepositoryInstallationId(Number(event.target.value) || null)} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"><option value="">No repository</option>{installations.map((installation) => <option key={installation.id} value={installation.id}>{installation.accountLogin}</option>)}</select></label>
+                  <label className="text-xs font-medium text-zinc-500">Repository<select value={repositoryId ?? ''} disabled={!repositoryInstallationId} onChange={(event) => setRepositoryId(Number(event.target.value) || null)} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm disabled:opacity-50 dark:border-zinc-700"><option value="">No repository</option>{selectableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.fullName}</option>)}</select></label>
+                </>
+              )}
               <div className="flex gap-2">
                 <button type="button" disabled={busy || !draftName.trim() || !draftPurpose.trim()} onClick={() => void saveProject()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"><Save size={14} /> Save</button>
                 <button type="button" onClick={() => setEditing(false)} className="inline-flex h-9 items-center rounded-lg border border-zinc-200 px-3 dark:border-zinc-700"><X size={14} /></button>
@@ -225,7 +269,7 @@ export function ProjectDetailPage() {
             </section>
 
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><FileText size={15} /> References</h2><p className="mt-2 text-xs text-zinc-500">Document ingestion arrives in the next verified slice.</p></section>
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><GitBranch size={15} /> Repository</h2><p className="mt-2 text-xs text-zinc-500">No repository selected.</p><Link to="/settings" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300">GitHub setup <ExternalLink size={12} /></Link></section>
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><GitBranch size={15} /> Repository</h2>{project.repositoryLink ? <><a href={project.repositoryLink.htmlUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-sm font-medium text-zinc-800 hover:underline dark:text-zinc-200">{project.repositoryLink.fullName}</a><p className="mt-1 text-xs text-zinc-500">{project.repositoryLink.defaultBranch} · read-only · verified installation {project.repositoryLink.installationId}</p></> : <p className="mt-2 text-xs text-zinc-500">No repository selected.</p>}<Link to="/settings#github" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300">GitHub setup <ExternalLink size={12} /></Link></section>
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Manager history</h2><div className="mt-2 space-y-2">{history.map((entry) => <div key={entry.id} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{profileName(entry.profileId)}</span><br />{new Date(entry.effectiveFrom).toLocaleString()}{entry.effectiveTo ? ` – ${new Date(entry.effectiveTo).toLocaleString()}` : ' – current'}</div>)}</div></section>
           </aside>
         </div>

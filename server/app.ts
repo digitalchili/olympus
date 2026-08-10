@@ -113,9 +113,10 @@ app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/updates', createUpdatesRouter());
-app.use('/api/projects', createProjectsRouter());
+const studioGitHubGateway = createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() });
+app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway }));
 app.use('/api/studio', createStudioRouter({
-  github: createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() }),
+  github: studioGitHubGateway,
   publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,
 }));
 app.use('/api/profiles', createProfilesRouter(adapter));

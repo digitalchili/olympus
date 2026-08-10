@@ -85,6 +85,7 @@ export interface ProjectManagerProjection {
 
 export interface ProjectSummary extends Project {
   manager: ProjectManagerProjection;
+  repositoryLink?: ProjectRepositoryLink | null;
 }
 
 export interface ProjectManagerHistoryEntry {

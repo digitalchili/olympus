@@ -1,8 +1,11 @@
 import { Router, type Request, type Response } from 'express';
-import type { Project, ProjectAccessRole } from '../../shared/types.js';
+import type { Project, ProjectAccessRole, ProjectRepositoryLink } from '../../shared/types.js';
 import {
   createProject,
+  createProjectWithRepository,
+  deleteProjectRepositoryLink,
   getProject,
+  getProjectRepositoryLink,
   grantProjectProfileAccess,
   listProjectManagerHistory,
   listProjectProfileGrants,
@@ -10,6 +13,8 @@ import {
   reassignProject,
   revokeProjectProfileAccess,
   updateProject,
+  updateProjectWithRepository,
+  upsertProjectRepositoryLink,
 } from '../db/projects.js';
 import { getTask, getTasksForProject } from '../db/queries.js';
 import { addProjectClient, initSSE, sendEvent } from '../events.js';
@@ -26,11 +31,14 @@ import {
   ProjectAccessError,
   requireProfileProjectAccess,
 } from '../project-access.js';
+import type { StudioGitHubGateway } from './studio.js';
+import { getGitHubInstallation } from '../db/studio-projects.js';
 
 interface ProjectsRouterOptions {
   registry?: LocalProfileRegistry;
   now?: () => number;
   changedBy?: string;
+  github?: StudioGitHubGateway;
 }
 
 type ManagerProjection = {
@@ -40,10 +48,36 @@ type ManagerProjection = {
   model: string | null;
 };
 
-type ProjectResponse = Project & { manager: ManagerProjection };
+type ProjectResponse = Project & { manager: ManagerProjection; repositoryLink: ProjectRepositoryLink | null };
 
 function routeId(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value;
+}
+
+
+function linkRequest(body: unknown): { installationId: number; repositoryId: number } | null {
+  if (!body || typeof body !== 'object') return null;
+  const record = body as Record<string, unknown>;
+  const installationId = Number(record.installationId);
+  const repositoryId = Number(record.repositoryId);
+  return Number.isSafeInteger(installationId) && installationId > 0
+    && Number.isSafeInteger(repositoryId) && repositoryId > 0
+    ? { installationId, repositoryId }
+    : null;
+}
+
+async function verifiedRepositoryLink(
+  github: StudioGitHubGateway | undefined,
+  input: { installationId: number; repositoryId: number },
+) {
+  if (!github) throw Object.assign(new Error('GitHub gateway is not configured'), { statusCode: 503 });
+  if (!getGitHubInstallation(input.installationId)) {
+    throw Object.assign(new Error('GitHub installation was not found'), { statusCode: 404 });
+  }
+  const repositories = await github.listRepositories(input.installationId);
+  const repository = repositories.find((candidate) => candidate.id === input.repositoryId);
+  if (!repository) throw Object.assign(new Error('Repository is not available to this GitHub installation'), { statusCode: 404 });
+  return repository;
 }
 
 function sendError(res: Response, error: unknown): Response {
@@ -53,7 +87,11 @@ function sendError(res: Response, error: unknown): Response {
   if (error instanceof LocalProfileError) {
     return res.status(error.status).json({ error: error.message, code: error.code });
   }
+  const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : null;
   const message = error instanceof Error ? error.message : 'Project request failed';
+  if (statusCode === 404) return res.status(404).json({ error: message, code: 'PROJECT_REPOSITORY_NOT_FOUND' });
+  if (statusCode === 503) return res.status(503).json({ error: message, code: 'GITHUB_GATEWAY_UNAVAILABLE' });
+  if (/UNIQUE constraint failed: project_repository_links\.provider, project_repository_links\.provider_repository_id/i.test(message)) return res.status(409).json({ error: 'Repository is already linked to another Project', code: 'PROJECT_REPOSITORY_LINK_EXISTS' });
   if (/Project not found/i.test(message)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
   if (/already exists/i.test(message)) return res.status(409).json({ error: message, code: 'PROJECT_NAME_EXISTS' });
   if (/required|too long|invalid control|invalid.*role/i.test(message)) return res.status(400).json({ error: message, code: 'INVALID_PROJECT' });
@@ -79,6 +117,7 @@ async function projectResponse(project: Project, registry: LocalProfileRegistry)
   if (!target) {
     return {
       ...project,
+      repositoryLink: getProjectRepositoryLink(project.id),
       manager: {
         id: project.managerProfileId,
         displayName: project.managerProfileId,
@@ -91,6 +130,7 @@ async function projectResponse(project: Project, registry: LocalProfileRegistry)
     const settings = await readProfileSettings(target);
     return {
       ...project,
+      repositoryLink: getProjectRepositoryLink(project.id),
       manager: {
         id: target.id,
         displayName: settings.displayName,
@@ -101,6 +141,7 @@ async function projectResponse(project: Project, registry: LocalProfileRegistry)
   } catch {
     return {
       ...project,
+      repositoryLink: getProjectRepositoryLink(project.id),
       manager: {
         id: target.id,
         displayName: target.displayName,
@@ -116,6 +157,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
   const registry = options.registry ?? localProfileRegistry;
   const now = options.now ?? Date.now;
   const changedBy = options.changedBy ?? 'local-user';
+  const github = options.github;
 
   router.get('/', async (req, res) => {
     try {
@@ -144,7 +186,19 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         ? req.body.managerProfileId.trim()
         : '';
       registry.requireActive(managerProfileId);
-      const project = createProject({ name, purpose, managerProfileId, changedBy }, now());
+      const requestedLink = req.body?.repositoryLink === null || req.body?.repositoryLink === undefined ? null : linkRequest(req.body.repositoryLink);
+      if (req.body?.repositoryLink !== undefined && req.body?.repositoryLink !== null && !requestedLink) {
+        return res.status(400).json({ error: 'A valid repositoryLink installationId and repositoryId are required', code: 'INVALID_PROJECT_REPOSITORY_LINK' });
+      }
+      const repository = requestedLink ? await verifiedRepositoryLink(github, requestedLink) : null;
+      const timestamp = now();
+      const createInput = { name, purpose, managerProfileId, changedBy };
+      const project = requestedLink && repository
+        ? createProjectWithRepository(createInput, {
+          installationId: requestedLink.installationId,
+          repository,
+        }, timestamp)
+        : createProject(createInput, timestamp);
       return res.status(201).json({ project: await projectResponse(project, registry) });
     } catch (error) {
       return sendError(res, error);
@@ -161,10 +215,30 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
       const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
       const purpose = typeof req.body?.purpose === 'string' ? req.body.purpose : undefined;
-      if (name === undefined && purpose === undefined) {
-        return res.status(400).json({ error: 'name or purpose is required', code: 'INVALID_PROJECT' });
+      const hasRepositoryLink = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'repositoryLink');
+      if (name === undefined && purpose === undefined && !hasRepositoryLink) {
+        return res.status(400).json({ error: 'name, purpose, or repositoryLink is required', code: 'INVALID_PROJECT' });
       }
-      const project = updateProject(projectId, { name, purpose }, now());
+      let requestedRepository: Awaited<ReturnType<typeof verifiedRepositoryLink>> | null = null;
+      let requestedRepositoryInstallationId: number | null = null;
+      if (hasRepositoryLink && req.body.repositoryLink !== null) {
+        const requestedLink = linkRequest(req.body.repositoryLink);
+        if (!requestedLink) return res.status(400).json({ error: 'A valid repositoryLink installationId and repositoryId are required', code: 'INVALID_PROJECT_REPOSITORY_LINK' });
+        requestedRepository = await verifiedRepositoryLink(github, requestedLink);
+        requestedRepositoryInstallationId = requestedLink.installationId;
+      }
+      const timestamp = now();
+      const project = hasRepositoryLink
+        ? updateProjectWithRepository(
+          projectId,
+          { name, purpose },
+          req.body.repositoryLink === null ? null : {
+            installationId: requestedRepositoryInstallationId!,
+            repository: requestedRepository!,
+          },
+          timestamp,
+        )
+        : updateProject(projectId, { name, purpose }, timestamp);
       return res.json({ project: await projectResponse(project, registry) });
     } catch (error) {
       return sendError(res, error);
@@ -221,6 +295,48 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         return res.status(400).json({ error: 'The Project manager has implicit manage access', code: 'PROJECT_MANAGER_ACCESS_IMPLICIT' });
       }
       revokeProjectProfileAccess(projectId, profileId);
+      return res.status(204).end();
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+
+  router.get('/:id/repository', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      if (!getProject(projectId)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'view');
+      return res.json({ repositoryLink: getProjectRepositoryLink(projectId) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.put('/:id/repository', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      if (!getProject(projectId)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      const requestedLink = linkRequest(req.body);
+      if (!requestedLink) return res.status(400).json({ error: 'A valid installationId and repositoryId are required', code: 'INVALID_PROJECT_REPOSITORY_LINK' });
+      const repository = await verifiedRepositoryLink(github, requestedLink);
+      const repositoryLink = upsertProjectRepositoryLink(projectId, requestedLink.installationId, repository, now());
+      return res.json({ repositoryLink });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.delete('/:id/repository', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      if (!getProject(projectId)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      const actor = profileActor(req, registry);
+      if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      deleteProjectRepositoryLink(projectId);
       return res.status(204).end();
     } catch (error) {
       return sendError(res, error);

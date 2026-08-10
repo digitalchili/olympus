@@ -27,15 +27,30 @@ await profile('inactive', 'Inactive Manager', false, 'openai', 'gpt-5');
 
 const { LocalProfileRegistry } = await import('../server/local-profiles.js');
 const { createProjectsRouter } = await import('../server/routes/projects.js');
+const { upsertGitHubInstallation } = await import('../server/db/studio-projects.js');
 const { default: db } = await import('../server/db/index.js');
 const { getProfileProjectRole } = await import('../server/db/projects.js');
 const { ProjectAccessError, requireProfileProjectAccess } = await import('../server/project-access.js');
 const registry = new LocalProfileRegistry(hermesHome, dispatchHome);
 
 let now = 1_000;
+const repositories = [{ id: 501, name: 'atlas', fullName: 'example/atlas', owner: 'example', private: true, defaultBranch: 'main', htmlUrl: 'https://github.com/example/atlas', cloneUrl: 'https://github.com/example/atlas.git' }];
+upsertGitHubInstallation({ id: 44, accountLogin: 'example', accountType: 'Organization' }, now);
+const github = {
+  configured: true,
+  manifestRegistration() { throw new Error('not used'); },
+  async completeManifest() { throw new Error('not used'); },
+  installationUrl() { throw new Error('not used'); },
+  authorizationUrl() { throw new Error('not used'); },
+  async authorizeInstallation() { throw new Error('not used'); },
+  async listRepositories(installationId: number) {
+    assert.equal(installationId, 44);
+    return repositories;
+  },
+};
 const app = express();
 app.use(express.json());
-app.use('/api/projects', createProjectsRouter({ registry, now: () => now, changedBy: 'local-user' }));
+app.use('/api/projects', createProjectsRouter({ registry, now: () => now, changedBy: 'local-user', github }));
 const server = app.listen(0, '127.0.0.1');
 await once(server, 'listening');
 
@@ -82,10 +97,14 @@ try {
     name: 'Example Project',
     purpose: 'Development and operation of Example Project',
     managerProfileId: 'studio',
+    repositoryLink: { installationId: 44, repositoryId: 501 },
   });
   assert.equal(createdResponse.status, 201);
   const created = createdResponse.body.project as Record<string, unknown>;
   assert.equal(created.name, 'Example Project');
+  assert.equal((created.repositoryLink as Record<string, unknown>).fullName, 'example/atlas');
+  assert.equal((created.repositoryLink as Record<string, unknown>).mode, 'read_only');
+  assert.equal(JSON.stringify(created).includes('token'), false);
   assert.deepEqual(created.manager, {
     id: 'studio',
     displayName: 'Somboon Studio',
@@ -94,9 +113,50 @@ try {
   });
   const projectId = String(created.id);
 
+  const repositoryDetail = await call(`/api/projects/${projectId}/repository`);
+  assert.equal(repositoryDetail.status, 200);
+  assert.equal(((repositoryDetail.body.repositoryLink as Record<string, unknown>)).providerRepositoryId, 501);
+
+  const unavailableRepository = await call(`/api/projects/${projectId}/repository`, 'PUT', { installationId: 44, repositoryId: 999 });
+  assert.equal(unavailableRepository.status, 404);
+
+  const removedRepository = await call(`/api/projects/${projectId}/repository`, 'DELETE');
+  assert.equal(removedRepository.status, 204);
+  assert.equal((await call(`/api/projects/${projectId}/repository`)).body.repositoryLink, null);
+
+  const relinkedRepository = await call(`/api/projects/${projectId}/repository`, 'PUT', { installationId: 44, repositoryId: 501 });
+  assert.equal(relinkedRepository.status, 200);
+  assert.equal(((relinkedRepository.body.repositoryLink as Record<string, unknown>)).mode, 'read_only');
+
+  const duplicateRepositoryCreate = await call('/api/projects', 'POST', {
+    name: 'Must roll back',
+    purpose: 'Duplicate repository must not leave a Project behind',
+    managerProfileId: 'studio',
+    repositoryLink: { installationId: 44, repositoryId: 501 },
+  });
+  assert.equal(duplicateRepositoryCreate.status, 409);
+  assert.equal((await call('/api/projects')).body.projects instanceof Array, true);
+  assert.equal((await call('/api/projects')).body.projects instanceof Array
+    ? ((await call('/api/projects')).body.projects as unknown[]).length
+    : -1, 1, 'failed linked creation rolls back the Project row');
+
+  const unlinkedResponse = await call('/api/projects', 'POST', {
+    name: 'Atomic update target',
+    purpose: 'Verify metadata and repository changes share one transaction',
+    managerProfileId: 'studio',
+  });
+  assert.equal(unlinkedResponse.status, 201);
+  const unlinkedId = String((unlinkedResponse.body.project as Record<string, unknown>).id);
+  const duplicateRepositoryPatch = await call(`/api/projects/${unlinkedId}`, 'PATCH', {
+    name: 'Must not persist',
+    repositoryLink: { installationId: 44, repositoryId: 501 },
+  });
+  assert.equal(duplicateRepositoryPatch.status, 409);
+  assert.equal(((await call(`/api/projects/${unlinkedId}`)).body.project as Record<string, unknown>).name, 'Atomic update target');
+
   const globalOperatorIndex = await call('/api/projects');
   assert.equal(globalOperatorIndex.status, 200);
-  assert.equal((globalOperatorIndex.body.projects as unknown[]).length, 1);
+  assert.equal((globalOperatorIndex.body.projects as unknown[]).length, 2);
 
   const globalFromUnrelatedProfile = await call('/api/projects?profile=claude-manager');
   assert.equal(globalFromUnrelatedProfile.status, 200);
