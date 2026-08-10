@@ -167,8 +167,8 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
           <SidebarLink
             icon={<Code2 size={18} />}
             label="Projects"
-            to="/studio"
-            active={isActive('/studio')}
+            to="/projects"
+            active={location.pathname === '/projects' || location.pathname.startsWith('/projects/')}
             collapsed={desktopCollapsed}
           />
           <SidebarLink

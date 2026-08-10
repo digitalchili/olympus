@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   agent_provider    TEXT,
   reasoning_effort  TEXT,
   workdir           TEXT,
+  project_id        TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  handling_profile_id TEXT,
+  delegated_worker_id TEXT,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
   last_agent_response_at  INTEGER,
@@ -176,3 +179,60 @@ CREATE TABLE IF NOT EXISTS studio_projects (
 
 CREATE INDEX IF NOT EXISTS idx_studio_projects_updated
   ON studio_projects(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id                 TEXT PRIMARY KEY,
+  name               TEXT NOT NULL,
+  name_key           TEXT NOT NULL UNIQUE,
+  purpose            TEXT NOT NULL,
+  manager_profile_id TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_updated
+  ON projects(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_manager_history (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  profile_id     TEXT NOT NULL,
+  effective_from INTEGER NOT NULL,
+  effective_to   INTEGER,
+  changed_by     TEXT NOT NULL,
+  CHECK(effective_to IS NULL OR effective_to >= effective_from)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_manager_history_open
+  ON project_manager_history(project_id)
+  WHERE effective_to IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_project_manager_history_project
+  ON project_manager_history(project_id, effective_from);
+
+CREATE TABLE IF NOT EXISTS project_profile_grants (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL,
+  role        TEXT NOT NULL CHECK(role IN ('view', 'contribute', 'manage')),
+  granted_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY(project_id, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_repository_links (
+  project_id             TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  provider               TEXT NOT NULL CHECK(provider = 'github'),
+  provider_repository_id INTEGER NOT NULL CHECK(provider_repository_id > 0),
+  installation_id        INTEGER NOT NULL CHECK(installation_id > 0) REFERENCES studio_github_installations(id),
+  owner                  TEXT NOT NULL,
+  full_name              TEXT NOT NULL,
+  private                INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
+  default_branch         TEXT NOT NULL,
+  html_url               TEXT NOT NULL,
+  clone_url              TEXT NOT NULL,
+  mode                   TEXT NOT NULL DEFAULT 'read_only' CHECK(mode IN ('read_only', 'branch_pr')),
+  created_at             INTEGER NOT NULL,
+  updated_at             INTEGER NOT NULL,
+  UNIQUE(provider, provider_repository_id)
+);

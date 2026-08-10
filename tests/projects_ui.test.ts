@@ -1,0 +1,39 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const app = await readFile('client/src/App.tsx', 'utf8');
+const sidebar = await readFile('client/src/components/Sidebar.tsx', 'utf8');
+const header = await readFile('client/src/components/Header.tsx', 'utf8');
+const projects = await readFile('client/src/components/ProjectsPage.tsx', 'utf8').catch(() => '');
+const detail = await readFile('client/src/components/ProjectDetailPage.tsx', 'utf8').catch(() => '');
+const newTask = await readFile('client/src/components/NewTaskPage.tsx', 'utf8');
+const api = await readFile('client/src/lib/api.ts', 'utf8');
+
+assert.match(app, /path="\/projects" element=\{<ProjectsPage \/>\}/);
+assert.match(app, /path="\/projects\/:projectId" element=\{<ProjectDetailPage \/>\}/);
+assert.match(sidebar, /label="Projects"[\s\S]*to="\/projects"/);
+assert.match(header, /isProjects/);
+assert.match(header, /parentTitle = 'Projects'/);
+assert.match(header, /parentTo = '\/projects'/);
+assert.match(projects, /Projects/);
+assert.match(projects, /New Project/);
+assert.match(projects, /Managed by/);
+assert.match(projects, /Purpose/);
+assert.match(projects, /manager\.provider/);
+assert.match(projects, /manager\.model/);
+assert.match(detail, /Manager history/);
+assert.match(detail, /New task/);
+assert.match(detail, /References/);
+assert.match(detail, /Repository/);
+assert.match(newTask, /Location/);
+assert.match(newTask, /Inbox/);
+assert.match(newTask, /Handled by/);
+assert.match(newTask, /Manager derived from Project/);
+assert.match(api, /export function fetchProjects\(/);
+assert.match(api, /export function createProject\(/);
+assert.match(api, /export function fetchProject\(/);
+assert.match(api, /export function fetchProjectTasks\(/);
+assert.match(api, /projectId/);
+assert.match(api, /handlingProfileId/);
+
+console.log('Global Projects and task-location UI tests passed');

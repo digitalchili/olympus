@@ -15,6 +15,7 @@ import { createChannelHistoryRouter } from './routes/channel-history.js';
 import { projectFoldersRouter } from './project-folders.js';
 import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { createStudioRouter } from './routes/studio.js';
+import { createProjectsRouter } from './routes/projects.js';
 import { createGitHubAppGateway } from './studio/github-app.js';
 import { createGitHubCredentialStore } from './studio/github-credentials.js';
 import { getTask } from './db/queries.js';
@@ -112,6 +113,7 @@ app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/updates', createUpdatesRouter());
+app.use('/api/projects', createProjectsRouter());
 app.use('/api/studio', createStudioRouter({
   github: createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() }),
   publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,

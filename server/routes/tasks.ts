@@ -1,15 +1,17 @@
 import { Router } from 'express';
 import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed } from '../db/queries.js';
+import { getProject } from '../db/projects.js';
 import { broadcast } from '../events.js';
 import { adapter } from '../app.js';
 import { TASK_STATUSES } from '../../shared/types.js';
 import type { Task, TaskStatus } from '../../shared/types.js';
 import { validateProjectWorkdir } from '../project-folders.js';
-import { LocalProfileError } from '../local-profiles.js';
+import { LocalProfileError, localProfileRegistry } from '../local-profiles.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
 import { cancelTaskRunForDeletion } from '../task-run-lifecycle.js';
 import { listDelegationRuns } from '../db/delegations.js';
+import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 
 export const tasksRouter = Router();
 const requireTask = requireTaskForProfile(getTask);
@@ -81,9 +83,43 @@ tasksRouter.post('/', async (req, res) => {
   const userTitle = typeof title === 'string' ? title.trim() : '';
   const resolvedTitle = userTitle || generateTitle(description);
   let profile;
+  let projectId: string | null = null;
   try {
-    profile = requestProfile(req);
+    const requestedProjectId = req.body?.projectId;
+    const requestedHandlerId = req.body?.handlingProfileId;
+    if (requestedProjectId !== undefined && requestedProjectId !== null && requestedProjectId !== '') {
+      if (typeof requestedProjectId !== 'string' || !requestedProjectId.trim()) {
+        return res.status(400).json({ error: 'projectId must be a non-empty string', code: 'INVALID_PROJECT_ID' });
+      }
+      projectId = requestedProjectId.trim();
+      const project = getProject(projectId);
+      if (!project) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      const actor = requestProfile(req);
+      requireProfileProjectAccess(projectId, actor.id, 'contribute');
+      profile = localProfileRegistry.requireActive(project.managerProfileId);
+      if (requestedHandlerId !== undefined
+        && requestedHandlerId !== null
+        && requestedHandlerId !== ''
+        && requestedHandlerId !== profile.id) {
+        return res.status(400).json({
+          error: 'Project task handler is derived from the current Project manager',
+          code: 'PROJECT_HANDLER_DERIVED',
+        });
+      }
+    } else if (requestedHandlerId !== undefined && requestedHandlerId !== null && requestedHandlerId !== '') {
+      if (typeof requestedHandlerId !== 'string') {
+        return res.status(400).json({ error: 'handlingProfileId must be a string', code: 'INVALID_TASK_HANDLER' });
+      }
+      profile = localProfileRegistry.requireActive(requestedHandlerId.trim());
+    } else {
+      // Compatibility path for older clients. The new UI always sends an
+      // explicit Inbox handler.
+      profile = requestProfile(req);
+    }
   } catch (error) {
+    if (error instanceof ProjectAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     if (error instanceof LocalProfileError) {
       return res.status(error.status).json({ error: error.message, code: error.code });
     }
@@ -94,6 +130,9 @@ tasksRouter.post('/', async (req, res) => {
     description,
     status: 'in_progress',
     workdir,
+    project_id: projectId,
+    handling_profile_id: profile.id,
+    delegated_worker_id: null,
     profile_name: profile.id,
     routing_source: 'manual',
   });

@@ -9,7 +9,7 @@ const page = await readFile('client/src/components/StudioProjectsPage.tsx', 'utf
 
 assert.match(app, /app\.use\('\/api\/studio', createStudioRouter\(\{[\s\S]*github: createGitHubAppGateway\(\{ credentialStore: createGitHubCredentialStore\(\) \}\),[\s\S]*publicUrl: process\.env\.OLYMPUS_STUDIO_PUBLIC_URL/);
 assert.match(clientApp, /path="\/studio" element=\{<StudioProjectsPage \/>\}/);
-assert.match(sidebar, /label="Projects"[\s\S]*to="\/studio"/);
+assert.match(sidebar, /label="Projects"[\s\S]*to="\/projects"/);
 assert.match(api, /export function connectStudioGitHub\(owner: string \| null\)/);
 assert.match(api, /JSON\.stringify\(\{ owner \}\)/);
 assert.match(api, /method: 'GET' \| 'POST'/);

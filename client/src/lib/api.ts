@@ -37,6 +37,8 @@ import type {
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
   ProfileBuilderSuggestion,
+  ProjectManagerHistoryEntry,
+  ProjectSummary,
   StudioGitHubInstallation,
   StudioGitHubRepository,
   StudioProject,
@@ -116,15 +118,26 @@ export function createTask(
   description: string,
   title?: string,
   workdir?: string | null,
-  requestedProfileName?: string | null,
+  options?: {
+    projectId?: string | null;
+    handlingProfileId?: string | null;
+    routingProfileId?: string | null;
+  },
 ) {
-  const path = requestedProfileName
-    ? apiPathWithProfile('/tasks', requestedProfileName)
+  const routingProfileId = options?.routingProfileId ?? options?.handlingProfileId;
+  const path = routingProfileId
+    ? apiPathWithProfile('/tasks', routingProfileId)
     : '/tasks';
   return request<{ task: Task }>(path, {
     method: 'POST',
-    body: JSON.stringify({ description, title, workdir, requestedProfileName }),
-  });
+    body: JSON.stringify({
+      description,
+      title,
+      workdir,
+      projectId: options?.projectId ?? null,
+      handlingProfileId: options?.handlingProfileId ?? null,
+    }),
+  }, !routingProfileId);
 }
 
 export interface TaskSearchResult {
@@ -201,6 +214,44 @@ export function importStudioProject(installationId: number, repositoryId: number
   return request<{ project: StudioProject }>('/studio/projects', {
     method: 'POST',
     body: JSON.stringify({ installationId, repositoryId }),
+  }, false);
+}
+
+export function fetchProjects() {
+  return request<{ projects: ProjectSummary[] }>('/projects', undefined, false);
+}
+
+export function createProject(input: { name: string; purpose: string; managerProfileId: string }) {
+  return request<{ project: ProjectSummary }>('/projects', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, false);
+}
+
+export function fetchProject(projectId: string) {
+  return request<{ project: ProjectSummary; managerHistory: ProjectManagerHistoryEntry[] }>(
+    `/projects/${encodeURIComponent(projectId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function fetchProjectTasks(projectId: string) {
+  return request<{ tasks: Task[] }>(
+    `/projects/${encodeURIComponent(projectId)}/tasks`,
+    undefined,
+    false,
+  );
+}
+
+export function reassignProjectManager(
+  projectId: string,
+  managerProfileId: string,
+  previousManagerRole: 'view' | 'contribute' | null,
+) {
+  return request<{ project: ProjectSummary }>(`/projects/${encodeURIComponent(projectId)}/reassign`, {
+    method: 'POST',
+    body: JSON.stringify({ managerProfileId, previousManagerRole }),
   }, false);
 }
 

@@ -55,6 +55,54 @@ export interface StudioProject {
   updatedAt: number;
 }
 
+export const PROJECT_ACCESS_ROLES = ['view', 'contribute', 'manage'] as const;
+export type ProjectAccessRole = (typeof PROJECT_ACCESS_ROLES)[number];
+
+export interface Project {
+  id: string;
+  name: string;
+  purpose: string;
+  managerProfileId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectManagerProjection {
+  id: string;
+  displayName: string;
+  provider: string | null;
+  model: string | null;
+}
+
+export interface ProjectSummary extends Project {
+  manager: ProjectManagerProjection;
+}
+
+export interface ProjectManagerHistoryEntry {
+  id: string;
+  projectId: string;
+  profileId: string;
+  effectiveFrom: number;
+  effectiveTo: number | null;
+  changedBy: string;
+}
+
+export interface ProjectRepositoryLink {
+  projectId: string;
+  provider: 'github';
+  providerRepositoryId: number;
+  installationId: number;
+  owner: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  mode: 'read_only' | 'branch_pr';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export const CHAT_RUN_MODES = ['task', 'goal'] as const;
 export type ChatRunMode = (typeof CHAT_RUN_MODES)[number];
 export const OLYMPUS_GOAL_MAX_TURNS = 20;
@@ -189,6 +237,9 @@ export interface Task {
   agent_provider: string | null;
   reasoning_effort: ReasoningEffort | null;
   workdir: string | null;
+  project_id: string | null;
+  handling_profile_id: string | null;
+  delegated_worker_id: string | null;
   created_at: number;
   updated_at: number;
   last_agent_response_at: number | null;

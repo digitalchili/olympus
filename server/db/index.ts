@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,6 +101,92 @@ function migrateStudioGitHubConnectionStates(): void {
   `);
 }
 
+function normalizedProjectName(value: string): string {
+  return value.trim().normalize('NFKC').toLocaleLowerCase('en-US');
+}
+
+function migrateLegacyStudioProjects(): void {
+  const legacy = db.prepare(`
+    SELECT id, name, provider, provider_repository_id, installation_id, owner,
+      full_name, private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    FROM studio_projects
+    ORDER BY created_at, id
+  `).all() as Array<{
+    id: string;
+    name: string;
+    provider: 'github';
+    provider_repository_id: number;
+    installation_id: number;
+    owner: string;
+    full_name: string;
+    private: number;
+    default_branch: string;
+    html_url: string;
+    clone_url: string;
+    mode: 'read_only';
+    created_at: number;
+    updated_at: number;
+  }>;
+
+  const projectExists = db.prepare('SELECT 1 FROM projects WHERE id = ?');
+  const nameExists = db.prepare('SELECT 1 FROM projects WHERE name_key = ?');
+  const insertProject = db.prepare(`
+    INSERT INTO projects (
+      id, name, name_key, purpose, manager_profile_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'default', ?, ?)
+  `);
+  const insertHistory = db.prepare(`
+    INSERT OR IGNORE INTO project_manager_history (
+      id, project_id, profile_id, effective_from, effective_to, changed_by
+    ) VALUES (?, ?, 'default', ?, NULL, 'legacy-studio-migration')
+  `);
+  const insertLink = db.prepare(`
+    INSERT OR IGNORE INTO project_repository_links (
+      project_id, provider, provider_repository_id, installation_id, owner, full_name,
+      private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const row of legacy) {
+    if (!projectExists.get(row.id)) {
+      let name = row.name.trim() || row.full_name;
+      let nameKey = normalizedProjectName(name);
+      if (nameExists.get(nameKey)) {
+        name = row.full_name;
+        nameKey = normalizedProjectName(name);
+      }
+      if (nameExists.get(nameKey)) {
+        name = `${row.full_name} (${row.id.slice(0, 8)})`;
+        nameKey = normalizedProjectName(name);
+      }
+      insertProject.run(
+        row.id,
+        name,
+        nameKey,
+        `Imported from GitHub: ${row.full_name}`,
+        row.created_at,
+        row.updated_at,
+      );
+    }
+    insertHistory.run(randomUUID(), row.id, row.created_at);
+    insertLink.run(
+      row.id,
+      row.provider,
+      row.provider_repository_id,
+      row.installation_id,
+      row.owner,
+      row.full_name,
+      row.private,
+      row.default_branch,
+      row.html_url,
+      row.clone_url,
+      row.mode,
+      row.created_at,
+      row.updated_at,
+    );
+  }
+}
+
 function recoverInterruptedCollaborations(): void {
   const now = Date.now();
   db.prepare(`
@@ -137,6 +224,19 @@ try {
   ensureColumn('tasks', 'workdir', 'TEXT');
   ensureColumn('tasks', 'profile_name', 'TEXT');
   ensureColumn('tasks', 'routing_source', 'TEXT');
+  ensureColumn('tasks', 'project_id', 'TEXT REFERENCES projects(id) ON DELETE SET NULL');
+  ensureColumn('tasks', 'handling_profile_id', 'TEXT');
+  ensureColumn('tasks', 'delegated_worker_id', 'TEXT');
+  db.prepare(`
+    UPDATE tasks
+    SET handling_profile_id = COALESCE(NULLIF(profile_name, ''), 'default')
+    WHERE handling_profile_id IS NULL
+  `).run();
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_handler ON tasks(handling_profile_id, updated_at DESC);
+  `);
+  migrateLegacyStudioProjects();
   recoverInterruptedCollaborations();
   recoverInterruptedDelegations();
   db.exec('COMMIT');

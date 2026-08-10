@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { ArrowUp, Loader2 } from 'lucide-react';
 import { InputToolbar } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, UploadErrorBar } from './ChatAttachments';
 import { ProjectFolderPicker } from './ProjectFolderPicker';
-import { createTask, fetchHermesProfiles, type HermesProfile } from '../lib/api';
+import { createTask, fetchHermesProfiles, fetchProjects, type HermesProfile } from '../lib/api';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { isEditableTarget, handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
@@ -19,8 +19,9 @@ import {
   type ActiveProfileMention,
 } from '../lib/profileMentions';
 import { ProfileInviteControls } from './ProfileInviteControls';
-import type { ChatRunMode } from '@shared/types';
-import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
+import type { ChatRunMode, ProjectSummary } from '@shared/types';
+import { useProfile } from '../contexts/ProfileContext';
+import { toWithProfile } from '../lib/profileQuery';
 
 type NewTaskLocationState = {
   draft?: string;
@@ -32,15 +33,21 @@ function draftFromLocationState(state: unknown): string {
 }
 
 export function NewTaskPage() {
-  const navigate = useProfileNavigate();
-  const { activeProfileId } = useProfile();
+  const navigate = useNavigate();
+  const { activeProfileId, profiles: allProfiles } = useProfile();
   const location = useLocation();
+  const initialProjectId = new URLSearchParams(location.search).get('project') ?? '';
   const initialDraftRef = useRef(draftFromLocationState(location.state));
   const lastAppliedKeyRef = useRef(location.key);
   const [input, setInput] = useState(initialDraftRef.current);
   const [runMode, setRunMode] = useState<ChatRunMode>('task');
   const [isCreating, setIsCreating] = useState(false);
   const [workdir, setWorkdir] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId);
+  const [inboxHandlerId, setInboxHandlerId] = useState(activeProfileId);
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const handlerProfileId = selectedProject?.managerProfileId ?? inboxHandlerId;
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
   const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
   const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
@@ -72,10 +79,17 @@ export function NewTaskPage() {
 
   useEffect(() => {
     let cancelled = false;
+    fetchProjects()
+      .then(({ projects: nextProjects }) => {
+        if (!cancelled) setProjects(nextProjects);
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([]);
+      });
     fetchHermesProfiles()
       .then(({ profiles: nextProfiles }) => {
         if (!cancelled) {
-          setProfiles(nextProfiles.filter((profile) => profile.active && profile.id !== activeProfileId));
+          setProfiles(nextProfiles.filter((profile) => profile.active && profile.id !== handlerProfileId));
         }
       })
       .catch(() => {
@@ -84,7 +98,11 @@ export function NewTaskPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeProfileId]);
+  }, [handlerProfileId]);
+
+  useEffect(() => {
+    setSelectedProfiles((current) => current.filter((profile) => profile.id !== handlerProfileId));
+  }, [handlerProfileId]);
 
   const updateInput = useCallback((nextInput: string, cursor?: number | null) => {
     setInput(nextInput);
@@ -104,11 +122,11 @@ export function NewTaskPage() {
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !isEditableTarget(e.target)) navigate('/');
+      if (e.key === 'Escape' && !isEditableTarget(e.target)) navigate(toWithProfile('/', activeProfileId));
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [navigate]);
+  }, [activeProfileId, navigate]);
 
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
@@ -123,12 +141,18 @@ export function NewTaskPage() {
     setUploadError(null);
     try {
       const description = text || pendingFiles.map((f) => f.file.name).join(', ');
-      const { task } = await createTask(description, undefined, workdir);
+      const { task } = await createTask(description, undefined, workdir, {
+        projectId: selectedProject?.id ?? null,
+        handlingProfileId: selectedProject ? null : handlerProfileId,
+        routingProfileId: handlerProfileId,
+      });
       const initialMessage = submitWithAttachments(text);
-      navigate(`/tasks/${task.id}`, {
+      navigate(toWithProfile(`/tasks/${task.id}`, task.handling_profile_id ?? handlerProfileId), {
         state: {
           initialMessage,
-          initialSettings: { model, provider, reasoningEffort, mode: runMode },
+          initialSettings: selectedProject
+            ? { mode: runMode }
+            : { model, provider, reasoningEffort, mode: runMode },
           initialInvitedProfileIds: selectedProfiles.map((profile) => profile.id),
         },
       });
@@ -136,7 +160,7 @@ export function NewTaskPage() {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [defaults, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, provider, reasoningEffort, runMode, selectedProfiles, submitWithAttachments, setUploadError, workdir]);
+  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, submitWithAttachments, setUploadError, workdir]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -210,6 +234,39 @@ export function NewTaskPage() {
       </h1>
 
       <div className="w-full max-w-2xl">
+        <div className="mb-3 grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900 sm:grid-cols-2">
+          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+            Location
+            <select
+              value={selectedProjectId}
+              onChange={(event) => setSelectedProjectId(event.target.value)}
+              className="mt-1.5 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-2.5 text-sm dark:border-zinc-700"
+            >
+              <option value="">Inbox</option>
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </label>
+          {selectedProject ? (
+            <div className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+              Handled by
+              <div className="mt-1.5 flex h-9 items-center rounded-lg border border-zinc-200 px-2.5 text-sm font-normal dark:border-zinc-700">
+                {selectedProject.manager.displayName}
+              </div>
+              <p className="mt-1 text-[11px] font-normal text-zinc-400">Manager derived from Project</p>
+            </div>
+          ) : (
+            <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+              Handled by
+              <select
+                value={inboxHandlerId}
+                onChange={(event) => setInboxHandlerId(event.target.value)}
+                className="mt-1.5 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-2.5 text-sm dark:border-zinc-700"
+              >
+                {allProfiles.filter((profile) => profile.active).map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 shadow-sm">
           <ProfileInviteControls
             selected={selectedProfiles}
