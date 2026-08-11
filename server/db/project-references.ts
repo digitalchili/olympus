@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -132,6 +132,43 @@ export function validateProjectReferenceCandidate(input: {
   return { safeFilename, extension, mimeType: normalizedMime };
 }
 
+async function validateProjectReferenceContent(path: string, extension: string): Promise<void> {
+  if (extension === '.docx' || extension === '.xlsx') {
+    await validateOfficeArchive(path);
+    return;
+  }
+
+  const bytes = await readFile(path);
+  const reject = () => {
+    throw new Error(`Project reference content does not match ${extension}`);
+  };
+
+  if (extension === '.pdf') {
+    const header = bytes.subarray(0, Math.min(bytes.length, 1_024)).indexOf(Buffer.from('%PDF-'));
+    const trailer = bytes.subarray(Math.max(0, bytes.length - 1_024)).indexOf(Buffer.from('%%EOF'));
+    if (header < 0 || trailer < 0) reject();
+    return;
+  }
+  if (extension === '.png') {
+    if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) reject();
+    return;
+  }
+  if (extension === '.jpg' || extension === '.jpeg') {
+    if (bytes.length < 3 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) reject();
+    return;
+  }
+  if (extension === '.txt' || extension === '.md' || extension === '.csv') {
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      reject();
+      return;
+    }
+    if (text.includes('\u0000')) reject();
+  }
+}
+
 async function sha256File(path: string): Promise<string> {
   const hash = createHash('sha256');
   await new Promise<void>((resolvePromise, reject) => {
@@ -226,7 +263,7 @@ export async function createProjectReferenceFromQuarantine(input: {
     mimeType: input.mimeType,
     sizeBytes,
   });
-  if (candidate.extension === '.docx' || candidate.extension === '.xlsx') await validateOfficeArchive(input.quarantinePath);
+  await validateProjectReferenceContent(input.quarantinePath, candidate.extension);
   const now = input.now ?? Date.now();
   const sha256 = await sha256File(input.quarantinePath);
   const { originalsDir } = await ensureProjectStorage(input.projectId);
@@ -308,6 +345,7 @@ export async function reindexProjectReference(projectId: string, referenceId: st
 export function searchProjectReferences(projectId: string, query: string, limit = 10): ProjectReferenceSearchResult[] {
   const term = query.trim();
   if (!term) return [];
+  const expression = `"${term.replace(/"/g, '""')}"`;
   const safeLimit = Math.min(Math.max(limit, 1), 50);
   const rows = db.prepare(`
     SELECT f.chunk_id, f.reference_id, snippet(project_reference_chunks_fts, 3, '<mark>', '</mark>', '…', 12) AS snippet,
@@ -318,7 +356,7 @@ export function searchProjectReferences(projectId: string, query: string, limit 
     WHERE project_reference_chunks_fts MATCH ? AND f.project_id = ? AND r.status = 'indexed'
     ORDER BY rank
     LIMIT ?
-  `).all(term, projectId, safeLimit) as Array<{
+  `).all(expression, projectId, safeLimit) as Array<{
     chunk_id: string;
     reference_id: string;
     snippet: string;

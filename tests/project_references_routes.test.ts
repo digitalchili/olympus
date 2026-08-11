@@ -88,6 +88,11 @@ try {
   assert.equal(mismatchResponse.status, 400);
   assert.equal(mismatchResponse.json.code, 'PROJECT_REFERENCE_REJECTED');
 
+  const spoofedPdf = multipartBody('file', 'spoofed.pdf', 'application/pdf', 'not really a pdf');
+  const spoofedPdfResponse = await call(`/api/projects/${project.id}/references`, 'POST', spoofedPdf.body, `multipart/form-data; boundary=${spoofedPdf.boundary}`);
+  assert.equal(spoofedPdfResponse.status, 400, 'matching extension and MIME must not bypass content validation');
+  assert.equal(spoofedPdfResponse.json.code, 'PROJECT_REFERENCE_REJECTED');
+
   const strangerList = await call(`/api/projects/${project.id}/references?profile=stranger`);
   assert.equal(strangerList.status, 404);
   const readerList = await call(`/api/projects/${project.id}/references?profile=reader`);
@@ -99,6 +104,9 @@ try {
   const results = search.json.results as Array<Record<string, unknown>>;
   assert.equal(results.length, 1);
   assert.deepEqual((results[0].citation as Record<string, unknown>).originalFilename, 'brief.md');
+  const punctuationSearch = await call(`/api/projects/${project.id}/references/search?q=${encodeURIComponent('gamma: "unterminated')}&profile=reader`);
+  assert.equal(punctuationSearch.status, 200, 'search punctuation must be treated as literal text');
+  assert.deepEqual(punctuationSearch.json.results, []);
 
   const detail = await call(`/api/projects/${project.id}/references/${refId}?profile=reader`);
   assert.equal(detail.status, 200);
