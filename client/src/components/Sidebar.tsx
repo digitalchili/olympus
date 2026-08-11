@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router';
-import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, Search, MessageCircle, Code2 } from 'lucide-react';
+import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, FolderKanban, Search, MessageCircle } from 'lucide-react';
 import type { HermesChannel } from '@shared/types';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
@@ -151,7 +151,8 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
           />
           <SidebarLink
             icon={<Columns3 size={18} />}
-            label="Tasks"
+            label="All Tasks"
+            mobileLabel="Tasks"
             to="/"
             active={isActive('/')}
             collapsed={desktopCollapsed}
@@ -165,7 +166,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             collapsed={desktopCollapsed}
           />
           <SidebarLink
-            icon={<Code2 size={18} />}
+            icon={<FolderKanban size={18} />}
             label="Projects"
             to="/projects"
             active={location.pathname === '/projects' || location.pathname.startsWith('/projects/')}

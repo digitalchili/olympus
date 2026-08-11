@@ -99,6 +99,8 @@ interface TaskKanbanProps {
   createTaskTo: To;
   onMoveTask: (task: Task, status: TaskStatus) => Promise<Task>;
   onDeleteTask: (task: Task) => Promise<void>;
+  projectById?: Map<string, ProjectSummary>;
+  showTaskLocation?: boolean;
   className?: string;
 }
 
@@ -108,6 +110,8 @@ export function TaskKanban({
   createTaskTo,
   onMoveTask,
   onDeleteTask,
+  projectById,
+  showTaskLocation = false,
   className = 'flex flex-1 gap-4 overflow-x-auto p-3 min-h-0 sm:gap-6 sm:p-6',
 }: TaskKanbanProps) {
   const [visibleTasks, setVisibleTasks] = useState(tasks);
@@ -223,6 +227,8 @@ export function TaskKanban({
             createTaskTo={createTaskTo}
             onMoveTask={handleMoveTask}
             onDeleteTask={handleDeleteTask}
+            projectById={projectById}
+            showTaskLocation={showTaskLocation}
           />
         ))}
       </div>
@@ -231,6 +237,8 @@ export function TaskKanban({
           <TaskCardOverlay
             task={activeTask}
             run={taskRuns.get(activeTask.id)}
+            project={activeTask.project_id ? projectById?.get(activeTask.project_id) : undefined}
+            showLocation={showTaskLocation}
           />
         )}
       </DragOverlay>
@@ -288,6 +296,7 @@ export function Board() {
     return tasks.filter((task) => task.project_id === locationFilter);
   }, [locationFilter, tasks]);
   const selectedProject = projects.find((project) => project.id === locationFilter);
+  const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const createTaskTo = selectedProject
     ? toWithProfile(
         { pathname: '/tasks/new', search: `?project=${encodeURIComponent(selectedProject.id)}` },
@@ -312,7 +321,7 @@ export function Board() {
     <div className="flex flex-1 min-h-0 flex-col">
       <RecurringSummaryStrip scheduledTasks={scheduledTasks} />
       <div className="mx-3 mt-3 flex items-center justify-between gap-3 sm:mx-6 sm:mt-4">
-        <div className="flex items-center gap-2 text-xs font-medium text-zinc-500"><FolderKanban size={14} /> Location</div>
+        <p className="flex min-w-0 items-center gap-2 truncate text-xs text-zinc-500"><FolderKanban size={14} className="shrink-0" /> Inbox and Project tasks you can access</p>
         <select aria-label="Project filter" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)} className="h-8 max-w-64 rounded-lg border border-zinc-200 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
           <option value="all">All tasks</option>
           <option value="inbox">Inbox</option>
@@ -325,6 +334,8 @@ export function Board() {
         createTaskTo={createTaskTo}
         onMoveTask={handleMoveTask}
         onDeleteTask={handleDeleteTask}
+        projectById={projectById}
+        showTaskLocation
       />
     </div>
   );

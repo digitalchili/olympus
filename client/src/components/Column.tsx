@@ -3,7 +3,7 @@ import { MoreHorizontal, Plus } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useNavigate, type To } from 'react-router';
 
-import type { Task, TaskRunState, TaskStatus } from '@shared/types';
+import type { ProjectSummary, Task, TaskRunState, TaskStatus } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { ColumnActionsMenu } from './ColumnActionsMenu';
 import { StatusIcon } from './StatusIcon';
@@ -18,9 +18,11 @@ interface ColumnProps {
   createTaskTo: To;
   onMoveTask: (task: Task, status: TaskStatus) => Promise<void>;
   onDeleteTask: (task: Task) => Promise<void>;
+  projectById?: Map<string, ProjectSummary>;
+  showTaskLocation?: boolean;
 }
 
-export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll, createTaskTo, onMoveTask, onDeleteTask }: ColumnProps) {
+export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll, createTaskTo, onMoveTask, onDeleteTask, projectById, showTaskLocation = false }: ColumnProps) {
   const { label } = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const navigate = useNavigate();
@@ -83,6 +85,8 @@ export function Column({ status, tasks, taskRuns, isLast = false, onRequestDelet
             run={taskRuns.get(task.id)}
             onMoveTask={onMoveTask}
             onDeleteTask={onDeleteTask}
+            project={task.project_id ? projectById?.get(task.project_id) : undefined}
+            showLocation={showTaskLocation}
           />
         ))}
         {showAddButton && (

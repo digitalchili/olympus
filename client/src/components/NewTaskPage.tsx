@@ -37,6 +37,7 @@ export function NewTaskPage() {
   const { activeProfileId, profiles: allProfiles } = useProfile();
   const location = useLocation();
   const initialProjectId = new URLSearchParams(location.search).get('project') ?? '';
+  const projectLocked = Boolean(initialProjectId);
   const initialDraftRef = useRef(draftFromLocationState(location.state));
   const lastAppliedKeyRef = useRef(location.key);
   const [input, setInput] = useState(initialDraftRef.current);
@@ -47,6 +48,7 @@ export function NewTaskPage() {
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId);
   const [inboxHandlerId, setInboxHandlerId] = useState(activeProfileId);
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const projectSelectionPending = projectLocked && !selectedProject;
   const handlerProfileId = selectedProject?.managerProfileId ?? inboxHandlerId;
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
   const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
@@ -131,7 +133,7 @@ export function NewTaskPage() {
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
     const hasFiles = pendingFiles.length > 0;
-    if ((!text && !hasFiles) || isCreating || (!defaults && isLoading) || uploadBlocksSend) return;
+    if ((!text && !hasFiles) || isCreating || (!defaults && isLoading) || uploadBlocksSend || projectSelectionPending) return;
     if (runMode === 'goal' && selectedProfiles.length > 0) {
       setUploadError('Remove invited profiles before starting Goal mode. Collaboration runs in Task mode.');
       return;
@@ -160,7 +162,7 @@ export function NewTaskPage() {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, submitWithAttachments, setUploadError, workdir]);
+  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, submitWithAttachments, setUploadError, workdir]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -239,8 +241,9 @@ export function NewTaskPage() {
             Location
             <select
               value={selectedProjectId}
+              disabled={projectLocked}
               onChange={(event) => setSelectedProjectId(event.target.value)}
-              className="mt-1.5 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-2.5 text-sm dark:border-zinc-700"
+              className="mt-1.5 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-2.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-500 dark:border-zinc-700 dark:disabled:bg-zinc-950"
             >
               <option value="">Inbox</option>
               {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -252,7 +255,7 @@ export function NewTaskPage() {
               <div className="mt-1.5 flex h-9 items-center rounded-lg border border-zinc-200 px-2.5 text-sm font-normal dark:border-zinc-700">
                 {selectedProject.manager.displayName}
               </div>
-              <p className="mt-1 text-[11px] font-normal text-zinc-400">Manager derived from Project</p>
+              <p className="mt-1 text-[11px] font-normal text-zinc-400">Future tasks use the Project manager policy</p>
             </div>
           ) : (
             <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
@@ -267,6 +270,11 @@ export function NewTaskPage() {
             </label>
           )}
         </div>
+        {projectLocked && selectedProject && (
+          <p className="mb-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+            This task belongs to <span className="font-semibold">{selectedProject.name}</span>. Its handler is derived from the Project manager.
+          </p>
+        )}
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 shadow-sm">
           <ProfileInviteControls
             selected={selectedProfiles}
@@ -326,9 +334,9 @@ export function NewTaskPage() {
             </div>
             <button
               onClick={handleSubmit}
-              disabled={(!input.trim() && pendingFiles.length === 0) || isCreating || (!defaults && isLoading) || uploadBlocksSend}
-              title={sendBlockedLabel ?? 'Send message'}
-              aria-label={sendBlockedLabel ?? 'Send message'}
+              disabled={(!input.trim() && pendingFiles.length === 0) || isCreating || (!defaults && isLoading) || uploadBlocksSend || projectSelectionPending}
+              title={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
+              aria-label={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-colors hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
               {isCreating || hasUploadingFiles ? (

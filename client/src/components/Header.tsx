@@ -84,10 +84,10 @@ export function Header() {
   const isProjectDetail = /^\/projects\/[^/]+$/.test(location.pathname);
   const isProjectTask = isNewTask && new URLSearchParams(location.search).has('project');
 
-  let title = 'Tasks';
+  let title = 'All Tasks';
   let showParent = false;
   let truncate = false;
-  let parentTitle = 'Tasks';
+  let parentTitle = 'All Tasks';
   let parentTo = '/';
 
   if (isSettings) {

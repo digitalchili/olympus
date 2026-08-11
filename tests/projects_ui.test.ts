@@ -54,7 +54,7 @@ assert.match(studio, /Navigate to="\/settings#github" replace/);
 assert.match(newTask, /Location/);
 assert.match(newTask, /Inbox/);
 assert.match(newTask, /Handled by/);
-assert.match(newTask, /Manager derived from Project/);
+assert.match(newTask, /Future tasks use the Project manager policy/);
 assert.match(api, /export function fetchProjects\(/);
 assert.match(api, /export function createProject\(/);
 assert.match(api, /export function fetchProject\(/);

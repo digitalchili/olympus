@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ExternalLink, FileText, GitBranch, Pencil, Plus, Save, Shield, Trash2, X } from 'lucide-react';
-import { Link, useParams } from 'react-router';
+import { ExternalLink, FileText, GitBranch, Plus, Save, Shield, Trash2 } from 'lucide-react';
+import { Link, useParams, useSearchParams } from 'react-router';
 import type {
   ProjectAccessRole,
   ProjectManagerHistoryEntry,
@@ -38,12 +38,18 @@ import { toErrorMessage } from '../lib/format';
 import { useProjectBoardEvents } from '../hooks/useProjectBoardEvents';
 import { selectableStudioRepositories } from '../lib/studio-projects';
 import { TaskKanban } from './Board';
+import { usePageHeader } from './Header';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
+const projectTabs = ['board', 'references', 'activity', 'settings'] as const;
+type ProjectTab = typeof projectTabs[number];
 
 export function ProjectDetailPage() {
   const { projectId = '' } = useParams();
   const { profiles } = useProfile();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const activeTab: ProjectTab = projectTabs.includes(requestedTab as ProjectTab) ? requestedTab as ProjectTab : 'board';
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [history, setHistory] = useState<ProjectManagerHistoryEntry[]>([]);
   const [grants, setGrants] = useState<ProjectProfileGrant[]>([]);
@@ -54,7 +60,7 @@ export function ProjectDetailPage() {
   const [uploadingReference, setUploadingReference] = useState(false);
   const [nextManager, setNextManager] = useState('');
   const [previousManagerRole, setPreviousManagerRole] = useState<'view' | 'contribute' | 'none'>('none');
-  const [editing, setEditing] = useState(false);
+
   const [draftName, setDraftName] = useState('');
   const [draftPurpose, setDraftPurpose] = useState('');
   const [grantProfileId, setGrantProfileId] = useState('');
@@ -66,6 +72,21 @@ export function ProjectDetailPage() {
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const pageHeader = useMemo(() => ({
+    crumbs: [
+      { label: 'Projects', to: '/projects' },
+      { label: project?.name ?? 'Project' },
+    ],
+  }), [project?.name]);
+  usePageHeader(pageHeader);
+
+  const selectTab = (tab: ProjectTab) => {
+    const next = new URLSearchParams(searchParams);
+    if (tab === 'board') next.delete('tab');
+    else next.set('tab', tab);
+    setSearchParams(next, { replace: true });
+  };
 
 
   const load = useCallback(async () => {
@@ -139,7 +160,7 @@ export function ProjectDetailPage() {
       setProject(result.project);
       setDraftName(result.project.name);
       setDraftPurpose(result.project.purpose);
-      setEditing(false);
+
     } catch (cause) {
       setActionError(toErrorMessage(cause, 'Could not update Project'));
     } finally {
@@ -280,16 +301,19 @@ export function ProjectDetailPage() {
             <h1 className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{project.name}</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">{project.purpose}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setEditing((value) => !value)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-200 px-3.5 text-sm font-medium dark:border-zinc-700">
-              <Pencil size={15} /> Edit Project
-            </button>
-            <Link to={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-900 px-3.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"><Plus size={16} /> New task</Link>
-          </div>
+          <Link to={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-900 px-3.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"><Plus size={16} /> New task</Link>
         </div>
 
-        {editing && (
+        <nav aria-label="Project sections" className="mt-5 flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
+          <button type="button" aria-current={activeTab === 'board' ? 'page' : undefined} onClick={() => selectTab('board')} className={`h-10 shrink-0 border-b-2 px-3 text-sm font-medium ${activeTab === 'board' ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100'}`}>Board</button>
+          <button type="button" aria-current={activeTab === 'references' ? 'page' : undefined} onClick={() => selectTab('references')} className={`h-10 shrink-0 border-b-2 px-3 text-sm font-medium ${activeTab === 'references' ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100'}`}>References</button>
+          <button type="button" aria-current={activeTab === 'activity' ? 'page' : undefined} onClick={() => selectTab('activity')} className={`h-10 shrink-0 border-b-2 px-3 text-sm font-medium ${activeTab === 'activity' ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100'}`}>Activity</button>
+          <button type="button" aria-current={activeTab === 'settings' ? 'page' : undefined} onClick={() => selectTab('settings')} className={`h-10 shrink-0 border-b-2 px-3 text-sm font-medium ${activeTab === 'settings' ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100'}`}>Settings</button>
+        </nav>
+
+        {activeTab === 'settings' && (
           <section className="mt-5 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <h2 className="mb-3 text-sm font-semibold">Edit Project</h2>
             <div className="grid gap-3 sm:grid-cols-[minmax(0,280px)_minmax(0,1fr)_auto] sm:items-end">
               <label className="text-xs font-medium text-zinc-500">Name<input value={draftName} onChange={(event) => setDraftName(event.target.value)} maxLength={120} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700" /></label>
               <label className="text-xs font-medium text-zinc-500">Purpose<textarea value={draftPurpose} onChange={(event) => setDraftPurpose(event.target.value)} maxLength={2000} rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 bg-transparent px-3 py-2 text-sm dark:border-zinc-700" /></label>
@@ -302,7 +326,6 @@ export function ProjectDetailPage() {
               )}
               <div className="flex gap-2">
                 <button type="button" disabled={busy || !draftName.trim() || !draftPurpose.trim()} onClick={() => void saveProject()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"><Save size={14} /> Save</button>
-                <button type="button" onClick={() => setEditing(false)} className="inline-flex h-9 items-center rounded-lg border border-zinc-200 px-3 dark:border-zinc-700"><X size={14} /></button>
               </div>
             </div>
           </section>
@@ -310,12 +333,16 @@ export function ProjectDetailPage() {
 
         {actionError && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{actionError}</div>}
 
-        <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-          <main className="min-w-0">
-            <TaskKanban tasks={tasks} taskRuns={taskRuns} createTaskTo={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} onMoveTask={moveProjectTask} onDeleteTask={deleteProjectTask} className="flex min-h-[420px] gap-4 overflow-x-auto rounded-xl border border-zinc-200 bg-white p-4 sm:gap-6 dark:border-zinc-800 dark:bg-zinc-900" />
-          </main>
+        <div className="mt-6">
+          {activeTab === 'board' && (
+            <main className="min-w-0">
+              <div className="mb-3"><h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Project tasks</h2><p className="mt-1 text-xs text-zinc-500">Only tasks belonging to {project.name} appear here.</p></div>
+              <TaskKanban tasks={tasks} taskRuns={taskRuns} createTaskTo={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} onMoveTask={moveProjectTask} onDeleteTask={deleteProjectTask} className="flex min-h-[420px] gap-4 overflow-x-auto rounded-xl border border-zinc-200 bg-white p-4 sm:gap-6 dark:border-zinc-800 dark:bg-zinc-900" />
+            </main>
+          )}
 
-          <aside className="space-y-4">
+          <aside className="grid gap-4 lg:grid-cols-2">
+            {activeTab === 'settings' && (<>
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Managed by</h2>
               <p className="mt-2 text-sm font-medium text-zinc-800 dark:text-zinc-200">{project.manager.displayName}</p>
@@ -325,7 +352,6 @@ export function ProjectDetailPage() {
               <button disabled={busy || nextManager === project.managerProfileId} onClick={() => void changeManager()} className="mt-2 h-8 w-full rounded-lg border border-zinc-200 text-xs font-medium disabled:opacity-40 dark:border-zinc-700">Change manager</button>
               <p className="mt-2 text-[11px] leading-4 text-zinc-400">Future tasks only. Active tasks keep their immutable handler unless explicitly transferred.</p>
             </section>
-
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
               <h2 className="flex items-center gap-2 text-sm font-medium"><Shield size={15} /> Project access</h2>
               <div className="mt-3 space-y-2">
@@ -338,8 +364,10 @@ export function ProjectDetailPage() {
               </div>
               <button type="button" disabled={busy || !grantProfileId} onClick={() => void saveGrant()} className="mt-2 h-8 w-full rounded-lg border border-zinc-200 text-xs font-medium disabled:opacity-40 dark:border-zinc-700">Add or update access</button>
             </section>
-
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><GitBranch size={15} /> Repository</h2>{project.repositoryLink ? <><a href={project.repositoryLink.htmlUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-sm font-medium text-zinc-800 hover:underline dark:text-zinc-200">{project.repositoryLink.fullName}</a><p className="mt-1 text-xs text-zinc-500">{project.repositoryLink.defaultBranch} · read-only · verified installation {project.repositoryLink.installationId}</p></> : <p className="mt-2 text-xs text-zinc-500">No repository selected.</p>}<Link to="/settings#github" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300">GitHub setup <ExternalLink size={12} /></Link></section>
+            </>)}
+            {activeTab === 'references' && (
+            <section className="w-full max-w-5xl rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 lg:col-span-2">
               <h2 className="flex items-center gap-2 text-sm font-medium"><FileText size={15} /> References</h2>
               <p className="mt-1 text-[11px] leading-4 text-zinc-400">PDF, DOCX, TXT/MD, CSV/XLSX, PNG/JPEG. Originals are hashed and stored in Project-scoped storage; paths are never exposed.</p>
               <label className="mt-3 block text-xs font-medium text-zinc-500">Upload Project reference<input aria-label="Upload Project reference" disabled={uploadingReference} type="file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx,.png,.jpg,.jpeg" onChange={(event) => void uploadReference(event.target.files)} className="mt-1 block w-full text-xs" /></label>
@@ -353,8 +381,10 @@ export function ProjectDetailPage() {
               </div>
               {referenceResults.length > 0 && <div className="mt-3 space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800"><h3 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Citations</h3>{referenceResults.map((result) => <div key={result.chunkId} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{result.citation.originalFilename}</span><span> · chunk {result.citation.chunkIndex + 1}{result.citation.pageNumber ? ` · page ${result.citation.pageNumber}` : ''}{result.citation.sheetName ? ` · ${result.citation.sheetName}` : ''}{result.citation.cellRange ? ` · ${result.citation.cellRange}` : ''}</span><p className="mt-1">{result.snippet.replace(/<\/?mark>/g, '')}</p></div>)}</div>}
             </section>
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><GitBranch size={15} /> Repository</h2>{project.repositoryLink ? <><a href={project.repositoryLink.htmlUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-sm font-medium text-zinc-800 hover:underline dark:text-zinc-200">{project.repositoryLink.fullName}</a><p className="mt-1 text-xs text-zinc-500">{project.repositoryLink.defaultBranch} · read-only · verified installation {project.repositoryLink.installationId}</p></> : <p className="mt-2 text-xs text-zinc-500">No repository selected.</p>}<Link to="/settings#github" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300">GitHub setup <ExternalLink size={12} /></Link></section>
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Manager history</h2><div className="mt-2 space-y-2">{history.map((entry) => <div key={entry.id} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{profileName(entry.profileId)}</span><br />{new Date(entry.effectiveFrom).toLocaleString()}{entry.effectiveTo ? ` – ${new Date(entry.effectiveTo).toLocaleString()}` : ' – current'}</div>)}</div></section>
+            )}
+            {activeTab === 'activity' && (
+            <section className="w-full max-w-3xl rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 lg:col-span-2"><h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Manager history</h2><p className="mt-1 text-xs text-zinc-500">Recorded Project ownership changes. Active task handlers remain immutable unless explicitly transferred.</p><div className="mt-2 space-y-2">{history.map((entry) => <div key={entry.id} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{profileName(entry.profileId)}</span><br />{new Date(entry.effectiveFrom).toLocaleString()}{entry.effectiveTo ? ` – ${new Date(entry.effectiveTo).toLocaleString()}` : ' – current'}</div>)}</div></section>
+            )}
           </aside>
         </div>
       </div>
