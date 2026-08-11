@@ -35,6 +35,16 @@ assert.match(detail, /activeTab === 'references'/);
 assert.match(detail, /activeTab === 'activity'/);
 assert.match(detail, /activeTab === 'settings'/);
 assert.doesNotMatch(detail, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/);
+assert.match(detail, /Drop files here or click to browse/);
+assert.match(detail, /onDragOver/);
+assert.match(detail, /onDrop/);
+assert.match(detail, /multiple/);
+assert.match(detail, /25 MB per file/);
+assert.match(detail, /aria-live="polite"/);
+assert.match(detail, /Uploaded \$\{pendingFiles\.length\}/);
+assert.match(detail, /dropEffect = uploadingReference \? 'none' : 'copy'/);
+assert.match(detail, /Wait for the current upload to finish/);
+assert.match(detail, /className="peer sr-only"/);
 
 assert.match(newTask, /const projectLocked = Boolean\(initialProjectId\)/);
 assert.match(newTask, /disabled=\{projectLocked\}/);

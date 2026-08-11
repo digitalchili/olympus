@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ExternalLink, FileText, GitBranch, Plus, Save, Shield, Trash2 } from 'lucide-react';
+import { ExternalLink, FileText, GitBranch, Plus, Save, Shield, Trash2, UploadCloud } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import type {
   ProjectAccessRole,
@@ -58,6 +58,8 @@ export function ProjectDetailPage() {
   const [referenceSearch, setReferenceSearch] = useState('');
   const [referenceResults, setReferenceResults] = useState<ProjectReferenceSearchResult[]>([]);
   const [uploadingReference, setUploadingReference] = useState(false);
+  const [referenceDragActive, setReferenceDragActive] = useState(false);
+  const [referenceUploadStatus, setReferenceUploadStatus] = useState<string | null>(null);
   const [nextManager, setNextManager] = useState('');
   const [previousManagerRole, setPreviousManagerRole] = useState<'view' | 'contribute' | 'none'>('none');
 
@@ -219,15 +221,23 @@ export function ProjectDetailPage() {
     }
   };
 
-  const uploadReference = async (files: FileList | null) => {
-    if (!project || !files?.[0]) return;
+  const uploadReferences = async (files: FileList | null) => {
+    const pendingFiles = Array.from(files ?? []);
+    if (!project || pendingFiles.length === 0 || uploadingReference) return;
     setUploadingReference(true);
     setActionError(null);
+    let currentFilename = '';
     try {
-      const result = await uploadProjectReference(project.id, files[0]);
-      setReferences((current) => [result.reference, ...current.filter((item) => item.id !== result.reference.id)]);
+      for (const [index, file] of pendingFiles.entries()) {
+        currentFilename = file.name;
+        setReferenceUploadStatus(`Uploading ${index + 1} of ${pendingFiles.length}: ${file.name}`);
+        const result = await uploadProjectReference(project.id, file);
+        setReferences((current) => [result.reference, ...current.filter((item) => item.id !== result.reference.id)]);
+      }
+      setReferenceUploadStatus(`Uploaded ${pendingFiles.length} ${pendingFiles.length === 1 ? 'reference' : 'references'}`);
     } catch (cause) {
-      setActionError(toErrorMessage(cause, 'Could not upload Project reference'));
+      setActionError(toErrorMessage(cause, `Could not upload ${currentFilename || 'Project reference'}`));
+      setReferenceUploadStatus(`Upload stopped at ${currentFilename || 'Project reference'}`);
     } finally {
       setUploadingReference(false);
     }
@@ -369,8 +379,60 @@ export function ProjectDetailPage() {
             {activeTab === 'references' && (
             <section className="w-full max-w-5xl rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 lg:col-span-2">
               <h2 className="flex items-center gap-2 text-sm font-medium"><FileText size={15} /> References</h2>
-              <p className="mt-1 text-[11px] leading-4 text-zinc-400">PDF, DOCX, TXT/MD, CSV/XLSX, PNG/JPEG. Originals are hashed and stored in Project-scoped storage; paths are never exposed.</p>
-              <label className="mt-3 block text-xs font-medium text-zinc-500">Upload Project reference<input aria-label="Upload Project reference" disabled={uploadingReference} type="file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx,.png,.jpg,.jpeg" onChange={(event) => void uploadReference(event.target.files)} className="mt-1 block w-full text-xs" /></label>
+              <p className="mt-1 text-[11px] leading-4 text-zinc-400">Originals are hashed and stored in Project-scoped storage; paths are never exposed.</p>
+              <div className="mt-3">
+                <input
+                  id="project-reference-upload"
+                  aria-label="Upload Project references"
+                  disabled={uploadingReference}
+                  type="file"
+                  multiple
+                  accept=".pdf,.docx,.txt,.md,.csv,.xlsx,.png,.jpg,.jpeg"
+                  onChange={(event) => {
+                    void uploadReferences(event.target.files);
+                    event.target.value = '';
+                  }}
+                  className="peer sr-only"
+                />
+                <label
+                  htmlFor="project-reference-upload"
+                  aria-disabled={uploadingReference}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    if (!uploadingReference) setReferenceDragActive(true);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = uploadingReference ? 'none' : 'copy';
+                    if (!uploadingReference) setReferenceDragActive(true);
+                  }}
+                  onDragLeave={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                    setReferenceDragActive(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setReferenceDragActive(false);
+                    if (uploadingReference) {
+                      setReferenceUploadStatus('Wait for the current upload to finish before adding more files');
+                    } else {
+                      void uploadReferences(event.dataTransfer.files);
+                    }
+                  }}
+                  className={`flex min-h-32 w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 py-6 text-center transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 dark:peer-focus-visible:ring-offset-zinc-900 ${
+                    referenceDragActive
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300'
+                      : 'border-zinc-300 bg-zinc-50/70 text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950/40 dark:text-zinc-300 dark:hover:border-zinc-600'
+                  } ${uploadingReference ? 'cursor-wait opacity-60' : ''}`}
+                >
+                  <UploadCloud size={24} strokeWidth={1.7} aria-hidden="true" />
+                  <span className="mt-2 text-sm font-medium">
+                    {uploadingReference ? 'Uploading references…' : referenceDragActive ? 'Drop files to upload' : 'Drop files here or click to browse'}
+                  </span>
+                  <span className="mt-1 text-xs text-zinc-400">PDF, DOCX, TXT/MD, CSV/XLSX, PNG/JPEG · 25 MB per file</span>
+                </label>
+                <p aria-live="polite" className="mt-2 min-h-4 text-xs text-zinc-500">{referenceUploadStatus}</p>
+              </div>
               <div className="mt-3 flex gap-2">
                 <input aria-label="Project reference search" value={referenceSearch} onChange={(event) => setReferenceSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runReferenceSearch(); }} placeholder="Search references…" className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-transparent px-2 text-xs dark:border-zinc-700" />
                 <button type="button" onClick={() => void runReferenceSearch()} className="h-8 rounded-lg border border-zinc-200 px-2 text-xs font-medium dark:border-zinc-700">Search</button>
