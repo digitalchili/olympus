@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, FileText, GitBranch, Plus, Save, Shield, Trash2, UploadCloud } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import type {
@@ -60,6 +60,7 @@ export function ProjectDetailPage() {
   const [uploadingReference, setUploadingReference] = useState(false);
   const [referenceDragActive, setReferenceDragActive] = useState(false);
   const [referenceUploadStatus, setReferenceUploadStatus] = useState<string | null>(null);
+  const referenceUploadLock = useRef(false);
   const [nextManager, setNextManager] = useState('');
   const [previousManagerRole, setPreviousManagerRole] = useState<'view' | 'contribute' | 'none'>('none');
 
@@ -223,7 +224,12 @@ export function ProjectDetailPage() {
 
   const uploadReferences = async (files: FileList | null) => {
     const pendingFiles = Array.from(files ?? []);
-    if (!project || pendingFiles.length === 0 || uploadingReference) return;
+    if (!project || pendingFiles.length === 0) return;
+    if (referenceUploadLock.current) {
+      setReferenceUploadStatus('Wait for the current upload to finish before adding more files');
+      return;
+    }
+    referenceUploadLock.current = true;
     setUploadingReference(true);
     setActionError(null);
     let currentFilename = '';
@@ -239,6 +245,7 @@ export function ProjectDetailPage() {
       setActionError(toErrorMessage(cause, `Could not upload ${currentFilename || 'Project reference'}`));
       setReferenceUploadStatus(`Upload stopped at ${currentFilename || 'Project reference'}`);
     } finally {
+      referenceUploadLock.current = false;
       setUploadingReference(false);
     }
   };

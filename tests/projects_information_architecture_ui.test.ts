@@ -44,6 +44,7 @@ assert.match(detail, /aria-live="polite"/);
 assert.match(detail, /Uploaded \$\{pendingFiles\.length\}/);
 assert.match(detail, /dropEffect = uploadingReference \? 'none' : 'copy'/);
 assert.match(detail, /Wait for the current upload to finish/);
+assert.match(detail, /referenceUploadLock\.current/);
 assert.match(detail, /className="peer sr-only"/);
 
 assert.match(newTask, /const projectLocked = Boolean\(initialProjectId\)/);
