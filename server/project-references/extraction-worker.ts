@@ -99,8 +99,23 @@ async function readZipEntries(path: string, wanted: (name: string) => boolean): 
   });
 }
 
-export async function validateOfficeArchive(path: string): Promise<void> {
-  await readZipEntries(path, () => false);
+export async function validateOfficeArchive(path: string, extension?: '.docx' | '.xlsx'): Promise<void> {
+  const entries = await readZipEntries(path, (name) => (
+    name === '[Content_Types].xml'
+    || name === 'word/document.xml'
+    || name === 'xl/workbook.xml'
+    || name.startsWith('xl/worksheets/sheet')
+  ));
+  if (extension === '.docx' && (!entries.has('[Content_Types].xml') || !entries.has('word/document.xml'))) {
+    throw new Error('Project reference DOCX package is missing required entries');
+  }
+  if (extension === '.xlsx' && (
+    !entries.has('[Content_Types].xml')
+    || !entries.has('xl/workbook.xml')
+    || ![...entries.keys()].some((name) => name.startsWith('xl/worksheets/sheet'))
+  )) {
+    throw new Error('Project reference XLSX package is missing required entries');
+  }
 }
 
 async function extractDocx(path: string): Promise<ExtractionResult> {

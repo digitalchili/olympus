@@ -134,7 +134,7 @@ export function validateProjectReferenceCandidate(input: {
 
 async function validateProjectReferenceContent(path: string, extension: string): Promise<void> {
   if (extension === '.docx' || extension === '.xlsx') {
-    await validateOfficeArchive(path);
+    await validateOfficeArchive(path, extension);
     return;
   }
 
@@ -150,11 +150,32 @@ async function validateProjectReferenceContent(path: string, extension: string):
     return;
   }
   if (extension === '.png') {
-    if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) reject();
+    const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (
+      bytes.length < 32
+      || !bytes.subarray(0, 8).equals(signature)
+      || bytes.subarray(12, 16).toString('ascii') !== 'IHDR'
+      || bytes.indexOf(Buffer.from('IEND')) < 0
+    ) reject();
     return;
   }
   if (extension === '.jpg' || extension === '.jpeg') {
-    if (bytes.length < 3 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) reject();
+    const startOfFrameMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    let hasStartOfFrame = false;
+    for (let index = 2; index + 1 < bytes.length; index += 1) {
+      if (bytes[index] === 0xff && startOfFrameMarkers.has(bytes[index + 1])) {
+        hasStartOfFrame = true;
+        break;
+      }
+    }
+    if (
+      bytes.length < 8
+      || bytes[0] !== 0xff
+      || bytes[1] !== 0xd8
+      || bytes[bytes.length - 2] !== 0xff
+      || bytes[bytes.length - 1] !== 0xd9
+      || !hasStartOfFrame
+    ) reject();
     return;
   }
   if (extension === '.txt' || extension === '.md' || extension === '.csv') {
