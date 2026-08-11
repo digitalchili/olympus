@@ -113,6 +113,57 @@ export interface ProjectRepositoryLink {
   updatedAt: number;
 }
 
+export interface ProjectReference {
+  id: string;
+  projectId: string;
+  originalFilename: string;
+  safeFilename: string;
+  mimeType: string;
+  extension: string;
+  sizeBytes: number;
+  sha256: string;
+  storagePath: string;
+  status: 'uploaded' | 'extracting' | 'indexed' | 'failed' | 'deleted';
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  indexedAt: number | null;
+  deletedAt: number | null;
+}
+
+export type ProjectReferenceListItem = Omit<ProjectReference, 'storagePath'>;
+
+export interface ProjectReferenceChunk {
+  id: string;
+  projectId: string;
+  referenceId: string;
+  versionId: string;
+  chunkIndex: number;
+  text: string;
+  pageNumber: number | null;
+  sheetName: string | null;
+  cellRange: string | null;
+  createdAt: number;
+}
+
+export interface ProjectReferenceCitation {
+  referenceId: string;
+  originalFilename: string;
+  chunkIndex: number;
+  pageNumber: number | null;
+  sheetName: string | null;
+  cellRange: string | null;
+}
+
+export interface ProjectReferenceSearchResult {
+  chunkId: string;
+  referenceId: string;
+  snippet: string;
+  citation: ProjectReferenceCitation;
+}
+
+export const PROJECT_REFERENCE_ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.csv', '.xlsx', '.png', '.jpg', '.jpeg'] as const;
+
 export const CHAT_RUN_MODES = ['task', 'goal'] as const;
 export type ChatRunMode = (typeof CHAT_RUN_MODES)[number];
 export const OLYMPUS_GOAL_MAX_TURNS = 20;

@@ -254,3 +254,51 @@ CREATE TABLE IF NOT EXISTS project_collaboration_grants (
   updated_at  INTEGER NOT NULL,
   PRIMARY KEY(project_id, profile_id)
 );
+
+CREATE TABLE IF NOT EXISTS project_references (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  original_filename TEXT NOT NULL,
+  safe_filename     TEXT NOT NULL,
+  mime_type         TEXT NOT NULL,
+  extension         TEXT NOT NULL,
+  size_bytes        INTEGER NOT NULL CHECK(size_bytes >= 0),
+  sha256            TEXT NOT NULL,
+  storage_path      TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK(status IN ('uploaded', 'extracting', 'indexed', 'failed', 'deleted')),
+  error             TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  indexed_at        INTEGER,
+  deleted_at        INTEGER,
+  UNIQUE(project_id, sha256)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_references_project
+  ON project_references(project_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_reference_versions (
+  id           TEXT PRIMARY KEY,
+  reference_id TEXT NOT NULL REFERENCES project_references(id) ON DELETE CASCADE,
+  sha256       TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  UNIQUE(reference_id, sha256)
+);
+
+CREATE TABLE IF NOT EXISTS project_reference_chunks (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  reference_id TEXT NOT NULL REFERENCES project_references(id) ON DELETE CASCADE,
+  version_id   TEXT NOT NULL REFERENCES project_reference_versions(id) ON DELETE CASCADE,
+  chunk_index  INTEGER NOT NULL CHECK(chunk_index >= 0),
+  text         TEXT NOT NULL,
+  page_number  INTEGER,
+  sheet_name   TEXT,
+  cell_range   TEXT,
+  created_at   INTEGER NOT NULL,
+  UNIQUE(reference_id, chunk_index)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS project_reference_chunks_fts
+  USING fts5(chunk_id UNINDEXED, project_id UNINDEXED, reference_id UNINDEXED, text);

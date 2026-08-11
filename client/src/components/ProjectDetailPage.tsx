@@ -5,6 +5,8 @@ import type {
   ProjectAccessRole,
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
+  ProjectReferenceListItem,
+  ProjectReferenceSearchResult,
   ProjectSummary,
   StudioGitHubInstallation,
   StudioGitHubRepository,
@@ -13,16 +15,22 @@ import type {
 } from '@shared/types';
 import {
   deleteTask,
+  deleteProjectReference,
   fetchProject,
   fetchProjectGrants,
+  fetchProjectReferences,
   fetchProjectTasks,
   fetchStudioGitHubStatus,
   fetchStudioRepositories,
   moveTask,
+  projectReferenceDownloadUrl,
   reassignProjectManager,
+  reindexProjectReference,
   revokeProjectGrant,
+  searchProjectReferences,
   setProjectGrant,
   updateProject,
+  uploadProjectReference,
 } from '../lib/api';
 import { useProfile } from '../contexts/ProfileContext';
 import { toWithProfile } from '../lib/profileQuery';
@@ -40,6 +48,10 @@ export function ProjectDetailPage() {
   const [history, setHistory] = useState<ProjectManagerHistoryEntry[]>([]);
   const [grants, setGrants] = useState<ProjectProfileGrant[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [references, setReferences] = useState<ProjectReferenceListItem[]>([]);
+  const [referenceSearch, setReferenceSearch] = useState('');
+  const [referenceResults, setReferenceResults] = useState<ProjectReferenceSearchResult[]>([]);
+  const [uploadingReference, setUploadingReference] = useState(false);
   const [nextManager, setNextManager] = useState('');
   const [previousManagerRole, setPreviousManagerRole] = useState<'view' | 'contribute' | 'none'>('none');
   const [editing, setEditing] = useState(false);
@@ -59,15 +71,17 @@ export function ProjectDetailPage() {
   const load = useCallback(async () => {
     try {
       setLoadError(null);
-      const [detail, taskResult, grantResult] = await Promise.all([
+      const [detail, taskResult, grantResult, referenceResult] = await Promise.all([
         fetchProject(projectId),
         fetchProjectTasks(projectId),
         fetchProjectGrants(projectId),
+        fetchProjectReferences(projectId),
       ]);
       setProject(detail.project);
       setHistory(detail.managerHistory);
       setTasks(taskResult.tasks);
       setGrants(grantResult.grants);
+      setReferences(referenceResult.references);
       setNextManager(detail.project.managerProfileId);
       setDraftName(detail.project.name);
       setDraftPurpose(detail.project.purpose);
@@ -184,6 +198,63 @@ export function ProjectDetailPage() {
     }
   };
 
+  const uploadReference = async (files: FileList | null) => {
+    if (!project || !files?.[0]) return;
+    setUploadingReference(true);
+    setActionError(null);
+    try {
+      const result = await uploadProjectReference(project.id, files[0]);
+      setReferences((current) => [result.reference, ...current.filter((item) => item.id !== result.reference.id)]);
+    } catch (cause) {
+      setActionError(toErrorMessage(cause, 'Could not upload Project reference'));
+    } finally {
+      setUploadingReference(false);
+    }
+  };
+
+  const runReferenceSearch = async () => {
+    if (!project || !referenceSearch.trim()) {
+      setReferenceResults([]);
+      return;
+    }
+    setActionError(null);
+    try {
+      const result = await searchProjectReferences(project.id, referenceSearch);
+      setReferenceResults(result.results);
+    } catch (cause) {
+      setActionError(toErrorMessage(cause, 'Could not search Project references'));
+    }
+  };
+
+  const reindexReference = async (referenceId: string) => {
+    if (!project) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const result = await reindexProjectReference(project.id, referenceId);
+      setReferences((current) => current.map((item) => item.id === referenceId ? result.reference : item));
+    } catch (cause) {
+      setActionError(toErrorMessage(cause, 'Could not reindex Project reference'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeReference = async (referenceId: string) => {
+    if (!project) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await deleteProjectReference(project.id, referenceId);
+      setReferences((current) => current.filter((item) => item.id !== referenceId));
+      setReferenceResults((current) => current.filter((item) => item.referenceId !== referenceId));
+    } catch (cause) {
+      setActionError(toErrorMessage(cause, 'Could not delete Project reference'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loadError) return <div className="p-7 text-sm text-red-600">{loadError}</div>;
   if (!project) return <div className="p-7 text-sm text-zinc-500">Loading Project…</div>;
 
@@ -268,7 +339,20 @@ export function ProjectDetailPage() {
               <button type="button" disabled={busy || !grantProfileId} onClick={() => void saveGrant()} className="mt-2 h-8 w-full rounded-lg border border-zinc-200 text-xs font-medium disabled:opacity-40 dark:border-zinc-700">Add or update access</button>
             </section>
 
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><FileText size={15} /> References</h2><p className="mt-2 text-xs text-zinc-500">Document ingestion arrives in the next verified slice.</p></section>
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <h2 className="flex items-center gap-2 text-sm font-medium"><FileText size={15} /> References</h2>
+              <p className="mt-1 text-[11px] leading-4 text-zinc-400">PDF, DOCX, TXT/MD, CSV/XLSX, PNG/JPEG. Originals are hashed and stored in Project-scoped storage; paths are never exposed.</p>
+              <label className="mt-3 block text-xs font-medium text-zinc-500">Upload Project reference<input aria-label="Upload Project reference" disabled={uploadingReference} type="file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx,.png,.jpg,.jpeg" onChange={(event) => void uploadReference(event.target.files)} className="mt-1 block w-full text-xs" /></label>
+              <div className="mt-3 flex gap-2">
+                <input aria-label="Project reference search" value={referenceSearch} onChange={(event) => setReferenceSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runReferenceSearch(); }} placeholder="Search references…" className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-transparent px-2 text-xs dark:border-zinc-700" />
+                <button type="button" onClick={() => void runReferenceSearch()} className="h-8 rounded-lg border border-zinc-200 px-2 text-xs font-medium dark:border-zinc-700">Search</button>
+              </div>
+              <div className="mt-3 space-y-2">
+                {references.length === 0 && <p className="text-xs text-zinc-500">No Project references uploaded yet.</p>}
+                {references.map((reference) => <div key={reference.id} className="rounded-lg border border-zinc-100 p-2 text-xs dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><a className="truncate font-medium text-zinc-700 underline-offset-2 hover:underline dark:text-zinc-200" href={projectReferenceDownloadUrl(project.id, reference.id)}>{reference.originalFilename}</a><p className="mt-0.5 text-[11px] text-zinc-400">{reference.status} · {Math.ceil(reference.sizeBytes / 1024)} KB · SHA-256 {reference.sha256.slice(0, 12)}…</p>{reference.error && <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{reference.error}</p>}</div><div className="flex shrink-0 gap-1"><button type="button" disabled={busy} onClick={() => void reindexReference(reference.id)} className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] dark:border-zinc-700">Reindex</button><button type="button" aria-label={`Delete ${reference.originalFilename}`} disabled={busy} onClick={() => void removeReference(reference.id)} className="text-zinc-400 hover:text-red-600"><Trash2 size={13} /></button></div></div></div>)}
+              </div>
+              {referenceResults.length > 0 && <div className="mt-3 space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800"><h3 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Citations</h3>{referenceResults.map((result) => <div key={result.chunkId} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{result.citation.originalFilename}</span><span> · chunk {result.citation.chunkIndex + 1}{result.citation.pageNumber ? ` · page ${result.citation.pageNumber}` : ''}{result.citation.sheetName ? ` · ${result.citation.sheetName}` : ''}{result.citation.cellRange ? ` · ${result.citation.cellRange}` : ''}</span><p className="mt-1">{result.snippet.replace(/<\/?mark>/g, '')}</p></div>)}</div>}
+            </section>
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><GitBranch size={15} /> Repository</h2>{project.repositoryLink ? <><a href={project.repositoryLink.htmlUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-sm font-medium text-zinc-800 hover:underline dark:text-zinc-200">{project.repositoryLink.fullName}</a><p className="mt-1 text-xs text-zinc-500">{project.repositoryLink.defaultBranch} · read-only · verified installation {project.repositoryLink.installationId}</p></> : <p className="mt-2 text-xs text-zinc-500">No repository selected.</p>}<Link to="/settings#github" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300">GitHub setup <ExternalLink size={12} /></Link></section>
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Manager history</h2><div className="mt-2 space-y-2">{history.map((entry) => <div key={entry.id} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{profileName(entry.profileId)}</span><br />{new Date(entry.effectiveFrom).toLocaleString()}{entry.effectiveTo ? ` – ${new Date(entry.effectiveTo).toLocaleString()}` : ' – current'}</div>)}</div></section>
           </aside>

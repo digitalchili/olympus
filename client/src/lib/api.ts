@@ -41,6 +41,9 @@ import type {
   ProjectAccessRole,
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
+  ProjectReferenceChunk,
+  ProjectReferenceListItem,
+  ProjectReferenceSearchResult,
   ProjectSummary,
   ProjectRepositoryLink,
   StudioGitHubInstallation,
@@ -333,6 +336,60 @@ export function reassignProjectManager(
     method: 'POST',
     body: JSON.stringify({ managerProfileId, previousManagerRole }),
   }, false);
+}
+
+export function fetchProjectReferences(projectId: string) {
+  return request<{ references: ProjectReferenceListItem[] }>(
+    `/projects/${encodeURIComponent(projectId)}/references`,
+    undefined,
+    false,
+  );
+}
+
+export function uploadProjectReference(projectId: string, file: File, signal?: AbortSignal) {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  return request<{ reference: ProjectReferenceListItem }>(
+    `/projects/${encodeURIComponent(projectId)}/references`,
+    { method: 'POST', body: formData, signal },
+    false,
+  );
+}
+
+export function fetchProjectReference(projectId: string, referenceId: string) {
+  return request<{ reference: ProjectReferenceListItem; chunks: ProjectReferenceChunk[] }>(
+    `/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function searchProjectReferences(projectId: string, q: string) {
+  return request<{ results: ProjectReferenceSearchResult[] }>(
+    `/projects/${encodeURIComponent(projectId)}/references/search?q=${encodeURIComponent(q)}`,
+    undefined,
+    false,
+  );
+}
+
+export function reindexProjectReference(projectId: string, referenceId: string) {
+  return request<{ reference: ProjectReferenceListItem }>(
+    `/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}/reindex`,
+    { method: 'POST' },
+    false,
+  );
+}
+
+export function deleteProjectReference(projectId: string, referenceId: string) {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}`,
+    { method: 'DELETE' },
+    false,
+  );
+}
+
+export function projectReferenceDownloadUrl(projectId: string, referenceId: string) {
+  return `${BASE}/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}/download`;
 }
 
 export interface InstallationSettings {

@@ -50,6 +50,10 @@ export function resolveOlympusWorkspaceDir(): string {
   return join(resolveOlympusHome(), 'workspace');
 }
 
+export function resolveProjectReferencesDir(): string {
+  return join(resolveOlympusDataDir(), 'project-references');
+}
+
 /** Root for the host-side project-folder picker, falling back to the workspace when it is missing. */
 export function resolveProjectRoot(): string {
   const candidate = process.env.OLYMPUS_DISPATCH_PROJECT_ROOT?.trim() || join(homedir(), 'Dev');
@@ -73,6 +77,7 @@ export function ensureOlympusStateDirs(): void {
   mkdirSync(resolveOlympusLogsDir(), { recursive: true });
   mkdirSync(resolveOlympusBackupsDir(), { recursive: true });
   mkdirSync(resolveOlympusWorkspaceDir(), { recursive: true });
+  mkdirSync(resolveProjectReferencesDir(), { recursive: true });
   mkdirSync(resolveHermesSkillsDir(), { recursive: true });
   mkdirSync(dirname(dbPath), { recursive: true });
 }

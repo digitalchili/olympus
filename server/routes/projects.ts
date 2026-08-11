@@ -1,4 +1,8 @@
 import { Router, type Request, type Response } from 'express';
+import multer from 'multer';
+import { mkdir, rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { v4 as uuid } from 'uuid';
 import type { Project, ProjectAccessRole, ProjectRepositoryLink } from '../../shared/types.js';
 import {
   createProject,
@@ -33,6 +37,19 @@ import {
 } from '../project-access.js';
 import type { StudioGitHubGateway } from './studio.js';
 import { getGitHubInstallation } from '../db/studio-projects.js';
+import {
+  PROJECT_REFERENCE_MAX_BYTES,
+  createProjectReferenceFromQuarantine,
+  deleteProjectReference,
+  getProjectReference,
+  listProjectReferenceChunks,
+  listProjectReferences,
+  publicProjectReference,
+  reindexProjectReference,
+  searchProjectReferences,
+  validateProjectReferenceCandidate,
+} from '../db/project-references.js';
+import { resolveProjectReferencesDir } from '../paths.js';
 
 interface ProjectsRouterOptions {
   registry?: LocalProfileRegistry;
@@ -87,11 +104,18 @@ function sendError(res: Response, error: unknown): Response {
   if (error instanceof LocalProfileError) {
     return res.status(error.status).json({ error: error.message, code: error.code });
   }
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({ error: 'Project reference upload was rejected', code: 'PROJECT_REFERENCE_REJECTED' });
+  }
   const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : null;
   const message = error instanceof Error ? error.message : 'Project request failed';
   if (statusCode === 404) return res.status(404).json({ error: message, code: 'PROJECT_REPOSITORY_NOT_FOUND' });
   if (statusCode === 503) return res.status(503).json({ error: message, code: 'GITHUB_GATEWAY_UNAVAILABLE' });
   if (/UNIQUE constraint failed: project_repository_links\.provider, project_repository_links\.provider_repository_id/i.test(message)) return res.status(409).json({ error: 'Repository is already linked to another Project', code: 'PROJECT_REPOSITORY_LINK_EXISTS' });
+  if (/Project reference.*(safe filename|empty|size limit|not supported|does not match|archive|MIME)|unsupported Project reference|exceeds/i.test(message)) {
+    return res.status(400).json({ error: message, code: 'PROJECT_REFERENCE_REJECTED' });
+  }
+  if (/Project reference not found/i.test(message)) return res.status(404).json({ error: 'Project reference not found', code: 'PROJECT_REFERENCE_NOT_FOUND' });
   if (/Project not found/i.test(message)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
   if (/already exists/i.test(message)) return res.status(409).json({ error: message, code: 'PROJECT_NAME_EXISTS' });
   if (/required|too long|invalid control|invalid.*role/i.test(message)) return res.status(400).json({ error: message, code: 'INVALID_PROJECT' });
@@ -110,6 +134,39 @@ function sendError(res: Response, error: unknown): Response {
 function profileActor(req: Request, registry: LocalProfileRegistry): string | null {
   if (req.query.profile === undefined) return null;
   return requestProfile(req, registry).id;
+}
+
+function requireProjectRouteAccess(req: Request, registry: LocalProfileRegistry, projectId: string, role: ProjectAccessRole): void {
+  if (!getProject(projectId)) throw new Error('Project not found');
+  const actor = profileActor(req, registry);
+  if (actor) requireProfileProjectAccess(projectId, actor, role);
+}
+
+async function uploadReferenceFile(req: Request, res: Response, projectId: string): Promise<Express.Multer.File> {
+  const root = resolveProjectReferencesDir();
+  const quarantineDir = resolve(root, projectId, 'quarantine');
+  if (!quarantineDir.startsWith(resolve(root))) throw new Error('Invalid Project reference quarantine path');
+  await mkdir(quarantineDir, { recursive: true });
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, callback) => callback(null, quarantineDir),
+      filename: (_req, file, callback) => callback(null, `${Date.now()}-${uuid()}${file.originalname ? '-' : ''}${file.originalname}`),
+    }),
+    limits: { fileSize: PROJECT_REFERENCE_MAX_BYTES, files: 1, fields: 0, parts: 2 },
+    fileFilter: (_req, file, callback) => {
+      try {
+        validateProjectReferenceCandidate({ originalFilename: file.originalname, mimeType: file.mimetype, sizeBytes: 1 });
+        callback(null, true);
+      } catch (error) {
+        callback(error as Error);
+      }
+    },
+  }).single('file');
+  await new Promise<void>((resolvePromise, reject) => {
+    upload(req, res, (error) => error ? reject(error) : resolvePromise());
+  });
+  if (!req.file) throw new Error('Project reference file is required');
+  return req.file;
 }
 
 async function projectResponse(project: Project, registry: LocalProfileRegistry): Promise<ProjectResponse> {
@@ -301,7 +358,6 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     }
   });
 
-
   router.get('/:id/repository', (req, res) => {
     try {
       const projectId = routeId(req.params.id);
@@ -337,6 +393,101 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const actor = profileActor(req, registry);
       if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
       deleteProjectRepositoryLink(projectId);
+      return res.status(204).end();
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/references', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      return res.json({ references: listProjectReferences(projectId) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/references', async (req, res) => {
+    let file: Express.Multer.File | undefined;
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      file = await uploadReferenceFile(req, res, projectId);
+      const reference = await createProjectReferenceFromQuarantine({
+        projectId,
+        quarantinePath: file.path,
+        originalFilename: file.originalname,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        now: now(),
+      });
+      return res.status(201).json({ reference: publicProjectReference(reference) });
+    } catch (error) {
+      if (file?.path) void rm(file.path, { force: true });
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/references/search', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      const q = typeof req.query.q === 'string' ? req.query.q : '';
+      return res.json({ results: searchProjectReferences(projectId, q) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/references/:referenceId', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      const referenceId = routeId(req.params.referenceId);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      const reference = getProjectReference(projectId, referenceId);
+      if (!reference || reference.status === 'deleted') throw new Error('Project reference not found');
+      return res.json({
+        reference: publicProjectReference(reference),
+        chunks: listProjectReferenceChunks(projectId, referenceId),
+      });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/references/:referenceId/download', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      const referenceId = routeId(req.params.referenceId);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      const reference = getProjectReference(projectId, referenceId);
+      if (!reference || reference.status === 'deleted') throw new Error('Project reference not found');
+      res.download(reference.storagePath, reference.originalFilename);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  router.post('/:id/references/:referenceId/reindex', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      const referenceId = routeId(req.params.referenceId);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const reference = await reindexProjectReference(projectId, referenceId, now());
+      return res.json({ reference: publicProjectReference(reference) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.delete('/:id/references/:referenceId', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      const referenceId = routeId(req.params.referenceId);
+      requireProjectRouteAccess(req, registry, projectId, 'manage');
+      deleteProjectReference(projectId, referenceId, now());
       return res.status(204).end();
     } catch (error) {
       return sendError(res, error);
