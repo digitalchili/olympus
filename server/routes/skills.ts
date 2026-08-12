@@ -9,7 +9,9 @@ import { Router, type Request, type Response } from 'express';
 import type { ClawHubSkillSummary, ClawHubStats, SkillMeta } from '../../shared/types.js';
 import { profileRequestGate, requestProfile, sendProfileError } from '../profile-context.js';
 
-const CLAWHUB_API_BASE = 'https://clawhub.ai/api/v1';
+// ClawHub's website is not its public API host. Requests to
+// clawhub.ai/api/v1/* return 404; the public API is served by Convex.
+const CLAWHUB_API_BASE = 'https://wry-manatee-359.convex.site/api/v1';
 const SIDECAR_FILENAME = '.olympus-dispatch-skill.json';
 const MAX_SKILL_FILES = 250;
 const MAX_SKILL_FILE_BYTES = 5 * 1024 * 1024;
