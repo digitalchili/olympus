@@ -39,6 +39,9 @@ try {
 
   const unknown = await fetch(`${base}/registry/not-reviewed/content`);
   assert.equal(unknown.status, 404);
+
+  const unknownScan = await fetch(`${base}/registry/not-reviewed/scan`);
+  assert.equal(unknownScan.status, 404);
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

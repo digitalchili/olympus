@@ -916,8 +916,13 @@ skillsRouter.get('/registry/:slug/content', async (req, res) => {
   }
 });
 
-skillsRouter.get('/registry/:slug/scan', async (_req, res) => {
-  res.json({ security: { status: 'reviewed', hasWarnings: false } });
+skillsRouter.get('/registry/:slug/scan', async (req, res) => {
+  try {
+    findCuratedSkill(ensureSafeSlug(req.params.slug));
+    res.json({ security: { status: 'reviewed', hasWarnings: false } });
+  } catch (error) {
+    sendError(res, error, 'Failed to load Digital Chili skill review');
+  }
 });
 
 skillsRouter.post('/import', profileRequestGate(), (req, res) => {
