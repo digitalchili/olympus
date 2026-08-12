@@ -620,11 +620,31 @@ export interface ClawHubSkillSummary {
   latestVersion?: string | null;
   updatedAt?: number | null;
   stats?: ClawHubStats | null;
+  /** Present when this item comes from the reviewed Digital Chili registry. */
+  curated?: CuratedSkillSummary;
 }
 
 export interface ClawHubScanResult {
   security?: {
     status?: string;
     hasWarnings?: boolean;
+  };
+}
+
+/** A reviewed skill from Digital Chili's pinned, private registry. */
+export interface CuratedSkillSummary {
+  id: string;
+  displayName: string;
+  summary: string;
+  status: 'approved' | 'experimental' | 'deprecated';
+  owner: string;
+  tags: string[];
+  version: string;
+  sourceUrl: string;
+  provenance: {
+    type: string;
+    source: string;
+    revision?: string;
+    license: string;
   };
 }

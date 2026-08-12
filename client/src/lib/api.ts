@@ -314,7 +314,7 @@ export function deleteSkill(id: string, profileId?: string) {
   });
 }
 
-export function installSkill(input: { provider?: 'clawhub'; slug: string; ownerHandle?: string | null; version?: string; force?: boolean }, profileId?: string) {
+export function installSkill(input: { provider?: 'clawhub' | 'digital-chili'; slug: string; ownerHandle?: string | null; version?: string; force?: boolean }, profileId?: string) {
   const path = profileId ? apiPathWithProfile('/skills/install', profileId) : '/skills/install';
   return request<SkillInstallResult>(path, {
     method: 'POST',

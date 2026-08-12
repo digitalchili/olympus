@@ -69,13 +69,14 @@ function latestVersion(skill: ClawHubSkillSummary | null | undefined): string | 
   return skill?.latestVersion ?? skill?.version ?? null;
 }
 
-function clawHubSkillUrl(slug: string | null | undefined, ownerHandle?: string | null, sourceUrl?: string | null): string | null {
+function registrySkillUrl(slug: string | null | undefined, ownerHandle?: string | null, sourceUrl?: string | null): string | null {
   if (!slug) return null;
-  if (ownerHandle) {
-    return `https://clawhub.ai/${encodeURIComponent(ownerHandle)}/skills/${encodeURIComponent(slug)}`;
-  }
-  if (sourceUrl && !sourceUrl.includes('clawhub.ai/skills/')) return sourceUrl;
-  return null;
+  if (ownerHandle) return `https://clawhub.ai/${encodeURIComponent(ownerHandle)}/skills/${encodeURIComponent(slug)}`;
+  return sourceUrl || null;
+}
+
+function registrySourceLabel(skill: ClawHubSkillSummary): string {
+  return skill.curated ? 'Digital Chili' : 'ClawHub';
 }
 
 function registrySkillKey(slug: string, ownerHandle?: string | null): string {
@@ -83,7 +84,7 @@ function registrySkillKey(slug: string, ownerHandle?: string | null): string {
 }
 
 function installedSkillKey(skill: SkillMeta): string | null {
-  if (skill.provider !== 'clawhub' || !skill.registrySlug) return null;
+  if (!skill.registrySlug || !['clawhub', 'digital-chili'].includes(skill.provider || '')) return null;
   return registrySkillKey(skill.registrySlug, skill.registryOwnerHandle);
 }
 
@@ -331,13 +332,14 @@ function RegistrySkillCard({
 }) {
   const count = registryCountLabel(skill.stats);
   const version = latestVersion(skill);
-  const skillUrl = clawHubSkillUrl(skill.slug, skill.ownerHandle, skill.sourceUrl);
+  const skillUrl = registrySkillUrl(skill.slug, skill.ownerHandle, skill.sourceUrl);
+  const sourceLabel = registrySourceLabel(skill);
 
   return (
     <SkillCardShell onOpen={onOpen}>
       <div className="flex items-baseline gap-2">
         <h3 className="min-w-0 truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{skill.displayName}</h3>
-        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">ClawHub</span>
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">{sourceLabel}</span>
         {skillUrl && (
           <a
             href={skillUrl}
@@ -403,7 +405,7 @@ function InstalledSkillCard({
   onOpen: () => void;
   onDelete: () => void;
 }) {
-  const skillUrl = clawHubSkillUrl(skill.registrySlug, skill.registryOwnerHandle, skill.sourceUrl);
+  const skillUrl = registrySkillUrl(skill.registrySlug, skill.registryOwnerHandle, skill.sourceUrl);
 
   return (
     <SkillCardShell onOpen={onOpen}>
@@ -686,8 +688,9 @@ function SkillPreviewModal({
   const count = isRegistry ? registryCountLabel(preview.skill.stats) : null;
   const scanInfo = scanDisplay(scan);
   const skillUrl = isRegistry
-    ? clawHubSkillUrl(preview.skill.slug, preview.skill.ownerHandle, preview.skill.sourceUrl)
+    ? registrySkillUrl(preview.skill.slug, preview.skill.ownerHandle, preview.skill.sourceUrl)
     : null;
+  const registryLabel = isRegistry ? registrySourceLabel(preview.skill) : null;
 
   return (
     <div
@@ -705,7 +708,7 @@ function SkillPreviewModal({
               <div className="flex items-center gap-2">
                 <h2 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2>
                 <span className="shrink-0 rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                  {isRegistry ? 'ClawHub' : preview.skill.source}
+                  {isRegistry ? registryLabel : preview.skill.source}
                 </span>
               </div>
               <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
@@ -721,7 +724,7 @@ function SkillPreviewModal({
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 px-3 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                 >
                   <ExternalLink size={14} />
-                  ClawHub
+                  {registryLabel}
                 </a>
               )}
               {isRegistry && (
@@ -994,7 +997,7 @@ export function SkillsPage() {
     const { openInstalledPreview = true } = options;
     setInstallingKey(registrySkillKey(skill.slug, skill.ownerHandle));
     try {
-      const result = await installSkill({ provider: 'clawhub', slug: skill.slug, ownerHandle: skill.ownerHandle, version: 'latest' }, activeProfileId);
+      const result = await installSkill({ provider: skill.curated ? 'digital-chili' : 'clawhub', slug: skill.slug, ownerHandle: skill.ownerHandle, version: skill.curated ? skill.curated.version : 'latest' }, activeProfileId);
       toast(result.alreadyInstalled ? 'Skill already installed' : 'Skill installed');
       await loadInstalledSkills();
       if (openInstalledPreview) {

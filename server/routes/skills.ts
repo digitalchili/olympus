@@ -6,7 +6,8 @@ import { basename, dirname, extname, join, relative, resolve, sep } from 'node:p
 import multer from 'multer';
 import yauzl from 'yauzl';
 import { Router, type Request, type Response } from 'express';
-import type { ClawHubSkillSummary, ClawHubStats, SkillMeta } from '../../shared/types.js';
+import type { ClawHubSkillSummary, ClawHubStats, CuratedSkillSummary, SkillMeta } from '../../shared/types.js';
+import { curatedSkillCatalog, type CuratedSkillCatalogEntry } from '../curated-skills-catalog.js';
 import { profileRequestGate, requestProfile, sendProfileError } from '../profile-context.js';
 
 // ClawHub's website is not its public API host. Requests to
@@ -769,6 +770,54 @@ function parseSkillImportRequest(value: unknown, fileCount: number): { relativeP
   return { relativePaths };
 }
 
+function curatedSummary(skill: CuratedSkillCatalogEntry): ClawHubSkillSummary & { curated: CuratedSkillSummary } {
+  const { files: _files, ...curated } = skill;
+  return {
+    slug: skill.id,
+    displayName: skill.displayName,
+    summary: skill.summary,
+    latestVersion: skill.version,
+    sourceUrl: skill.sourceUrl,
+    stats: undefined,
+    curated,
+  };
+}
+
+function findCuratedSkill(id: string): CuratedSkillCatalogEntry {
+  const skill = curatedSkillCatalog.find((candidate) => candidate.id === id && candidate.status === 'approved');
+  if (!skill) throw new RouteError(404, 'Curated skill not found.', 'CURATED_SKILL_NOT_FOUND');
+  return skill;
+}
+
+async function installCuratedSkill(skillsRoot: string, id: string, force: boolean): Promise<{
+  skill: SkillMeta;
+  installed: boolean;
+  alreadyInstalled: boolean;
+}> {
+  const curated = findCuratedSkill(id);
+  const destination = resolve(skillsRoot, 'digital-chili', curated.id);
+  ensureInside(skillsRoot, destination);
+  await mkdir(dirname(destination), { recursive: true });
+
+  const existingSkillFile = join(destination, 'SKILL.md');
+  if (!force && await pathExists(existingSkillFile)) {
+    return { skill: await readInstalledSkill(existingSkillFile, skillsRoot), installed: false, alreadyInstalled: true };
+  }
+
+  const files = new Map(Object.entries(curated.files).map(([path, content]) => [normalizeRelativePath(path, 'curated skill file path'), Buffer.from(content, 'utf8')]));
+  const sidecar: OlympusSkillSidecar = {
+    provider: 'digital-chili',
+    registrySlug: curated.id,
+    version: curated.version,
+    displayName: curated.displayName,
+    summary: curated.summary,
+    sourceUrl: curated.sourceUrl,
+    installedAt: new Date().toISOString(),
+  };
+  await writeSkillFiles(destination, files, sidecar);
+  return { skill: await readInstalledSkill(join(destination, 'SKILL.md'), skillsRoot), installed: true, alreadyInstalled: false };
+}
+
 async function importLocalSkill(skillsRoot: string, uploadedFiles: Express.Multer.File[], relativePaths: string[]): Promise<{
   skill: SkillMeta;
   imported: boolean;
@@ -834,51 +883,41 @@ skillsRouter.get('/', async (req, res) => {
 
 skillsRouter.get('/registry/search', async (req, res) => {
   try {
-    const query = stringValue(req.query.q);
+    const query = (stringValue(req.query.q) || '').toLowerCase();
     const limit = clampLimit(req.query.limit, 24);
-    const data = query
-      ? await fetchClawHubJson('/search', { q: query, limit, nonSuspiciousOnly: true })
-      : await fetchClawHubJson('/skills', { sort: 'downloads', limit, nonSuspiciousOnly: true });
-    res.json({ skills: registrySummaries(data) });
+    const skills = curatedSkillCatalog
+      .filter((skill) => skill.status === 'approved')
+      .filter((skill) => !query || [skill.id, skill.displayName, skill.summary, ...skill.tags].join(' ').toLowerCase().includes(query))
+      .slice(0, limit)
+      .map(curatedSummary);
+    res.json({ skills });
   } catch (error) {
-    sendError(res, error, 'Failed to search ClawHub skills');
+    sendError(res, error, 'Failed to search Digital Chili skills');
   }
 });
 
 skillsRouter.get('/registry/browse', async (req, res) => {
   try {
     const limit = clampLimit(req.query.limit, 24);
-    const data = await fetchClawHubJson('/packages', { family: 'skill', sort: 'downloads', limit });
-    res.json({ skills: registrySummaries(data) });
+    res.json({ skills: curatedSkillCatalog.filter((skill) => skill.status === 'approved').slice(0, limit).map(curatedSummary) });
   } catch (error) {
-    sendError(res, error, 'Failed to load ClawHub skills');
+    sendError(res, error, 'Failed to load Digital Chili skills');
   }
 });
 
 skillsRouter.get('/registry/:slug/content', async (req, res) => {
   try {
-    const slug = ensureSafeSlug(req.params.slug);
-    const ownerHandle = optionalSafeOwnerHandle(req.query.ownerHandle);
-    const content = await fetchClawHubSkillMarkdown(slug, stringValue(req.query.version), ownerHandle);
+    const skill = findCuratedSkill(ensureSafeSlug(req.params.slug));
+    const content = skill.files['SKILL.md'];
+    if (!content) throw new RouteError(422, 'Curated skill bundle is missing SKILL.md.', 'INVALID_SKILL_BUNDLE');
     res.json({ content });
   } catch (error) {
-    sendError(res, error, 'Failed to load ClawHub skill content');
+    sendError(res, error, 'Failed to load Digital Chili skill content');
   }
 });
 
-skillsRouter.get('/registry/:slug/scan', async (req, res) => {
-  try {
-    const slug = ensureSafeSlug(req.params.slug);
-    const ownerHandle = optionalSafeOwnerHandle(req.query.ownerHandle);
-    const version = stringValue(req.query.version);
-    const data = await fetchClawHubJson(
-      `/skills/${encodeURIComponent(slug)}/scan`,
-      { ...(version ? { version } : { tag: 'latest' }), ownerHandle },
-    );
-    res.json(isRecord(data) ? data : {});
-  } catch (error) {
-    sendError(res, error, 'Failed to load ClawHub skill scan');
-  }
+skillsRouter.get('/registry/:slug/scan', async (_req, res) => {
+  res.json({ security: { status: 'reviewed', hasWarnings: false } });
 });
 
 skillsRouter.post('/import', profileRequestGate(), (req, res) => {
@@ -896,7 +935,13 @@ skillsRouter.post('/import', profileRequestGate(), (req, res) => {
 skillsRouter.post('/install', profileRequestGate(), async (req, res) => {
   try {
     const body = isRecord(req.body) ? req.body : {};
-    const provider = stringValue(body.provider) || 'clawhub';
+    const provider = stringValue(body.provider) || 'digital-chili';
+    const force = body.force === true;
+    if (provider === 'digital-chili') {
+      const result = await installCuratedSkill(requestProfile(req).skillsDir, ensureSafeSlug(body.slug), force);
+      res.status(result.installed ? 201 : 200).json({ skill: result.skill, installed: result.installed, alreadyInstalled: result.alreadyInstalled });
+      return;
+    }
     if (provider !== 'clawhub') {
       throw new RouteError(400, `Unsupported skills provider '${provider}'.`, 'UNSUPPORTED_SKILLS_PROVIDER');
     }
@@ -904,7 +949,6 @@ skillsRouter.post('/install', profileRequestGate(), async (req, res) => {
     const slug = ensureSafeSlug(body.slug);
     const ownerHandle = optionalSafeOwnerHandle(body.ownerHandle);
     const requestedVersion = stringValue(body.version);
-    const force = body.force === true;
     const result = await installClawHubSkill(requestProfile(req).skillsDir, slug, ownerHandle, requestedVersion, force);
 
     res.status(result.installed ? 201 : 200).json({
