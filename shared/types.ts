@@ -23,6 +23,8 @@ export interface StudioGitHubInstallation {
   id: number;
   accountLogin: string;
   accountType: 'User' | 'Organization';
+  label: string;
+  permissionMode: 'read_write' | 'upgrade_required';
   createdAt: number;
   updatedAt: number;
 }
@@ -50,7 +52,7 @@ export interface StudioProject {
   defaultBranch: string;
   htmlUrl: string;
   cloneUrl: string;
-  mode: 'read_only';
+  mode: 'read_only' | 'branch_pr';
   createdAt: number;
   updatedAt: number;
 }

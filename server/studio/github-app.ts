@@ -102,7 +102,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
     const response = await appRequest(`/app/installations/${installationId}/access_tokens`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ permissions: { metadata: 'read' } }),
+      body: JSON.stringify({ permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' } }),
     });
     const payload = await response.json() as { token?: unknown };
     return requiredString(payload.token, 'installation token');
@@ -112,11 +112,13 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
     id: number;
     accountLogin: string;
     accountType: 'User' | 'Organization';
+    permissionMode: 'read_write' | 'upgrade_required';
   }> {
     const response = await appRequest(`/app/installations/${installationId}`);
     const payload = await response.json() as {
       id?: unknown;
       account?: { login?: unknown; type?: unknown };
+      permissions?: { contents?: unknown; pull_requests?: unknown };
     };
     const accountType = payload.account?.type;
     if (accountType !== 'User' && accountType !== 'Organization') {
@@ -126,6 +128,9 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
       id: requiredSafeInteger(payload.id, 'installation id'),
       accountLogin: requiredString(payload.account?.login, 'installation account login'),
       accountType,
+      permissionMode: payload.permissions?.contents === 'write' && payload.permissions?.pull_requests === 'write'
+        ? 'read_write'
+        : 'upgrade_required',
     };
   }
 
@@ -195,7 +200,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
         callback_urls: [`${baseUrl}/api/studio/github/oauth/callback`],
         setup_url: `${baseUrl}/api/studio/github/callback`,
         public: false,
-        default_permissions: { metadata: 'read' },
+        default_permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
         default_events: [],
         request_oauth_on_install: false,
       };

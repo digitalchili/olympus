@@ -50,7 +50,12 @@ app.use('/api/studio', createStudioRouter({
     async authorizeInstallation(code: string, installationId: number) {
       assert.equal(code, 'verified-user-code');
       assert.equal(installationId, 44);
-      return { id: 44, accountLogin: 'leakim69', accountType: 'User' as const };
+      return {
+        id: 44,
+        accountLogin: 'leakim69',
+        accountType: 'User' as const,
+        permissionMode: 'read_write' as const,
+      };
     },
     async listRepositories(installationId: number) {
       assert.equal(installationId, 44);
@@ -199,9 +204,29 @@ try {
     id: 44,
     accountLogin: 'leakim69',
     accountType: 'User',
+    label: 'leakim69',
+    permissionMode: 'read_write',
     createdAt: (connected.body.installations as Array<Record<string, unknown>>)[0].createdAt,
     updatedAt: (connected.body.installations as Array<Record<string, unknown>>)[0].updatedAt,
   }]);
+
+  const invalidRename = await call('/api/studio/github/installations/44', 'PATCH', { label: '   ' });
+  assert.equal(invalidRename.status, 400);
+
+  const renamed = await call('/api/studio/github/installations/44', 'PATCH', { label: 'Digital Chili' });
+  assert.equal(renamed.status, 200);
+  assert.equal((renamed.body.installation as Record<string, unknown>).label, 'Digital Chili');
+
+  db.prepare(`
+    INSERT INTO studio_github_installations (
+      id, account_login, account_type, label, permission_mode, created_at, updated_at
+    ) VALUES (45, 'example-org', 'Organization', 'Client organization', 'read_write', 1, 1)
+  `).run();
+  const multipleConnections = await call('/api/studio/github/status');
+  assert.equal((multipleConnections.body.installations as unknown[]).length, 2);
+
+  const deletedUnused = await call('/api/studio/github/installations/45', 'DELETE');
+  assert.equal(deletedUnused.status, 204);
 
   const available = await call('/api/studio/github/repositories?installationId=44');
   assert.equal(available.status, 200);
@@ -211,17 +236,28 @@ try {
   const missingRepository = await call('/api/studio/projects', 'POST', { installationId: 44, repositoryId: 999 });
   assert.equal(missingRepository.status, 404);
 
+  db.prepare("UPDATE studio_github_installations SET permission_mode = 'upgrade_required' WHERE id = 44").run();
+  const upgradeRequired = await call('/api/studio/projects', 'POST', { installationId: 44, repositoryId: 101 });
+  assert.equal(upgradeRequired.status, 409);
+  assert.equal(upgradeRequired.body.code, 'GITHUB_PERMISSION_UPGRADE_REQUIRED');
+  db.prepare("UPDATE studio_github_installations SET permission_mode = 'read_write' WHERE id = 44").run();
+
   const imported = await call('/api/studio/projects', 'POST', { installationId: 44, repositoryId: 101 });
   assert.equal(imported.status, 201);
   const project = imported.body.project as Record<string, unknown>;
   assert.equal(project.fullName, 'leakim69/olympus-dispatch');
-  assert.equal(project.mode, 'read_only');
+  assert.equal(project.mode, 'branch_pr');
   assert.equal(project.defaultBranch, 'main');
   assert.equal('token' in project, false);
 
   const importedAgain = await call('/api/studio/projects', 'POST', { installationId: 44, repositoryId: 101 });
   assert.equal(importedAgain.status, 200);
   assert.equal((importedAgain.body.project as Record<string, unknown>).id, project.id);
+
+  const blockedDisconnect = await call('/api/studio/github/installations/44', 'DELETE');
+  assert.equal(blockedDisconnect.status, 409);
+  assert.equal(blockedDisconnect.body.code, 'GITHUB_INSTALLATION_IN_USE');
+  assert.deepEqual(blockedDisconnect.body.projects, [{ id: project.id, name: 'olympus-dispatch' }]);
 
   const projects = await call('/api/studio/projects');
   assert.equal(projects.status, 200);

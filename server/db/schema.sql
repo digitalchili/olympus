@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS studio_github_installations (
   id INTEGER PRIMARY KEY CHECK(id > 0),
   account_login TEXT NOT NULL,
   account_type TEXT NOT NULL CHECK(account_type IN ('User', 'Organization')),
+  label TEXT NOT NULL,
+  permission_mode TEXT NOT NULL DEFAULT 'upgrade_required' CHECK(permission_mode IN ('read_write', 'upgrade_required')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -171,7 +173,7 @@ CREATE TABLE IF NOT EXISTS studio_projects (
   default_branch TEXT NOT NULL,
   html_url TEXT NOT NULL,
   clone_url TEXT NOT NULL,
-  mode TEXT NOT NULL DEFAULT 'read_only' CHECK(mode = 'read_only'),
+  mode TEXT NOT NULL DEFAULT 'branch_pr' CHECK(mode IN ('read_only', 'branch_pr')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(provider, provider_repository_id)

@@ -86,6 +86,7 @@ async function request<T>(path: string, init?: RequestInit, profileScoped = true
     const code = isRecord(body) && typeof body.code === 'string' ? body.code : undefined;
     throw new ApiError(message, res.status, code);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -223,6 +224,22 @@ export function connectStudioGitHub(owner: string | null) {
     method: 'POST',
     body: JSON.stringify({ owner }),
   }, false);
+}
+
+export function updateStudioGitHubInstallation(installationId: number, label: string) {
+  return request<{ installation: StudioGitHubInstallation }>(
+    `/studio/github/installations/${encodeURIComponent(installationId)}`,
+    { method: 'PATCH', body: JSON.stringify({ label }) },
+    false,
+  );
+}
+
+export function deleteStudioGitHubInstallation(installationId: number) {
+  return request<void>(
+    `/studio/github/installations/${encodeURIComponent(installationId)}`,
+    { method: 'DELETE' },
+    false,
+  );
 }
 
 export function fetchStudioRepositories(installationId: number) {

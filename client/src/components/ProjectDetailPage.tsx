@@ -122,7 +122,7 @@ export function ProjectDetailPage() {
 
   useEffect(() => {
     fetchStudioGitHubStatus()
-      .then(({ installations: next }) => setInstallations(next))
+      .then(({ installations: next }) => setInstallations(next.filter((installation) => installation.permissionMode === 'read_write')))
       .catch(() => undefined);
   }, []);
 
@@ -337,7 +337,7 @@ export function ProjectDetailPage() {
 
               {installations.length > 0 && (
                 <>
-                  <label className="text-xs font-medium text-zinc-500">GitHub connection<select value={repositoryInstallationId ?? ''} onChange={(event) => setRepositoryInstallationId(Number(event.target.value) || null)} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"><option value="">No repository</option>{installations.map((installation) => <option key={installation.id} value={installation.id}>{installation.accountLogin}</option>)}</select></label>
+                  <label className="text-xs font-medium text-zinc-500">GitHub connection<select value={repositoryInstallationId ?? ''} onChange={(event) => setRepositoryInstallationId(Number(event.target.value) || null)} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"><option value="">No repository</option>{installations.map((installation) => <option key={installation.id} value={installation.id}>{installation.label}</option>)}</select></label>
                   <label className="text-xs font-medium text-zinc-500">Repository<select value={repositoryId ?? ''} disabled={!repositoryInstallationId} onChange={(event) => setRepositoryId(Number(event.target.value) || null)} className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm disabled:opacity-50 dark:border-zinc-700"><option value="">No repository</option>{selectableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.fullName}</option>)}</select></label>
                 </>
               )}

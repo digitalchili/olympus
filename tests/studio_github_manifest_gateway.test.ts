@@ -57,7 +57,11 @@ try {
   assert.deepEqual(manifest.callback_urls, ['https://olympus.example/api/studio/github/oauth/callback']);
   assert.equal(manifest.setup_url, 'https://olympus.example/api/studio/github/callback');
   assert.equal(manifest.public, false);
-  assert.deepEqual(manifest.default_permissions, { metadata: 'read' });
+  assert.deepEqual(manifest.default_permissions, {
+    metadata: 'read',
+    contents: 'write',
+    pull_requests: 'write',
+  });
   assert.deepEqual(manifest.default_events, []);
   assert.equal(manifest.request_oauth_on_install, false);
   assert.equal(JSON.stringify(manifest).includes('secret'), false);

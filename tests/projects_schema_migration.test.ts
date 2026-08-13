@@ -125,6 +125,15 @@ try {
     changed_by: 'legacy-studio-migration',
   });
 
+  assert.deepEqual(db.prepare(`
+    SELECT label, permission_mode
+    FROM studio_github_installations
+    WHERE id = 44
+  `).get(), {
+    label: 'digitalchili',
+    permission_mode: 'upgrade_required',
+  });
+
   // Startup migration must be idempotent and must not duplicate history or links.
   const counts = db.prepare(`
     SELECT

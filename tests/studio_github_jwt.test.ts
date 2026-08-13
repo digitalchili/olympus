@@ -23,7 +23,11 @@ const fakeFetch: typeof fetch = async (input, init) => {
     return Response.json({ total_count: 1, installations: [{ id: 44 }] });
   }
   if (url.endsWith('/app/installations/44')) {
-    return Response.json({ id: 44, account: { login: 'leakim69', type: 'User' } });
+    return Response.json({
+      id: 44,
+      account: { login: 'leakim69', type: 'User' },
+      permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
+    });
   }
   if (url.endsWith('/app/installations/44/access_tokens')) {
     return Response.json({ token: 'short-lived-installation-token' });
@@ -71,7 +75,12 @@ assert.equal(
 );
 
 const installation = await gateway.authorizeInstallation('oauth-code', 44);
-assert.deepEqual(installation, { id: 44, accountLogin: 'leakim69', accountType: 'User' });
+assert.deepEqual(installation, {
+  id: 44,
+  accountLogin: 'leakim69',
+  accountType: 'User',
+  permissionMode: 'read_write',
+});
 
 assert.equal(requests[1].authorization, 'Bearer short-lived-user-token');
 const appInstallationRequest = requests.find((entry) => entry.url.endsWith('/app/installations/44'));
@@ -106,7 +115,9 @@ assert.deepEqual(repositories, [{
 assert.equal(requests.at(-1)?.authorization, 'Bearer short-lived-installation-token');
 const installationTokenRequest = requests.find((entry) => entry.url.endsWith('/app/installations/44/access_tokens'));
 assert.ok(installationTokenRequest);
-assert.deepEqual(JSON.parse(installationTokenRequest.body), { permissions: { metadata: 'read' } });
+assert.deepEqual(JSON.parse(installationTokenRequest.body), {
+  permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
+});
 assert.equal(repositories[0].defaultBranch, 'main');
 assert.equal(repositories[0].cloneUrl, 'https://github.com/leakim69/olympus-dispatch.git');
 assert.ok(!JSON.stringify(repositories).includes('short-lived-installation-token'));

@@ -35,7 +35,12 @@ const registry = new LocalProfileRegistry(hermesHome, dispatchHome);
 
 let now = 1_000;
 const repositories = [{ id: 501, name: 'atlas', fullName: 'example/atlas', owner: 'example', private: true, defaultBranch: 'main', htmlUrl: 'https://github.com/example/atlas', cloneUrl: 'https://github.com/example/atlas.git' }];
-upsertGitHubInstallation({ id: 44, accountLogin: 'example', accountType: 'Organization' }, now);
+upsertGitHubInstallation({
+  id: 44,
+  accountLogin: 'example',
+  accountType: 'Organization',
+  permissionMode: 'read_write',
+}, now);
 const github = {
   configured: true,
   manifestRegistration() { throw new Error('not used'); },
@@ -103,7 +108,7 @@ try {
   const created = createdResponse.body.project as Record<string, unknown>;
   assert.equal(created.name, 'Example Project');
   assert.equal((created.repositoryLink as Record<string, unknown>).fullName, 'example/atlas');
-  assert.equal((created.repositoryLink as Record<string, unknown>).mode, 'read_only');
+  assert.equal((created.repositoryLink as Record<string, unknown>).mode, 'branch_pr');
   assert.equal(JSON.stringify(created).includes('token'), false);
   assert.deepEqual(created.manager, {
     id: 'studio',
@@ -126,7 +131,7 @@ try {
 
   const relinkedRepository = await call(`/api/projects/${projectId}/repository`, 'PUT', { installationId: 44, repositoryId: 501 });
   assert.equal(relinkedRepository.status, 200);
-  assert.equal(((relinkedRepository.body.repositoryLink as Record<string, unknown>)).mode, 'read_only');
+  assert.equal(((relinkedRepository.body.repositoryLink as Record<string, unknown>)).mode, 'branch_pr');
 
   const duplicateRepositoryCreate = await call('/api/projects', 'POST', {
     name: 'Must roll back',

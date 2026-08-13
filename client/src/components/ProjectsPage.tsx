@@ -24,8 +24,9 @@ export function ProjectsPage() {
   useEffect(() => {
     fetchStudioGitHubStatus()
       .then(({ installations: next }) => {
-        setInstallations(next);
-        if (next.length === 1) setRepositoryInstallationId(next[0].id);
+        const writable = next.filter((installation) => installation.permissionMode === 'read_write');
+        setInstallations(writable);
+        if (writable.length === 1) setRepositoryInstallationId(writable[0].id);
       })
       .catch(() => undefined);
     fetchProjects()
@@ -127,7 +128,7 @@ export function ProjectsPage() {
                   <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">GitHub connection (optional)
                     <select value={repositoryInstallationId ?? ''} onChange={(event) => setRepositoryInstallationId(Number(event.target.value) || null)} className="mt-1.5 h-10 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700">
                       <option value="">No repository</option>
-                      {installations.map((installation) => <option key={installation.id} value={installation.id}>{installation.accountLogin}</option>)}
+                      {installations.map((installation) => <option key={installation.id} value={installation.id}>{installation.label}</option>)}
                     </select>
                   </label>
                   <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Repository

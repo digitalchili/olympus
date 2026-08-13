@@ -4,11 +4,14 @@ import type { StudioGitHubRepository } from '../../shared/types.js';
 import {
   consumeGitHubConnectionState,
   createGitHubConnectionState,
+  deleteGitHubInstallation,
   getGitHubInstallation,
   importGitHubProject,
+  listGitHubInstallationProjects,
   listGitHubInstallations,
   listStudioProjects,
   upsertGitHubInstallation,
+  updateGitHubInstallationLabel,
 } from '../db/studio-projects.js';
 
 export interface StudioGitHubGateway {
@@ -25,6 +28,7 @@ export interface StudioGitHubGateway {
     id: number;
     accountLogin: string;
     accountType: 'User' | 'Organization';
+    permissionMode: 'read_write' | 'upgrade_required';
   }>;
   listRepositories(installationId: number): Promise<StudioGitHubRepository[]>;
 }
@@ -138,6 +142,36 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
       path: '/api/studio/github/callback',
     });
     return res.json({ url: options.github.installationUrl(state), method: 'GET', fields: {} });
+  });
+
+  router.patch('/github/installations/:id', (req, res) => {
+    const installationId = positiveSafeInteger(req.params.id);
+    if (!installationId) return res.status(400).json({ error: 'A valid installation id is required.' });
+    try {
+      const installation = updateGitHubInstallationLabel(installationId, req.body?.label, now());
+      if (!installation) return res.status(404).json({ error: 'GitHub installation was not found.' });
+      return res.json({ installation });
+    } catch {
+      return res.status(400).json({ error: 'A valid connection label is required.' });
+    }
+  });
+
+  router.delete('/github/installations/:id', (req, res) => {
+    const installationId = positiveSafeInteger(req.params.id);
+    if (!installationId) return res.status(400).json({ error: 'A valid installation id is required.' });
+    if (!getGitHubInstallation(installationId)) {
+      return res.status(404).json({ error: 'GitHub installation was not found.' });
+    }
+    const projects = listGitHubInstallationProjects(installationId);
+    if (projects.length > 0) {
+      return res.status(409).json({
+        error: 'Disconnect this GitHub account from its Projects first.',
+        code: 'GITHUB_INSTALLATION_IN_USE',
+        projects,
+      });
+    }
+    deleteGitHubInstallation(installationId);
+    return res.status(204).end();
   });
 
   router.get('/github/manifest/callback', async (req, res) => {
@@ -269,7 +303,13 @@ export function createStudioRouter(options: StudioRouterOptions): Router {
       if (!repository) return res.status(404).json({ error: 'Repository is not available to this GitHub installation.' });
       const result = importGitHubProject(installationId, repository, now());
       return res.status(result.created ? 201 : 200).json({ project: result.project });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && /permission upgrade/i.test(error.message)) {
+        return res.status(409).json({
+          error: error.message,
+          code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED',
+        });
+      }
       return res.status(502).json({ error: 'GitHub repository access could not be verified.' });
     }
   });

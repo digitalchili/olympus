@@ -227,6 +227,13 @@ try {
   ensureColumn('tasks', 'project_id', 'TEXT REFERENCES projects(id) ON DELETE SET NULL');
   ensureColumn('tasks', 'handling_profile_id', 'TEXT');
   ensureColumn('tasks', 'delegated_worker_id', 'TEXT');
+  ensureColumn('studio_github_installations', 'label', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('studio_github_installations', 'permission_mode', "TEXT NOT NULL DEFAULT 'upgrade_required'");
+  db.prepare(`
+    UPDATE studio_github_installations
+    SET label = account_login
+    WHERE TRIM(label) = ''
+  `).run();
   db.prepare(`
     UPDATE tasks
     SET handling_profile_id = COALESCE(NULLIF(profile_name, ''), 'default')

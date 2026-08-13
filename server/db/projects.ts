@@ -39,7 +39,7 @@ type RepositoryLinkRow = {
   default_branch: string;
   html_url: string;
   clone_url: string;
-  mode: 'read_only';
+  mode: 'read_only' | 'branch_pr';
   created_at: number;
   updated_at: number;
 };
@@ -287,7 +287,7 @@ export function upsertProjectRepositoryLink(
     INSERT INTO project_repository_links (
       project_id, provider, provider_repository_id, installation_id, owner, full_name,
       private, default_branch, html_url, clone_url, mode, created_at, updated_at
-    ) VALUES (?, 'github', ?, ?, ?, ?, ?, ?, ?, ?, 'read_only', ?, ?)
+    ) VALUES (?, 'github', ?, ?, ?, ?, ?, ?, ?, ?, 'branch_pr', ?, ?)
     ON CONFLICT(project_id) DO UPDATE SET
       provider_repository_id = excluded.provider_repository_id,
       installation_id = excluded.installation_id,
@@ -297,7 +297,7 @@ export function upsertProjectRepositoryLink(
       default_branch = excluded.default_branch,
       html_url = excluded.html_url,
       clone_url = excluded.clone_url,
-      mode = 'read_only',
+      mode = 'branch_pr',
       updated_at = excluded.updated_at
   `).run(
     projectId,

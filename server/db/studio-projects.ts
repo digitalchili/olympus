@@ -11,6 +11,8 @@ type InstallationRow = {
   id: number;
   account_login: string;
   account_type: 'User' | 'Organization';
+  label: string;
+  permission_mode: 'read_write' | 'upgrade_required';
   created_at: number;
   updated_at: number;
 };
@@ -27,7 +29,7 @@ type ProjectRow = {
   default_branch: string;
   html_url: string;
   clone_url: string;
-  mode: 'read_only';
+  mode: 'read_only' | 'branch_pr';
   created_at: number;
   updated_at: number;
 };
@@ -37,6 +39,8 @@ function installationFromRow(row: InstallationRow): StudioGitHubInstallation {
     id: row.id,
     accountLogin: row.account_login,
     accountType: row.account_type,
+    label: row.label,
+    permissionMode: row.permission_mode,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -104,16 +108,18 @@ export function upsertGitHubInstallation(input: {
   id: number;
   accountLogin: string;
   accountType: 'User' | 'Organization';
+  permissionMode: 'read_write' | 'upgrade_required';
 }, now = Date.now()): StudioGitHubInstallation {
   db.prepare(`
     INSERT INTO studio_github_installations (
-      id, account_login, account_type, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?)
+      id, account_login, account_type, label, permission_mode, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       account_login = excluded.account_login,
       account_type = excluded.account_type,
+      permission_mode = excluded.permission_mode,
       updated_at = excluded.updated_at
-  `).run(input.id, input.accountLogin, input.accountType, now, now);
+  `).run(input.id, input.accountLogin, input.accountType, input.accountLogin, input.permissionMode, now, now);
   return getGitHubInstallation(input.id)!;
 }
 
@@ -127,6 +133,38 @@ export function listGitHubInstallations(): StudioGitHubInstallation[] {
   return rows.map(installationFromRow);
 }
 
+export function updateGitHubInstallationLabel(id: number, label: unknown, now = Date.now()): StudioGitHubInstallation | undefined {
+  const normalized = typeof label === 'string' ? label.trim().normalize('NFKC') : '';
+  if (!normalized || normalized.length > 80 || /[\u0000-\u001F\u007F]/.test(normalized)) {
+    throw new Error('A valid connection label is required.');
+  }
+  const result = db.prepare(`
+    UPDATE studio_github_installations
+    SET label = ?, updated_at = ?
+    WHERE id = ?
+  `).run(normalized, now, id);
+  return result.changes === 1 ? getGitHubInstallation(id) : undefined;
+}
+
+export function listGitHubInstallationProjects(id: number): Array<{ id: string; name: string }> {
+  return db.prepare(`
+    SELECT id, name FROM (
+      SELECT p.id AS id, p.name AS name
+      FROM project_repository_links l
+      JOIN projects p ON p.id = l.project_id
+      WHERE l.installation_id = ?
+      UNION
+      SELECT id, name FROM studio_projects WHERE installation_id = ?
+    )
+    ORDER BY name COLLATE NOCASE, id
+  `).all(id, id) as Array<{ id: string; name: string }>;
+}
+
+export function deleteGitHubInstallation(id: number): boolean {
+  if (listGitHubInstallationProjects(id).length > 0) return false;
+  return db.prepare('DELETE FROM studio_github_installations WHERE id = ?').run(id).changes === 1;
+}
+
 export function listStudioProjects(): StudioProject[] {
   const rows = db.prepare('SELECT * FROM studio_projects ORDER BY updated_at DESC').all() as ProjectRow[];
   return rows.map(projectFromRow);
@@ -137,6 +175,10 @@ export function importGitHubProject(
   repository: StudioGitHubRepository,
   now = Date.now(),
 ): { project: StudioProject; created: boolean } {
+  const installation = getGitHubInstallation(installationId);
+  if (!installation || installation.permissionMode !== 'read_write') {
+    throw new Error('GitHub connection requires a read-write permission upgrade');
+  }
   const existing = db.prepare(`
     SELECT * FROM studio_projects
     WHERE provider = 'github' AND provider_repository_id = ?
@@ -169,7 +211,7 @@ export function importGitHubProject(
     INSERT INTO studio_projects (
       id, name, provider, provider_repository_id, installation_id, owner, full_name,
       private, default_branch, html_url, clone_url, mode, created_at, updated_at
-    ) VALUES (?, ?, 'github', ?, ?, ?, ?, ?, ?, ?, ?, 'read_only', ?, ?)
+    ) VALUES (?, ?, 'github', ?, ?, ?, ?, ?, ?, ?, ?, 'branch_pr', ?, ?)
   `).run(
     id,
     repository.name,

@@ -88,8 +88,12 @@ async function verifiedRepositoryLink(
   input: { installationId: number; repositoryId: number },
 ) {
   if (!github) throw Object.assign(new Error('GitHub gateway is not configured'), { statusCode: 503 });
-  if (!getGitHubInstallation(input.installationId)) {
+  const installation = getGitHubInstallation(input.installationId);
+  if (!installation) {
     throw Object.assign(new Error('GitHub installation was not found'), { statusCode: 404 });
+  }
+  if (installation.permissionMode !== 'read_write') {
+    throw Object.assign(new Error('GitHub connection requires a read-write permission upgrade'), { statusCode: 409 });
   }
   const repositories = await github.listRepositories(input.installationId);
   const repository = repositories.find((candidate) => candidate.id === input.repositoryId);
@@ -110,6 +114,7 @@ function sendError(res: Response, error: unknown): Response {
   const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : null;
   const message = error instanceof Error ? error.message : 'Project request failed';
   if (statusCode === 404) return res.status(404).json({ error: message, code: 'PROJECT_REPOSITORY_NOT_FOUND' });
+  if (statusCode === 409 && /permission upgrade/i.test(message)) return res.status(409).json({ error: message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
   if (statusCode === 503) return res.status(503).json({ error: message, code: 'GITHUB_GATEWAY_UNAVAILABLE' });
   if (/UNIQUE constraint failed: project_repository_links\.provider, project_repository_links\.provider_repository_id/i.test(message)) return res.status(409).json({ error: 'Repository is already linked to another Project', code: 'PROJECT_REPOSITORY_LINK_EXISTS' });
   if (/Project reference.*(safe filename|empty|size limit|not supported|does not match|archive|MIME)|unsupported Project reference|exceeds/i.test(message)) {
