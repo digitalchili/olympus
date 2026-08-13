@@ -16,6 +16,10 @@ import { projectFoldersRouter } from './project-folders.js';
 import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { createStudioRouter } from './routes/studio.js';
 import { createProjectsRouter } from './routes/projects.js';
+import { createProjectTaskWorkspaceRouter } from './routes/project-task-workspace.js';
+import { createProjectCpService } from './project-cp.js';
+import { resolveOlympusDataDir } from './paths.js';
+import { resolve } from 'node:path';
 import { createGitHubAppGateway } from './studio/github-app.js';
 import { createGitHubCredentialStore } from './studio/github-credentials.js';
 import { getTask } from './db/queries.js';
@@ -123,16 +127,18 @@ app.use('/api/search', searchRouter);
 
 app.use(express.json());
 
+const studioGitHubGateway = createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() });
+const projectCp = createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts') });
 app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));
 app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));
+app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway }));
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/updates', createUpdatesRouter());
-const studioGitHubGateway = createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() });
-app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway }));
+app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp }));
 app.use('/api/studio', createStudioRouter({
   github: studioGitHubGateway,
   publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,

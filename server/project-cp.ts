@@ -12,8 +12,9 @@ import {
   listProjectVersions,
   recordProjectVersion,
   releaseProjectEditor,
+  transferProjectEditor,
 } from './db/project-cp.js';
-import { updateTask } from './db/queries.js';
+import { getTask, updateTask } from './db/queries.js';
 
 const execFile = promisify(execFileCallback);
 const MAX_DIFF_BYTES = 60_000;
@@ -30,8 +31,26 @@ export interface ProjectGitStatus {
   diff: string;
 }
 
+export interface PrepareProjectTaskInput {
+  projectId: string;
+  taskId: string;
+  profileId: string;
+  repositoryLink: ProjectRepositoryLink;
+  tokenProvider?: InstallationTokenProvider;
+}
+
+export class ProjectRepositoryBusyError extends Error {
+  constructor(
+    public readonly activeTaskId: string,
+    public readonly activeTaskTitle: string,
+  ) {
+    super(`${activeTaskTitle} is currently using this Project repository`);
+  }
+}
+
 export interface ProjectCpService {
-  acquireEditor(input: { projectId: string; taskId: string; profileId: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<ProjectEditorLease>;
+  acquireEditor(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
+  prepareTask(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
   releaseEditor(input: { projectId: string; taskId: string }): Promise<ProjectEditorLease>;
   status(input: { projectId: string; taskId: string }): Promise<ProjectGitStatus>;
   commitPush(input: { projectId: string; taskId: string; repositoryLink: ProjectRepositoryLink; message: string; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
@@ -199,64 +218,134 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     }
   }
 
+  async function syncManagedCheckout(
+    workdir: string,
+    repositoryLink: ProjectRepositoryLink,
+    tokenProvider?: InstallationTokenProvider,
+  ): Promise<void> {
+    const token = await tokenFor(repositoryLink, tokenProvider);
+    const auth = { env: gitHubAuthEnv(token) };
+    const protectedBranch = (await git(workdir, ['branch', '--show-current'])).stdout.trim();
+    if (!protectedBranch || protectedBranch === repositoryLink.defaultBranch) {
+      throw new Error('Managed Project checkout is not on a safe Olympus branch');
+    }
+    const remoteProtected = await git(workdir, ['ls-remote', '--heads', 'origin', `refs/heads/${protectedBranch}`], auth);
+    if (remoteProtected.stdout.trim()) {
+      await git(workdir, ['fetch', 'origin', `refs/heads/${protectedBranch}:refs/remotes/origin/${protectedBranch}`], auth);
+      await git(workdir, ['merge', '--ff-only', `origin/${protectedBranch}`]);
+    }
+    await git(workdir, ['fetch', 'origin', `refs/heads/${repositoryLink.defaultBranch}:refs/remotes/origin/${repositoryLink.defaultBranch}`], auth);
+    try {
+      await git(workdir, ['merge', '--no-edit', `origin/${repositoryLink.defaultBranch}`]);
+    } catch (error) {
+      try {
+        await git(workdir, ['merge', '--abort']);
+      } catch {
+        // A failed merge can exit before MERGE_HEAD exists; preserve the original error.
+      }
+      throw error;
+    }
+  }
+
+  async function acquireEditorUnlocked(
+    input: PrepareProjectTaskInput,
+    optionsOverride: { syncExisting?: boolean } = {},
+  ): Promise<ProjectEditorLease> {
+    if (input.repositoryLink.mode !== 'branch_pr') throw new Error('Project repository is not ready for Commit & Push');
+    const existing = getProjectEditor(input.projectId);
+    if (existing) {
+      if (existing.taskId !== input.taskId) throw new Error('Project already has an editor');
+      await git(existing.workdir, ['rev-parse', '--is-inside-work-tree']);
+      updateTask(input.taskId, { workdir: existing.workdir });
+      return existing;
+    }
+
+    await mkdir(options.rootDir, { recursive: true });
+    const workdir = managedWorkdir(options.rootDir, input.projectId);
+    let checkoutExists = await pathExists(workdir);
+    let branchName: string;
+    let baseSha: string;
+    try {
+      if (checkoutExists) {
+        const { stdout: remoteUrl } = await git(workdir, ['remote', 'get-url', 'origin']);
+        if (remoteUrl.trim() !== input.repositoryLink.cloneUrl) {
+          const status = await git(workdir, ['status', '--porcelain']);
+          if (status.stdout.trim()) throw new Error('Managed Project checkout has uncommitted changes and needs recovery');
+          await rm(workdir, { recursive: true, force: true });
+          checkoutExists = false;
+        }
+      }
+      if (checkoutExists) {
+        const status = await git(workdir, ['status', '--porcelain']);
+        if (status.stdout.trim()) throw new Error('Managed Project checkout has uncommitted changes and needs recovery');
+        branchName = (await git(workdir, ['branch', '--show-current'])).stdout.trim();
+        if (!branchName || branchName === input.repositoryLink.defaultBranch) throw new Error('Managed Project checkout is not on a safe Olympus branch');
+        if (optionsOverride.syncExisting !== false) {
+          await syncManagedCheckout(workdir, input.repositoryLink, input.tokenProvider);
+        }
+      } else {
+        const token = await tokenFor(input.repositoryLink, input.tokenProvider);
+        await git(options.rootDir, ['clone', '--branch', input.repositoryLink.defaultBranch, '--single-branch', input.repositoryLink.cloneUrl, workdir], { env: gitHubAuthEnv(token) });
+        branchName = generatedBranch(input.projectId);
+        await git(workdir, ['checkout', '-b', branchName]);
+      }
+      await ensureIdentity(git, workdir);
+      baseSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+      const lease = acquireProjectEditor({
+        projectId: input.projectId,
+        taskId: input.taskId,
+        profileId: input.profileId,
+        repositoryFullName: input.repositoryLink.fullName,
+        baseBranch: input.repositoryLink.defaultBranch,
+        workdir,
+        branchName,
+        baseSha,
+        leaseToken: randomBytes(24).toString('base64url'),
+        now: now(),
+      });
+      updateTask(input.taskId, { workdir });
+      return lease;
+    } catch (error) {
+      if (!checkoutExists) await rm(workdir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
   return {
     async acquireEditor(input) {
-      return serialized(input.projectId, async () => {
-        if (input.repositoryLink.mode !== 'branch_pr') throw new Error('Project repository is not ready for Commit & Push');
-        const existing = getProjectEditor(input.projectId);
-        if (existing) {
-          if (existing.taskId !== input.taskId) throw new Error('Project already has an editor');
-          await git(existing.workdir, ['rev-parse', '--is-inside-work-tree']);
-          updateTask(input.taskId, { workdir: existing.workdir });
-          return existing;
-        }
+      return serialized(input.projectId, () => acquireEditorUnlocked(input));
+    },
 
-        await mkdir(options.rootDir, { recursive: true });
-        const workdir = managedWorkdir(options.rootDir, input.projectId);
-        let checkoutExists = await pathExists(workdir);
-        let branchName: string;
-        let baseSha: string;
-        try {
-          if (checkoutExists) {
-            const { stdout: remoteUrl } = await git(workdir, ['remote', 'get-url', 'origin']);
-            if (remoteUrl.trim() !== input.repositoryLink.cloneUrl) {
-              const status = await git(workdir, ['status', '--porcelain']);
-              if (status.stdout.trim()) throw new Error('Managed Project checkout has uncommitted changes and needs recovery');
-              await rm(workdir, { recursive: true, force: true });
-              checkoutExists = false;
-            }
+    async prepareTask(input) {
+      return serialized(input.projectId, async () => {
+        const existing = getProjectEditor(input.projectId);
+        if (existing?.taskId === input.taskId) return acquireEditorUnlocked(input);
+        if (existing) {
+          const owner = getTask(existing.taskId);
+          const status = await readStatus(input.projectId, existing.taskId);
+          const canHandOff = status.clean && (owner?.status === 'in_review' || owner?.status === 'done');
+          if (!canHandOff) {
+            throw new ProjectRepositoryBusyError(existing.taskId, owner?.title ?? 'Another task');
           }
-          if (checkoutExists) {
-            const status = await git(workdir, ['status', '--porcelain']);
-            if (status.stdout.trim()) throw new Error('Managed Project checkout has uncommitted changes and needs recovery');
-            branchName = (await git(workdir, ['branch', '--show-current'])).stdout.trim();
-            if (!branchName || branchName === input.repositoryLink.defaultBranch) throw new Error('Managed Project checkout is not on a safe Olympus branch');
-          } else {
-            const token = await tokenFor(input.repositoryLink, input.tokenProvider);
-            await git(options.rootDir, ['clone', '--branch', input.repositoryLink.defaultBranch, '--single-branch', input.repositoryLink.cloneUrl, workdir], { env: gitHubAuthEnv(token) });
-            branchName = generatedBranch(input.projectId);
-            await git(workdir, ['checkout', '-b', branchName]);
-          }
-          await ensureIdentity(git, workdir);
-          baseSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-          const lease = acquireProjectEditor({
+          await syncManagedCheckout(existing.workdir, input.repositoryLink, input.tokenProvider);
+          const branchName = (await git(existing.workdir, ['branch', '--show-current'])).stdout.trim();
+          const baseSha = (await git(existing.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+          return transferProjectEditor({
+            previousLeaseId: existing.id,
+            previousTaskId: existing.taskId,
             projectId: input.projectId,
             taskId: input.taskId,
             profileId: input.profileId,
             repositoryFullName: input.repositoryLink.fullName,
             baseBranch: input.repositoryLink.defaultBranch,
-            workdir,
+            workdir: existing.workdir,
             branchName,
             baseSha,
             leaseToken: randomBytes(24).toString('base64url'),
             now: now(),
           });
-          updateTask(input.taskId, { workdir });
-          return lease;
-        } catch (error) {
-          if (!checkoutExists) await rm(workdir, { recursive: true, force: true });
-          throw error;
         }
+        return acquireEditorUnlocked(input, { syncExisting: false });
       });
     },
 

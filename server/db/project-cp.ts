@@ -180,6 +180,47 @@ export function acquireProjectEditor(input: AcquireProjectEditorInput): ProjectE
   return getProjectEditor(input.projectId)!;
 }
 
+export interface TransferProjectEditorInput extends AcquireProjectEditorInput {
+  previousLeaseId: string;
+  previousTaskId: string;
+}
+
+export function transferProjectEditor(input: TransferProjectEditorInput): ProjectEditorLease {
+  const now = input.now ?? Date.now();
+  const id = uuid();
+  db.transaction(() => {
+    const released = db.prepare(`
+      UPDATE project_editor_leases
+      SET status = 'released', updated_at = ?, released_at = ?
+      WHERE id = ? AND project_id = ? AND task_id = ? AND status = 'active'
+    `).run(now, now, input.previousLeaseId, input.projectId, input.previousTaskId);
+    if (released.changes !== 1) throw new Error('Project repository handoff lost its active lease');
+    db.prepare(`
+      INSERT INTO project_editor_leases (
+        id, project_id, task_id, profile_id, repository_full_name, base_branch,
+        branch_name, workdir, base_sha, status, lease_token, created_at, updated_at, released_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL)
+    `).run(
+      id,
+      requiredText(input.projectId, 'projectId', 120),
+      requiredText(input.taskId, 'taskId', 120),
+      requiredText(input.profileId, 'profileId', 64),
+      requiredText(input.repositoryFullName, 'repositoryFullName', 240),
+      requiredText(input.baseBranch, 'baseBranch', 240),
+      requiredText(input.branchName, 'branchName', 240),
+      requiredText(input.workdir, 'workdir', 1_000),
+      optionalSha(input.baseSha, 'baseSha'),
+      requiredText(input.leaseToken, 'leaseToken', 120),
+      now,
+      now,
+    );
+    db.prepare('UPDATE tasks SET workdir = NULL, updated_at = ? WHERE id = ?').run(now, input.previousTaskId);
+    const bound = db.prepare('UPDATE tasks SET workdir = ?, updated_at = ? WHERE id = ?').run(input.workdir, now, input.taskId);
+    if (bound.changes !== 1) throw new Error('Project repository handoff task was not found');
+  })();
+  return getProjectEditor(input.projectId)!;
+}
+
 export function releaseProjectEditor(input: { leaseId: string; taskId: string; now?: number }): ProjectEditorLease | null {
   const now = input.now ?? Date.now();
   db.prepare(`
