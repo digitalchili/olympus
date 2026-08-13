@@ -64,8 +64,9 @@ assert.match(projectsRoute, /requireProfileProjectAccess\(projectId, actor, 'vie
 assert.match(projectsRoute, /getTask\(run\.taskId\)\?\.project_id === projectId/);
 assert.match(detailSource, /useProjectBoardEvents/);
 assert.doesNotMatch(detailSource, /useStore\(\(state\) => state\.taskRuns\)/);
-assert.match(boardSource, /aria-label="Project filter"/);
-assert.match(boardSource, /task\.project_id === locationFilter/);
-assert.match(boardSource, /selectedProject\.managerProfileId/);
+assert.doesNotMatch(boardSource, /aria-label="Project filter"/);
+assert.doesNotMatch(boardSource, /locationFilter/);
+assert.match(boardSource, /tasks=\{tasks\}/);
+assert.match(boardSource, /Every task you can access/);
 
 console.log('Project-scoped live task and run event tests passed');

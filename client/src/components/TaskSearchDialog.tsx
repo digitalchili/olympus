@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import type { ProjectSummary } from '@shared/types';
 import { fetchProjects, searchTasks, type TaskSearchResult } from '../lib/api';
 import { toWithProfile } from '../lib/profileQuery';
+import { projectTaskPath } from '../lib/projectTaskPresentation';
 
 function roleLabel(role: TaskSearchResult['role']): string {
   return role === 'task' ? 'Task' : role.charAt(0).toUpperCase() + role.slice(1);
@@ -36,7 +37,8 @@ export function TaskSearchDialog({ open, onClose }: { open: boolean; onClose: ()
   const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const openResult = useCallback((result: TaskSearchResult) => {
-    navigate(toWithProfile(`/tasks/${result.taskId}`, result.handlingProfileId));
+    const resultProject = result.projectId ? { id: result.projectId } : undefined;
+    navigate(toWithProfile(projectTaskPath({ id: result.taskId, project_id: result.projectId }, resultProject), result.handlingProfileId));
     onClose();
   }, [navigate, onClose]);
 

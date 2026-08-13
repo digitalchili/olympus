@@ -50,7 +50,7 @@ export function usePageHeader(config: PageHeaderConfig) {
 
 function HeaderCrumbs({ crumbs }: { crumbs: PageHeaderCrumb[] }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+    <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm font-medium">
       {crumbs.map((crumb, index) => (
         <div key={`${crumb.label}:${index}`} className="flex min-w-0 items-center gap-2">
           {index > 0 && <ChevronRight size={14} className="shrink-0 text-zinc-300 dark:text-zinc-700" />}
@@ -63,15 +63,16 @@ function HeaderCrumbs({ crumbs }: { crumbs: PageHeaderCrumb[] }) {
           )}
         </div>
       ))}
-    </div>
+    </nav>
   );
 }
 
 export function Header() {
   const location = useLocation();
   const pageHeader = useContext(PageHeaderEntryContext)?.config ?? null;
-  const match = useMatch('/tasks/:taskId');
-  const taskId = match?.params.taskId;
+  const directTaskMatch = useMatch('/tasks/:taskId');
+  const projectTaskMatch = useMatch('/projects/:projectId/tasks/:taskId');
+  const taskId = directTaskMatch?.params.taskId ?? projectTaskMatch?.params.taskId;
   const task = useStore((s) => taskId ? s.tasks.find((t) => t.id === taskId) : null);
 
   const isSettings = location.pathname === '/settings';
@@ -84,10 +85,10 @@ export function Header() {
   const isProjectDetail = /^\/projects\/[^/]+$/.test(location.pathname);
   const isProjectTask = isNewTask && new URLSearchParams(location.search).has('project');
 
-  let title = 'All Tasks';
+  let title = 'Tasks';
   let showParent = false;
   let truncate = false;
-  let parentTitle = 'All Tasks';
+  let parentTitle = 'Tasks';
   let parentTo = '/';
 
   if (isSettings) {

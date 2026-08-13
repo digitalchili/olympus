@@ -8,21 +8,34 @@ const column = await readFile('client/src/components/Column.tsx', 'utf8');
 const card = await readFile('client/src/components/TaskCard.tsx', 'utf8');
 const detail = await readFile('client/src/components/ProjectDetailPage.tsx', 'utf8');
 const newTask = await readFile('client/src/components/NewTaskPage.tsx', 'utf8');
+const app = await readFile('client/src/App.tsx', 'utf8');
+const taskDetail = await readFile('client/src/components/TaskDetailPage.tsx', 'utf8');
+const profileContext = await readFile('client/src/contexts/ProfileContext.tsx', 'utf8');
+const taskCard = await readFile('client/src/components/TaskCard.tsx', 'utf8');
 
 assert.match(sidebar, /FolderKanban/);
-assert.match(sidebar, /label="All Tasks"/);
-assert.doesNotMatch(sidebar, /label="Tasks"/);
-assert.match(header, /let title = 'All Tasks'/);
+assert.match(sidebar, /label="Tasks"/);
+assert.doesNotMatch(sidebar, /label="All Tasks"/);
+assert.match(header, /let title = 'Tasks'/);
+assert.doesNotMatch(header, /All Tasks/);
+assert.match(header, /<nav aria-label="Breadcrumb"/);
+assert.match(app, /path="\/projects\/:projectId\/tasks\/:taskId" element=\{<TaskDetailPage \/>\}/);
+assert.match(taskDetail, /task\.project_id === projectId/);
+assert.match(taskDetail, /fetchProject\(projectId, activeProfileId\)/);
+assert.match(taskDetail, /if \(!projectId \|\| !task \|\| task\.project_id !== projectId\)/);
+assert.match(profileContext, /\^\\\/projects\\\/\[\^\/\]\+\\\/tasks\\\/\[\^\/\]\+\$/);
+assert.match(taskCard, /to=\{`\/projects\/\$\{encodeURIComponent\(project\.id\)\}`\}/);
+assert.match(taskDetail, /replace: true/);
 
-assert.match(board, /Inbox and Project tasks you can access/);
+assert.match(board, /Every task you can access/);
 assert.match(board, /projectById=/);
 assert.match(board, /showTaskLocation/);
 assert.match(column, /showTaskLocation/);
 assert.match(column, /project=\{task\.project_id \? projectById\?\.get\(task\.project_id\) : undefined\}/);
-assert.match(card, /Inbox/);
-assert.match(card, /to=\{`\/projects\/\$\{project\.id\}`\}/);
-assert.match(card, /Project location/);
-assert.match(card, /task\.project_id \? 'Project' : 'Inbox'/);
+assert.doesNotMatch(card, /Inbox/);
+assert.match(card, /projectTaskPath/);
+assert.match(card, /projectChipClasses/);
+assert.match(card, /Project: \$\{project\.name\}/);
 
 for (const tab of ['Board', 'References', 'Activity', 'Settings']) {
   assert.match(detail, new RegExp(`>${tab}<`));
@@ -64,10 +77,17 @@ assert.match(detail, /referenceUploadLock\.current/);
 assert.match(detail, /className="peer sr-only"/);
 
 assert.match(newTask, /const projectLocked = Boolean\(initialProjectId\)/);
-assert.match(newTask, /disabled=\{projectLocked\}/);
-assert.match(newTask, /This task belongs to/);
+assert.match(newTask, /disabled=\{projectLocked \|\| isCreating\}/);
 assert.match(newTask, /Future tasks use the Project manager policy/);
 assert.match(newTask, /projectSelectionPending/);
 assert.match(newTask, /Waiting for Project/);
+assert.match(newTask, /aria-label="Project"/);
+assert.match(newTask, /aria-label="Profile"/);
+assert.match(newTask, /<option value="">No project<\/option>/);
+assert.doesNotMatch(newTask, /Location\s*<select/);
+assert.doesNotMatch(newTask, /<option value="">Inbox<\/option>/);
+assert.doesNotMatch(newTask, /Handled by/);
+assert.doesNotMatch(newTask, /ProjectFolderPicker/);
+assert.match(newTask, /max-w-4xl/);
 
 console.log('Projects information architecture UI tests passed');

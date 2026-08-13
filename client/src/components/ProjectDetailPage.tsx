@@ -354,7 +354,7 @@ export function ProjectDetailPage() {
           {activeTab === 'board' && (
             <main className="min-w-0">
               <div className="mb-3"><h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Project tasks</h2><p className="mt-1 text-xs text-zinc-500">Only tasks belonging to {project.name} appear here.</p></div>
-              <TaskKanban tasks={tasks} taskRuns={taskRuns} createTaskTo={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} onMoveTask={moveProjectTask} onDeleteTask={deleteProjectTask} className="flex min-h-[420px] gap-4 overflow-x-auto rounded-xl border border-zinc-200 bg-white p-4 sm:gap-6 dark:border-zinc-800 dark:bg-zinc-900" />
+              <TaskKanban tasks={tasks} taskRuns={taskRuns} createTaskTo={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} onMoveTask={moveProjectTask} onDeleteTask={deleteProjectTask} projectById={new Map([[project.id, project]])} className="flex min-h-[420px] gap-4 overflow-x-auto rounded-xl border border-zinc-200 bg-white p-4 sm:gap-6 dark:border-zinc-800 dark:bg-zinc-900" />
             </main>
           )}
 

@@ -84,7 +84,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     // Task IDs (and their messages) are profile-scoped. Retaining a task-detail
     // URL after a profile switch asks the new profile for an ID it cannot own and
     // leaves the board looking empty until the user navigates manually.
-    const isTaskDetail = /^\/tasks\/[^/]+$/.test(location.pathname);
+    const isTaskDetail = /^\/tasks\/[^/]+$/.test(location.pathname)
+      || /^\/projects\/[^/]+\/tasks\/[^/]+$/.test(location.pathname);
     navigate({
       pathname: isTaskDetail ? '/' : location.pathname,
       search: searchWithProfile(location.search, profileId),

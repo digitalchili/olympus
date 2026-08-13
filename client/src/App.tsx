@@ -34,6 +34,7 @@ function AppShell() {
             <Route path="/" element={<Board />} />
             <Route path="/tasks/new" element={<NewTaskPage />} />
             <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
+            <Route path="/projects/:projectId/tasks/:taskId" element={<TaskDetailPage />} />
             <Route path="/cron" element={<ProfileNavigate to="/scheduled-tasks" replace />} />
             <Route path="/scheduled-tasks" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/new" element={<ScheduledTasksPage />} />

@@ -14,6 +14,7 @@ const studio = await readFile('client/src/components/StudioProjectsPage.tsx', 'u
 
 assert.match(app, /path="\/projects" element=\{<ProjectsPage \/>\}/);
 assert.match(app, /path="\/projects\/:projectId" element=\{<ProjectDetailPage \/>\}/);
+assert.match(app, /path="\/projects\/:projectId\/tasks\/:taskId" element=\{<TaskDetailPage \/>\}/);
 assert.match(sidebar, /label="Projects"[\s\S]*to="\/projects"/);
 assert.match(header, /isProjects/);
 assert.match(header, /parentTitle = 'Projects'/);
@@ -51,9 +52,15 @@ assert.match(settings, /GitHubSettings/);
 assert.match(githubSettings, /GitHub connections/);
 assert.match(githubSettings, /Credentials are managed only here/);
 assert.match(studio, /Navigate to="\/settings#github" replace/);
-assert.match(newTask, /Location/);
-assert.match(newTask, /Inbox/);
-assert.match(newTask, /Handled by/);
+assert.match(newTask, /aria-label="Project"/);
+assert.match(newTask, /No project/);
+assert.doesNotMatch(newTask, /Location\s*<select/);
+assert.doesNotMatch(newTask, /<option value="">Inbox<\/option>/);
+assert.match(newTask, /aria-label="Profile"/);
+assert.doesNotMatch(newTask, /Handled by/);
+assert.doesNotMatch(newTask, /ProjectFolderPicker/);
+assert.match(newTask, /max-w-4xl/);
+assert.match(newTask, /flex-wrap/);
 assert.match(newTask, /Future tasks use the Project manager policy/);
 assert.match(api, /export function fetchProjects\(/);
 assert.match(api, /export function createProject\(/);

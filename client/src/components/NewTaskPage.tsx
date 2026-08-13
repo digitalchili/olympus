@@ -1,9 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { ArrowUp, Loader2 } from 'lucide-react';
+import { ArrowUp, FolderKanban, Loader2, UserRound } from 'lucide-react';
 import { InputToolbar } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, UploadErrorBar } from './ChatAttachments';
-import { ProjectFolderPicker } from './ProjectFolderPicker';
 import { createTask, fetchHermesProfiles, fetchProjects, type HermesProfile } from '../lib/api';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
@@ -43,7 +42,6 @@ export function NewTaskPage() {
   const [input, setInput] = useState(initialDraftRef.current);
   const [runMode, setRunMode] = useState<ChatRunMode>('task');
   const [isCreating, setIsCreating] = useState(false);
-  const [workdir, setWorkdir] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId);
   const [inboxHandlerId, setInboxHandlerId] = useState(activeProfileId);
@@ -143,13 +141,16 @@ export function NewTaskPage() {
     setUploadError(null);
     try {
       const description = text || pendingFiles.map((f) => f.file.name).join(', ');
-      const { task } = await createTask(description, undefined, workdir, {
+      const { task } = await createTask(description, undefined, null, {
         projectId: selectedProject?.id ?? null,
         handlingProfileId: selectedProject ? null : handlerProfileId,
         routingProfileId: handlerProfileId,
       });
       const initialMessage = submitWithAttachments(text);
-      navigate(toWithProfile(`/tasks/${task.id}`, task.handling_profile_id ?? handlerProfileId), {
+      const taskPath = selectedProject
+        ? `/projects/${encodeURIComponent(selectedProject.id)}/tasks/${encodeURIComponent(task.id)}`
+        : `/tasks/${encodeURIComponent(task.id)}`;
+      navigate(toWithProfile(taskPath, task.handling_profile_id ?? handlerProfileId), {
         state: {
           initialMessage,
           initialSettings: selectedProject
@@ -162,7 +163,7 @@ export function NewTaskPage() {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, submitWithAttachments, setUploadError, workdir]);
+  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, submitWithAttachments, setUploadError]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -235,46 +236,7 @@ export function NewTaskPage() {
         What do you need done?
       </h1>
 
-      <div className="w-full max-w-2xl">
-        <div className="mb-3 grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900 sm:grid-cols-2">
-          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
-            Location
-            <select
-              value={selectedProjectId}
-              disabled={projectLocked}
-              onChange={(event) => setSelectedProjectId(event.target.value)}
-              className="mt-1.5 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-2.5 text-sm disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-500 dark:border-zinc-700 dark:disabled:bg-zinc-950"
-            >
-              <option value="">Inbox</option>
-              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-            </select>
-          </label>
-          {selectedProject ? (
-            <div className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
-              Handled by
-              <div className="mt-1.5 flex h-9 items-center rounded-lg border border-zinc-200 px-2.5 text-sm font-normal dark:border-zinc-700">
-                {selectedProject.manager.displayName}
-              </div>
-              <p className="mt-1 text-[11px] font-normal text-zinc-400">Future tasks use the Project manager policy</p>
-            </div>
-          ) : (
-            <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
-              Handled by
-              <select
-                value={inboxHandlerId}
-                onChange={(event) => setInboxHandlerId(event.target.value)}
-                className="mt-1.5 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-2.5 text-sm dark:border-zinc-700"
-              >
-                {allProfiles.filter((profile) => profile.active).map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName}</option>)}
-              </select>
-            </label>
-          )}
-        </div>
-        {projectLocked && selectedProject && (
-          <p className="mb-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
-            This task belongs to <span className="font-semibold">{selectedProject.name}</span>. Its handler is derived from the Project manager.
-          </p>
-        )}
+      <div className="w-full max-w-4xl">
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 shadow-sm">
           <ProfileInviteControls
             selected={selectedProfiles}
@@ -305,10 +267,43 @@ export function NewTaskPage() {
           />
           <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} />
           {uploadError && <UploadErrorBar error={uploadError} onDismiss={() => setUploadError(null)} />}
-          <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
-            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <div className="flex items-end justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               <AttachButton onFiles={addFiles} disabled={isCreating} />
-              <ProjectFolderPicker value={workdir} onChange={setWorkdir} disabled={isCreating} />
+              <label className="inline-flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                <FolderKanban size={14} className="shrink-0" />
+                <span className="shrink-0">Project</span>
+                <select
+                  aria-label="Project"
+                  value={selectedProjectId}
+                  disabled={projectLocked || isCreating}
+                  onChange={(event) => setSelectedProjectId(event.target.value)}
+                  className="min-w-0 max-w-40 bg-transparent text-xs font-medium outline-none disabled:cursor-not-allowed disabled:text-zinc-400 sm:max-w-52"
+                >
+                  <option value="">No project</option>
+                  {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+              </label>
+              <label
+                title={selectedProject ? 'Future tasks use the Project manager policy' : 'Choose the Profile that will handle this task'}
+                className="inline-flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              >
+                <UserRound size={14} className="shrink-0" />
+                <span className="shrink-0">Profile</span>
+                <select
+                  aria-label="Profile"
+                  value={handlerProfileId}
+                  disabled={Boolean(selectedProject) || isCreating}
+                  onChange={(event) => setInboxHandlerId(event.target.value)}
+                  className="min-w-0 max-w-32 bg-transparent text-xs font-medium outline-none disabled:cursor-not-allowed disabled:text-zinc-400 sm:max-w-44"
+                >
+                  {selectedProject ? (
+                    <option value={selectedProject.managerProfileId}>{selectedProject.manager.displayName}</option>
+                  ) : (
+                    allProfiles.filter((profile) => profile.active).map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName}</option>)
+                  )}
+                </select>
+              </label>
               <InputToolbar
                 model={model}
                 provider={provider}

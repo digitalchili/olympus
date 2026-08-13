@@ -151,8 +151,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
           />
           <SidebarLink
             icon={<Columns3 size={18} />}
-            label="All Tasks"
-            mobileLabel="Tasks"
+            label="Tasks"
             to="/"
             active={isActive('/')}
             collapsed={desktopCollapsed}

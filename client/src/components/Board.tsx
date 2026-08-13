@@ -269,7 +269,6 @@ export function Board() {
   const { activeProfileId } = useProfile();
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [locationFilter, setLocationFilter] = useState('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -290,19 +289,8 @@ export function Board() {
     return () => { cancelled = true; };
   }, []);
 
-  const visibleTasks = useMemo(() => {
-    if (locationFilter === 'all') return tasks;
-    if (locationFilter === 'inbox') return tasks.filter((task) => !task.project_id);
-    return tasks.filter((task) => task.project_id === locationFilter);
-  }, [locationFilter, tasks]);
-  const selectedProject = projects.find((project) => project.id === locationFilter);
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
-  const createTaskTo = selectedProject
-    ? toWithProfile(
-        { pathname: '/tasks/new', search: `?project=${encodeURIComponent(selectedProject.id)}` },
-        selectedProject.managerProfileId,
-      )
-    : toWithProfile('/tasks/new', activeProfileId);
+  const createTaskTo = toWithProfile('/tasks/new', activeProfileId);
 
   async function handleMoveTask(task: Task, status: TaskStatus): Promise<Task> {
     const profileId = task.handling_profile_id ?? task.profile_name ?? activeProfileId;
@@ -320,16 +308,11 @@ export function Board() {
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <RecurringSummaryStrip scheduledTasks={scheduledTasks} />
-      <div className="mx-3 mt-3 flex items-center justify-between gap-3 sm:mx-6 sm:mt-4">
-        <p className="flex min-w-0 items-center gap-2 truncate text-xs text-zinc-500"><FolderKanban size={14} className="shrink-0" /> Inbox and Project tasks you can access</p>
-        <select aria-label="Project filter" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)} className="h-8 max-w-64 rounded-lg border border-zinc-200 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-          <option value="all">All tasks</option>
-          <option value="inbox">Inbox</option>
-          {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-        </select>
+      <div className="mx-3 mt-3 sm:mx-6 sm:mt-4">
+        <p className="flex min-w-0 items-center gap-2 truncate text-xs text-zinc-500"><FolderKanban size={14} className="shrink-0" /> Every task you can access</p>
       </div>
       <TaskKanban
-        tasks={visibleTasks}
+        tasks={tasks}
         taskRuns={taskRuns}
         createTaskTo={createTaskTo}
         onMoveTask={handleMoveTask}

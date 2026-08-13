@@ -152,6 +152,7 @@ export function createTask(
 
 export interface TaskSearchResult {
   taskId: string;
+  projectId: string | null;
   handlingProfileId: string;
   taskTitle: string;
   taskStatus: TaskStatus;
@@ -272,9 +273,12 @@ export function createProject(input: { name: string; purpose: string; managerPro
   }, false);
 }
 
-export function fetchProject(projectId: string) {
+export function fetchProject(projectId: string, profileId?: string | null) {
+  const path = profileId
+    ? apiPathWithProfile(`/projects/${encodeURIComponent(projectId)}`, profileId)
+    : `/projects/${encodeURIComponent(projectId)}`;
   return request<{ project: ProjectSummary; managerHistory: ProjectManagerHistoryEntry[] }>(
-    `/projects/${encodeURIComponent(projectId)}`,
+    path,
     undefined,
     false,
   );

@@ -16,6 +16,7 @@ const MAX_TASK_IDS_PER_QUERY = 900;
 
 export type TaskSearchResult = {
   taskId: string;
+  projectId: string | null;
   handlingProfileId: string;
   taskTitle: string;
   taskStatus: string;
@@ -45,6 +46,7 @@ export function taskMetadataMatches(query: string, tasks: Task[]): TaskSearchRes
     .slice(0, MAX_RESULTS)
     .map((task) => ({
       taskId: task.id,
+      projectId: task.project_id,
       handlingProfileId: task.handling_profile_id ?? task.profile_name ?? 'default',
       taskTitle: task.title,
       taskStatus: task.status,
@@ -90,6 +92,7 @@ export function searchHermesMessages(query: string, tasks: Task[], hermesHome: s
       const task = taskById.get(row.task_id);
       return task ? [{
         taskId: task.id,
+        projectId: task.project_id,
         handlingProfileId: task.handling_profile_id ?? task.profile_name ?? 'default',
         taskTitle: task.title,
         taskStatus: task.status,

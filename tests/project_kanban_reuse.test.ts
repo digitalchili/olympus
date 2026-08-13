@@ -19,7 +19,7 @@ assert.doesNotMatch(detail, /\[\['Active', grouped\.active\]/);
 assert.match(column, /createTaskTo/);
 assert.match(column, /onMoveTask/);
 assert.match(column, /onDeleteTask/);
-assert.match(card, /toWithProfile\(`\/tasks\/\$\{task\.id\}`/);
+assert.match(card, /projectTaskPath\(task, project\)/);
 assert.match(card, /task\.handling_profile_id \?\? task\.profile_name/);
 assert.match(menu, /onMoveTask/);
 assert.match(menu, /onDeleteTask/);
