@@ -29,6 +29,7 @@ async function profile(id: string, displayName: string) {
 }
 
 await profile('default', 'Default Builder');
+await profile('writer', 'Contributing Writer');
 
 try {
   const seed = join(root, 'seed');
@@ -43,6 +44,7 @@ try {
 
   const { LocalProfileRegistry } = await import('../server/local-profiles.js');
   const { createProjectCpService } = await import('../server/project-cp.js');
+  const { grantProjectProfileAccess } = await import('../server/db/projects.js');
   const { createProjectsRouter } = await import('../server/routes/projects.js');
   const { upsertGitHubInstallation } = await import('../server/db/studio-projects.js');
   const { insertTask } = await import('../server/db/queries.js');
@@ -115,9 +117,22 @@ try {
   const projectId = String((createdResponse.body.project as Record<string, unknown>).id);
   const task = insertTask({ title: 'Editor task', description: 'Make a change', status: 'in_progress', project_id: projectId, handling_profile_id: 'default', profile_name: 'default' });
   const otherTask = insertTask({ title: 'Plan task', description: 'Plan only', status: 'in_progress', project_id: projectId, handling_profile_id: 'default', profile_name: 'default' });
+  grantProjectProfileAccess({ projectId, profileId: 'writer', role: 'contribute', grantedBy: 'test' });
+
+  const crossProfileAcquire = await call(`/api/projects/${projectId}/editor/acquire?profile=writer`, 'POST', { taskId: task.id });
+  assert.equal(crossProfileAcquire.status, 404, 'a profile contributor cannot take over another profile handler\'s task');
 
   const acquired = await call(`/api/projects/${projectId}/editor/acquire`, 'POST', { taskId: task.id });
   assert.equal(acquired.status, 200);
+  for (const [path, method, body] of [
+    [`/api/projects/${projectId}/editor/status?taskId=${task.id}&profile=writer`, 'GET', undefined],
+    [`/api/projects/${projectId}/editor/release?profile=writer`, 'POST', { taskId: task.id }],
+    [`/api/projects/${projectId}/commit-push?profile=writer`, 'POST', { taskId: task.id, message: 'Unauthorized checkpoint' }],
+    [`/api/projects/${projectId}/versions/missing/revert?profile=writer`, 'POST', { taskId: task.id }],
+  ] as const) {
+    const crossProfileOperation = await call(path, method, body);
+    assert.equal(crossProfileOperation.status, 404, `${method} ${path} stays bound to the task handler`);
+  }
   const repositoryChangeBlocked = await call(`/api/projects/${projectId}`, 'PATCH', { repositoryLink: null });
   assert.equal(repositoryChangeBlocked.status, 409, 'linked repository cannot change while a Project editor is active');
   assert.equal(repositoryChangeBlocked.body.code, 'PROJECT_COMMIT_PUSH_BLOCKED');

@@ -171,6 +171,14 @@ function requireProjectTask(projectId: string, taskId: string) {
   return task;
 }
 
+function requireProjectEditorTask(req: Request, registry: LocalProfileRegistry, projectId: string, taskId: string) {
+  const task = requireProjectTask(projectId, taskId);
+  const actor = profileActor(req, registry);
+  const handler = task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME;
+  if (actor && actor !== handler) throw new ProjectAccessError();
+  return task;
+}
+
 function requireWriteRepository(projectId: string): ProjectRepositoryLink {
   const repositoryLink = getProjectRepositoryLink(projectId);
   if (!repositoryLink || repositoryLink.mode !== 'branch_pr') {
@@ -480,7 +488,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = taskIdFromBody(req.body);
-      const task = requireProjectTask(projectId, taskId);
+      const task = requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
       const editor = await projectCp.acquireEditor({
         projectId,
@@ -512,7 +520,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = typeof req.query.taskId === 'string' ? req.query.taskId.trim() : '';
       if (!taskId) return res.status(400).json({ error: 'taskId is required', code: 'INVALID_PROJECT_REQUEST' });
-      requireProjectTask(projectId, taskId);
+      requireProjectEditorTask(req, registry, projectId, taskId);
       const status = await projectCp.status({ projectId, taskId });
       return res.json({ status });
     } catch (error) {
@@ -525,7 +533,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = taskIdFromBody(req.body);
-      requireProjectTask(projectId, taskId);
+      requireProjectEditorTask(req, registry, projectId, taskId);
       const editor = await projectCp.releaseEditor({ projectId, taskId });
       return res.json({ editor: publicEditor(editor) });
     } catch (error) {
@@ -538,7 +546,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = taskIdFromBody(req.body);
-      requireProjectTask(projectId, taskId);
+      requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
       const message = typeof req.body?.message === 'string' ? req.body.message : '';
       const version = await projectCp.commitPush({
@@ -569,7 +577,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = taskIdFromBody(req.body);
-      requireProjectTask(projectId, taskId);
+      requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
       const version = await projectCp.revert({
         projectId,
