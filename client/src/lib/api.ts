@@ -40,8 +40,10 @@ import type {
   ProfileBuilderSuggestion,
   PersistentCollaborationGrant,
   ProjectAccessRole,
+  PublicProjectEditorLease,
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
+  ProjectVersion,
   ProjectReferenceChunk,
   ProjectReferenceListItem,
   ProjectReferenceSearchResult,
@@ -345,6 +347,55 @@ export function fetchProjectTasks(projectId: string) {
   return request<{ tasks: Task[] }>(
     `/projects/${encodeURIComponent(projectId)}/tasks`,
     undefined,
+    false,
+  );
+}
+
+export interface ProjectGitStatus {
+  clean: boolean;
+  changedFiles: string[];
+  summary: string;
+  diff: string;
+}
+
+export function fetchProjectEditor(projectId: string) {
+  return request<{ editor: PublicProjectEditorLease | null }>(`/projects/${encodeURIComponent(projectId)}/editor`, undefined, false);
+}
+
+export function acquireProjectEditor(projectId: string, taskId: string) {
+  return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/acquire`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
+export function releaseProjectEditor(projectId: string, taskId: string) {
+  return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/release`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
+export function fetchProjectEditorStatus(projectId: string, taskId: string) {
+  return request<{ status: ProjectGitStatus }>(
+    `/projects/${encodeURIComponent(projectId)}/editor/status?taskId=${encodeURIComponent(taskId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function fetchProjectVersions(projectId: string) {
+  return request<{ versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/versions`, undefined, false);
+}
+
+export function commitPushProject(projectId: string, taskId: string, message: string) {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/commit-push`, {
+    method: 'POST', body: JSON.stringify({ taskId, message }),
+  }, false);
+}
+
+export function revertProjectVersion(projectId: string, taskId: string, versionId: string) {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(
+    `/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/revert`,
+    { method: 'POST', body: JSON.stringify({ taskId }) },
     false,
   );
 }

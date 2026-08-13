@@ -12,6 +12,7 @@ import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
 import { cancelTaskRunForDeletion } from '../task-run-lifecycle.js';
 import { listDelegationRuns } from '../db/delegations.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
+import { getActiveProjectEditorForTask } from '../db/project-cp.js';
 
 export const tasksRouter = Router();
 const requireTask = requireTaskForProfile(getTask);
@@ -179,6 +180,12 @@ tasksRouter.post('/:id/viewed', requireTask, (_req, res) => {
 
 tasksRouter.delete('/:id', requireTask, async (_req, res) => {
   const task = res.locals.task as Task;
+  if (getActiveProjectEditorForTask(task.id)) {
+    return res.status(409).json({
+      error: 'Release the Project editor before deleting this task',
+      code: 'PROJECT_EDITOR_ACTIVE',
+    });
+  }
   await cancelTaskRunForDeletion(task, adapter);
   discardRun(task.id);
   closeSubscribersForTasks([task.id]);

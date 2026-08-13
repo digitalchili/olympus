@@ -3,7 +3,8 @@ import multer from 'multer';
 import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { v4 as uuid } from 'uuid';
-import type { Project, ProjectAccessRole, ProjectRepositoryLink } from '../../shared/types.js';
+import type { Project, ProjectAccessRole, ProjectEditorLease, ProjectRepositoryLink, ProjectVersion } from '../../shared/types.js';
+import { DEFAULT_PROFILE_NAME } from '../../shared/types.js';
 import {
   createProject,
   createProjectWithRepository,
@@ -37,6 +38,8 @@ import {
 } from '../project-access.js';
 import type { StudioGitHubGateway } from './studio.js';
 import { getGitHubInstallation } from '../db/studio-projects.js';
+import { createProjectCpService, type ProjectCpService } from '../project-cp.js';
+import { getProjectEditor, listProjectVersions } from '../db/project-cp.js';
 import {
   PROJECT_REFERENCE_MAX_BYTES,
   createProjectReferenceFromQuarantine,
@@ -49,13 +52,14 @@ import {
   searchProjectReferences,
   validateProjectReferenceCandidate,
 } from '../db/project-references.js';
-import { resolveProjectReferencesDir } from '../paths.js';
+import { resolveProjectReferencesDir, resolveOlympusDataDir } from '../paths.js';
 
 interface ProjectsRouterOptions {
   registry?: LocalProfileRegistry;
   now?: () => number;
   changedBy?: string;
   github?: StudioGitHubGateway;
+  projectCp?: ProjectCpService;
 }
 
 type ManagerProjection = {
@@ -113,14 +117,19 @@ function sendError(res: Response, error: unknown): Response {
   }
   const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : null;
   const message = error instanceof Error ? error.message : 'Project request failed';
-  if (statusCode === 404) return res.status(404).json({ error: message, code: 'PROJECT_REPOSITORY_NOT_FOUND' });
+  if (statusCode === 400) return res.status(400).json({ error: message, code: 'INVALID_PROJECT_REQUEST' });
+  if (statusCode === 404) return res.status(404).json({ error: message, code: /task/i.test(message) ? 'PROJECT_TASK_NOT_FOUND' : 'PROJECT_REPOSITORY_NOT_FOUND' });
   if (statusCode === 409 && /permission upgrade/i.test(message)) return res.status(409).json({ error: message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
+  if (statusCode === 409) return res.status(409).json({ error: message, code: 'PROJECT_COMMIT_PUSH_BLOCKED' });
   if (statusCode === 503) return res.status(503).json({ error: message, code: 'GITHUB_GATEWAY_UNAVAILABLE' });
   if (/UNIQUE constraint failed: project_repository_links\.provider, project_repository_links\.provider_repository_id/i.test(message)) return res.status(409).json({ error: 'Repository is already linked to another Project', code: 'PROJECT_REPOSITORY_LINK_EXISTS' });
   if (/Project reference.*(safe filename|empty|size limit|not supported|does not match|archive|MIME)|unsupported Project reference|exceeds/i.test(message)) {
     return res.status(400).json({ error: message, code: 'PROJECT_REFERENCE_REJECTED' });
   }
   if (/Project reference not found/i.test(message)) return res.status(404).json({ error: 'Project reference not found', code: 'PROJECT_REFERENCE_NOT_FOUND' });
+  if (/not the Project editor|already has an editor|no changes|Commit or discard|not ready for Commit & Push|will not push directly|version not found/i.test(message)) {
+    return res.status(/version not found/i.test(message) ? 404 : 409).json({ error: message, code: 'PROJECT_COMMIT_PUSH_BLOCKED' });
+  }
   if (/Project not found/i.test(message)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
   if (/already exists/i.test(message)) return res.status(409).json({ error: message, code: 'PROJECT_NAME_EXISTS' });
   if (/required|too long|invalid control|invalid.*role/i.test(message)) return res.status(400).json({ error: message, code: 'INVALID_PROJECT' });
@@ -145,6 +154,43 @@ function requireProjectRouteAccess(req: Request, registry: LocalProfileRegistry,
   if (!getProject(projectId)) throw new Error('Project not found');
   const actor = profileActor(req, registry);
   if (actor) requireProfileProjectAccess(projectId, actor, role);
+}
+
+function taskIdFromBody(body: unknown): string {
+  if (!body || typeof body !== 'object' || typeof (body as Record<string, unknown>).taskId !== 'string') {
+    throw Object.assign(new Error('taskId is required'), { statusCode: 400 });
+  }
+  const taskId = ((body as Record<string, unknown>).taskId as string).trim();
+  if (!taskId) throw Object.assign(new Error('taskId is required'), { statusCode: 400 });
+  return taskId;
+}
+
+function requireProjectTask(projectId: string, taskId: string) {
+  const task = getTask(taskId);
+  if (!task || task.project_id !== projectId) throw Object.assign(new Error('Project task not found'), { statusCode: 404 });
+  return task;
+}
+
+function requireWriteRepository(projectId: string): ProjectRepositoryLink {
+  const repositoryLink = getProjectRepositoryLink(projectId);
+  if (!repositoryLink || repositoryLink.mode !== 'branch_pr') {
+    throw Object.assign(new Error('Connect a write-ready GitHub repository before using Commit & Push'), { statusCode: 409 });
+  }
+  return repositoryLink;
+}
+
+function tokenProvider(github: StudioGitHubGateway | undefined) {
+  if (!github?.installationToken) return undefined;
+  return (installationId: number) => github.installationToken!(installationId);
+}
+
+function publicEditor(editor: ProjectEditorLease): Omit<ProjectEditorLease, 'workdir'> {
+  const { workdir: _workdir, ...visible } = editor;
+  return visible;
+}
+
+function publicVersion(version: ProjectVersion) {
+  return version;
 }
 
 async function uploadReferenceFile(req: Request, res: Response, projectId: string): Promise<Express.Multer.File> {
@@ -220,6 +266,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
   const now = options.now ?? Date.now;
   const changedBy = options.changedBy ?? 'local-user';
   const github = options.github;
+  const projectCp = options.projectCp ?? createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), now });
 
   router.get('/', async (req, res) => {
     try {
@@ -278,6 +325,18 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
       const purpose = typeof req.body?.purpose === 'string' ? req.body.purpose : undefined;
       const hasRepositoryLink = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'repositoryLink');
+      if (hasRepositoryLink && getProjectEditor(projectId)) {
+        return res.status(409).json({
+          error: 'Release the Project editor before changing its repository',
+          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
+        });
+      }
+      if (hasRepositoryLink && listProjectVersions(projectId).length > 0) {
+        return res.status(409).json({
+          error: 'Repository changes are blocked after Project checkpoints exist',
+          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
+        });
+      }
       if (name === undefined && purpose === undefined && !hasRepositoryLink) {
         return res.status(400).json({ error: 'name, purpose, or repositoryLink is required', code: 'INVALID_PROJECT' });
       }
@@ -397,8 +456,129 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       if (!getProject(projectId)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
       const actor = profileActor(req, registry);
       if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
+      if (getProjectEditor(projectId)) {
+        return res.status(409).json({
+          error: 'Release the Project editor before changing its repository',
+          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
+        });
+      }
+      if (listProjectVersions(projectId).length > 0) {
+        return res.status(409).json({
+          error: 'Repository changes are blocked after Project checkpoints exist',
+          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
+        });
+      }
       deleteProjectRepositoryLink(projectId);
       return res.status(204).end();
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/editor/acquire', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      const task = requireProjectTask(projectId, taskId);
+      const repositoryLink = requireWriteRepository(projectId);
+      const editor = await projectCp.acquireEditor({
+        projectId,
+        taskId,
+        profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
+        repositoryLink,
+        tokenProvider: tokenProvider(github),
+      });
+      return res.json({ editor: publicEditor(editor) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/editor', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      const editor = getProjectEditor(projectId);
+      return res.json({ editor: editor ? publicEditor(editor) : null });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/editor/status', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = typeof req.query.taskId === 'string' ? req.query.taskId.trim() : '';
+      if (!taskId) return res.status(400).json({ error: 'taskId is required', code: 'INVALID_PROJECT_REQUEST' });
+      requireProjectTask(projectId, taskId);
+      const status = await projectCp.status({ projectId, taskId });
+      return res.json({ status });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/editor/release', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      requireProjectTask(projectId, taskId);
+      const editor = await projectCp.releaseEditor({ projectId, taskId });
+      return res.json({ editor: publicEditor(editor) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/commit-push', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      requireProjectTask(projectId, taskId);
+      const repositoryLink = requireWriteRepository(projectId);
+      const message = typeof req.body?.message === 'string' ? req.body.message : '';
+      const version = await projectCp.commitPush({
+        projectId,
+        taskId,
+        repositoryLink,
+        message,
+        tokenProvider: tokenProvider(github),
+      });
+      return res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.get('/:id/versions', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      return res.json({ versions: listProjectVersions(projectId) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/versions/:versionId/revert', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      requireProjectTask(projectId, taskId);
+      const repositoryLink = requireWriteRepository(projectId);
+      const version = await projectCp.revert({
+        projectId,
+        taskId,
+        repositoryLink,
+        versionId: routeId(req.params.versionId),
+        tokenProvider: tokenProvider(github),
+      });
+      return res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) });
     } catch (error) {
       return sendError(res, error);
     }

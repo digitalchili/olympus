@@ -258,6 +258,10 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
       return installationDetails(installationId);
     },
 
+    async installationToken(installationId: number): Promise<string> {
+      return installationToken(installationId);
+    },
+
     async listRepositories(installationId: number): Promise<StudioGitHubRepository[]> {
       const token = await installationToken(installationId);
       const repositories: StudioGitHubRepository[] = [];

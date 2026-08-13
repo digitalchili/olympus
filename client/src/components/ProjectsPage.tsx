@@ -158,7 +158,7 @@ export function ProjectsPage() {
               <div className="mt-4 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
                 <span className="font-medium text-zinc-700 dark:text-zinc-300">Managed by</span> {project.manager.displayName}
                 {(project.manager.provider || project.manager.model) && <span className="ml-1 text-zinc-400">· {[project.manager.provider, project.manager.model].filter(Boolean).join(' · ')}</span>}
-                {project.repositoryLink && <span className="mt-1 flex items-center gap-1 text-zinc-500"><GitBranch size={12} /> {project.repositoryLink.fullName} · read-only</span>}
+                {project.repositoryLink && <span className="mt-1 flex items-center gap-1 text-zinc-500"><GitBranch size={12} /> {project.repositoryLink.fullName} · protected branch</span>}
               </div>
             </ProfileLink>
           ))}

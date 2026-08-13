@@ -257,6 +257,49 @@ CREATE TABLE IF NOT EXISTS project_collaboration_grants (
   PRIMARY KEY(project_id, profile_id)
 );
 
+CREATE TABLE IF NOT EXISTS project_editor_leases (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  profile_id           TEXT NOT NULL,
+  repository_full_name TEXT NOT NULL,
+  base_branch          TEXT NOT NULL,
+  branch_name          TEXT NOT NULL,
+  workdir              TEXT NOT NULL,
+  base_sha             TEXT,
+  status               TEXT NOT NULL CHECK(status IN ('active', 'released')),
+  lease_token          TEXT NOT NULL,
+  created_at           INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL,
+  released_at          INTEGER,
+  CHECK(released_at IS NULL OR released_at >= created_at)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_editor_active
+  ON project_editor_leases(project_id)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_project_editor_task
+  ON project_editor_leases(task_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_versions (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id             TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  lease_id            TEXT REFERENCES project_editor_leases(id) ON DELETE SET NULL,
+  action              TEXT NOT NULL CHECK(action IN ('commit_push', 'revert')),
+  commit_sha          TEXT NOT NULL,
+  parent_sha          TEXT,
+  reverted_version_id TEXT REFERENCES project_versions(id) ON DELETE SET NULL,
+  branch_name         TEXT NOT NULL,
+  commit_message      TEXT NOT NULL,
+  changed_files_json  TEXT NOT NULL,
+  pushed_at           INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_versions_project
+  ON project_versions(project_id, pushed_at DESC);
+
 CREATE TABLE IF NOT EXISTS project_references (
   id                TEXT PRIMARY KEY,
   project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

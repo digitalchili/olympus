@@ -330,6 +330,42 @@ export interface TaskHandoff {
   updated_at: number;
 }
 
+export type ProjectEditorLeaseStatus = 'active' | 'released';
+export type ProjectVersionAction = 'commit_push' | 'revert';
+
+export interface ProjectEditorLease {
+  id: string;
+  projectId: string;
+  taskId: string;
+  profileId: string;
+  repositoryFullName: string;
+  baseBranch: string;
+  branchName: string;
+  workdir: string;
+  baseSha: string | null;
+  status: ProjectEditorLeaseStatus;
+  createdAt: number;
+  updatedAt: number;
+  releasedAt: number | null;
+}
+
+export type PublicProjectEditorLease = Omit<ProjectEditorLease, 'workdir'>;
+
+export interface ProjectVersion {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  leaseId: string | null;
+  action: ProjectVersionAction;
+  commitSha: string;
+  parentSha: string | null;
+  revertedVersionId: string | null;
+  branchName: string;
+  commitMessage: string;
+  changedFiles: string[];
+  pushedAt: number;
+}
+
 export interface TaskHandoffWithTasks extends TaskHandoff {
   parent_task: Task | null;
   child_task: Task | null;

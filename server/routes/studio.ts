@@ -31,6 +31,7 @@ export interface StudioGitHubGateway {
     permissionMode: 'read_write' | 'upgrade_required';
   }>;
   listRepositories(installationId: number): Promise<StudioGitHubRepository[]>;
+  installationToken?(installationId: number): Promise<string>;
 }
 
 interface StudioRouterOptions {

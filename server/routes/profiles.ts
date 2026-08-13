@@ -4,6 +4,7 @@ import { REASONING_EFFORTS, type ProfileBuilderSuggestion, type ReasoningEffort 
 import type { AgentRunOptions } from '../adapters/types.js';
 import { deleteTasksForProfile, getProfileTaskAttention, getTasksForProfile } from '../db/queries.js';
 import { countProjectsManagedByProfile } from '../db/projects.js';
+import { getActiveProjectEditorForProfile } from '../db/project-cp.js';
 import { isRecord } from '../errors.js';
 import { broadcast } from '../events.js';
 import {
@@ -216,6 +217,12 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
         currentProfileId,
       );
       assertProfileDoesNotManageProjects(target.id);
+      if (getActiveProjectEditorForProfile(target.id)) {
+        return res.status(409).json({
+          error: 'Release this profile’s Project editor before deleting the profile',
+          code: 'PROJECT_EDITOR_ACTIVE',
+        });
+      }
       deletionLock = beginProfileDeletion(target.id);
 
       const initialTasks = getTasksForProfile(target.id, false);
