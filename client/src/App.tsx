@@ -9,6 +9,9 @@ import { SettingsPage } from './components/SettingsPage';
 import { ScheduledTasksPage } from './components/ScheduledTasksPage';
 import { SkillsPage } from './components/SkillsPage';
 import { FileBrowserPage } from './components/FileBrowserPage';
+import { StudioProjectsPage } from './components/StudioProjectsPage';
+import { ProjectsPage } from './components/ProjectsPage';
+import { ProjectDetailPage } from './components/ProjectDetailPage';
 import { ChannelsPage } from './components/ChannelsPage';
 import { TaskSearchDialog } from './components/TaskSearchDialog';
 import { Toaster } from 'sonner';
@@ -31,6 +34,7 @@ function AppShell() {
             <Route path="/" element={<Board />} />
             <Route path="/tasks/new" element={<NewTaskPage />} />
             <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
+            <Route path="/projects/:projectId/tasks/:taskId" element={<TaskDetailPage />} />
             <Route path="/cron" element={<ProfileNavigate to="/scheduled-tasks" replace />} />
             <Route path="/scheduled-tasks" element={<ScheduledTasksPage />} />
             <Route path="/scheduled-tasks/new" element={<ScheduledTasksPage />} />
@@ -41,6 +45,9 @@ function AppShell() {
             <Route path="/skills" element={<ProfileNavigate to="/skills/browse" replace />} />
             <Route path="/skills/:tab" element={<SkillsPage />} />
             <Route path="/files" element={<FileBrowserPage />} />
+            <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+            <Route path="/studio" element={<StudioProjectsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

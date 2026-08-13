@@ -3,7 +3,10 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Router } from 'express';
 import type { Task } from '../../shared/types.js';
-import { getTasksForProfile } from '../db/queries.js';
+import { getTasksForProfile, getTasksForProject } from '../db/queries.js';
+import { getProject } from '../db/projects.js';
+import { localProfileRegistry } from '../local-profiles.js';
+import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 import { requestProfile, sendProfileError } from '../profile-context.js';
 
 export const searchRouter = Router();
@@ -13,6 +16,8 @@ const MAX_TASK_IDS_PER_QUERY = 900;
 
 export type TaskSearchResult = {
   taskId: string;
+  projectId: string | null;
+  handlingProfileId: string;
   taskTitle: string;
   taskStatus: string;
   role: 'task' | 'user' | 'assistant' | 'system' | 'tool';
@@ -34,13 +39,15 @@ function excerpt(text: string, maxLength = 280): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
-function taskMetadataMatches(query: string, tasks: Task[]): TaskSearchResult[] {
+export function taskMetadataMatches(query: string, tasks: Task[]): TaskSearchResult[] {
   const normalized = query.toLocaleLowerCase();
   return tasks
     .filter((task) => `${task.title}\n${task.description ?? ''}`.toLocaleLowerCase().includes(normalized))
     .slice(0, MAX_RESULTS)
     .map((task) => ({
       taskId: task.id,
+      projectId: task.project_id,
+      handlingProfileId: task.handling_profile_id ?? task.profile_name ?? 'default',
       taskTitle: task.title,
       taskStatus: task.status,
       role: 'task' as const,
@@ -49,7 +56,7 @@ function taskMetadataMatches(query: string, tasks: Task[]): TaskSearchResult[] {
     }));
 }
 
-function searchHermesMessages(query: string, tasks: Task[], hermesHome: string): TaskSearchResult[] {
+export function searchHermesMessages(query: string, tasks: Task[], hermesHome: string): TaskSearchResult[] {
   const ftsQuery = toFtsQuery(query);
   if (!ftsQuery) return [];
 
@@ -85,6 +92,8 @@ function searchHermesMessages(query: string, tasks: Task[], hermesHome: string):
       const task = taskById.get(row.task_id);
       return task ? [{
         taskId: task.id,
+        projectId: task.project_id,
+        handlingProfileId: task.handling_profile_id ?? task.profile_name ?? 'default',
         taskTitle: task.title,
         taskStatus: task.status,
         role: row.role,
@@ -103,9 +112,28 @@ searchRouter.get('/', (req, res) => {
 
   try {
     const profile = requestProfile(req);
-    const tasks = getTasksForProfile(profile.id, profile.isDefault);
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+    let tasks: Task[];
+    let messages: TaskSearchResult[];
+    if (projectId) {
+      if (!getProject(projectId)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+      requireProfileProjectAccess(projectId, profile.id, 'view');
+      tasks = getTasksForProject(projectId);
+      const tasksByHandler = new Map<string, Task[]>();
+      for (const task of tasks) {
+        const handlerId = task.handling_profile_id ?? task.profile_name ?? 'default';
+        tasksByHandler.set(handlerId, [...(tasksByHandler.get(handlerId) ?? []), task]);
+      }
+      messages = [];
+      for (const [handlerId, handlerTasks] of tasksByHandler) {
+        const handler = localProfileRegistry.get(handlerId);
+        if (handler) messages.push(...searchHermesMessages(query, handlerTasks, handler.hermesHome));
+      }
+    } else {
+      tasks = getTasksForProfile(profile.id, profile.isDefault);
+      messages = searchHermesMessages(query, tasks, profile.hermesHome);
+    }
     const metadata = taskMetadataMatches(query, tasks);
-    const messages = searchHermesMessages(query, tasks, profile.hermesHome);
     const seen = new Set<string>();
     const results = [...metadata, ...messages].filter((result) => {
       const key = `${result.taskId}:${result.role}:${result.snippet}`;
@@ -115,6 +143,9 @@ searchRouter.get('/', (req, res) => {
     }).slice(0, MAX_RESULTS);
     res.json({ results });
   } catch (error) {
+    if (error instanceof ProjectAccessError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     const profileError = sendProfileError(error);
     if (profileError) return res.status(profileError.status).json(profileError.body);
     res.status(503).json({ error: error instanceof Error ? error.message : 'Task search is unavailable' });

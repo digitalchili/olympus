@@ -8,7 +8,7 @@ import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
-import { ApiError, compactTask, fetchHermesProfiles, interruptTask, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
+import { ApiError, compactTask, fetchCollaborationGrants, fetchHermesProfiles, interruptTask, revokeCollaborationGrant, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
 import { deliverQueuedSteer } from '../lib/steerDelivery';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
@@ -24,12 +24,13 @@ import {
 } from '../lib/profileMentions';
 import { ProfileInviteControls } from './ProfileInviteControls';
 import { useProfile } from '../contexts/ProfileContext';
-import type { ChatRunMode, CollaborationRun, GoalStateSnapshot } from '@shared/types';
+import type { ChatRunMode, CollaborationInvitationScope, CollaborationRun, GoalStateSnapshot, PersistentCollaborationGrant } from '@shared/types';
 import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility';
 import { DelegationActivity } from './DelegationActivity';
 
 interface TaskChatProps {
   taskId: string;
+  projectId?: string | null;
   initialMessage?: string;
   initialSettings?: AgentRunSettings;
   initialInvitedProfileIds?: string[];
@@ -41,6 +42,8 @@ type QueuedMessage = {
   content: string;
   settings: AgentRunSettings;
   invitedProfileIds: string[];
+  collaborationScope: CollaborationInvitationScope;
+  confirmPersistentCollaboration: boolean;
 };
 
 const ThinkingBlock = memo(function ThinkingBlock({ content, isLive }: { content: string; isLive: boolean }) {
@@ -249,6 +252,7 @@ function GoalRunStatus({ goal }: { goal: GoalStateSnapshot | null | undefined })
 
 export function TaskChat({
   taskId,
+  projectId,
   initialMessage,
   initialSettings,
   initialInvitedProfileIds,
@@ -274,6 +278,9 @@ export function TaskChat({
   const [input, setInput] = useState('');
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
   const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
+  const [collaborationScope, setCollaborationScope] = useState<CollaborationInvitationScope>('discussion');
+  const [confirmPersistentCollaboration, setConfirmPersistentCollaboration] = useState(false);
+  const [persistentGrants, setPersistentGrants] = useState<PersistentCollaborationGrant[]>([]);
   const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
   const [highlightedProfileIndex, setHighlightedProfileIndex] = useState(0);
   const [runMode, setRunMode] = useState<ChatRunMode>(initialSettings?.mode ?? 'task');
@@ -327,6 +334,26 @@ export function TaskChat({
   const pendingAutoSendRef = useRef<string | null>(null);
   const pendingRevealRef = useRef(false);
   const queuedMessageRef = useRef<QueuedMessage | null>(null);
+
+  const refreshPersistentGrants = useCallback(async () => {
+    try {
+      const result = await fetchCollaborationGrants(taskId);
+      setPersistentGrants(result.grants);
+    } catch {
+      setPersistentGrants([]);
+    }
+  }, [taskId]);
+
+  useEffect(() => { void refreshPersistentGrants(); }, [refreshPersistentGrants]);
+
+  const handleRevokePersistentGrant = useCallback(async (grant: PersistentCollaborationGrant) => {
+    try {
+      await revokeCollaborationGrant(taskId, grant.scope, grant.profileId);
+      await refreshPersistentGrants();
+    } catch (error) {
+      setUploadError(toErrorMessage(error, 'Could not revoke persistent collaboration'));
+    }
+  }, [refreshPersistentGrants, setUploadError, taskId]);
   const lastGoalStatusRef = useRef<GoalStateSnapshot['status'] | null>(null);
   const runIsStreaming = (taskRun?.kind === 'chat' || taskRun?.kind === 'goal') && taskRun.status === 'streaming';
   const isGoalStreaming = taskRun?.kind === 'goal' && taskRun.status === 'streaming';
@@ -389,6 +416,8 @@ export function TaskChat({
     setCompactAfterIndex(-1);
     setQueuedMessage(null);
     setSelectedProfiles([]);
+    setCollaborationScope('discussion');
+    setConfirmPersistentCollaboration(false);
     setActiveMention(null);
     setHighlightedProfileIndex(0);
     setQueuedSendError(null);
@@ -537,8 +566,11 @@ export function TaskChat({
     const result = await sendMessage(taskId, message.content, message.settings, {
       appendLocalError: false,
       invitedProfileIds: message.invitedProfileIds,
+      collaborationScope: message.collaborationScope,
+      confirmPersistentCollaboration: message.confirmPersistentCollaboration,
     });
     if (result.ok) {
+      if (message.collaborationScope !== 'discussion') await refreshPersistentGrants();
       setQueuedMessage((current) => current?.id === message.id ? null : current);
     } else if (queuedMessageRef.current?.id === message.id) {
       pendingRevealRef.current = false;
@@ -548,7 +580,7 @@ export function TaskChat({
 
     if (pendingAutoSendRef.current === message.id) pendingAutoSendRef.current = null;
     setAutoSendingQueuedId((current) => current === message.id ? null : current);
-  }, [sendMessage, taskId]);
+  }, [refreshPersistentGrants, sendMessage, taskId]);
 
   useEffect(() => {
     if (!queuedMessage || taskBusyForQueue || configPending || queuedSendError) return;
@@ -602,10 +634,16 @@ export function TaskChat({
       setUploadError('Remove invited profiles before starting Goal mode. Collaboration runs in Task mode.');
       return;
     }
+    if (selectedProfiles.length > 0 && collaborationScope !== 'discussion' && !confirmPersistentCollaboration) {
+      setUploadError(`Confirm persistent ${collaborationScope} collaboration before sending.`);
+      return;
+    }
 
     const messageText = submitWithAttachments(text);
     const invitedProfileIds = selectedProfiles.map((profile) => profile.id);
     const selectedAtSend = selectedProfiles;
+    const scopeAtSend = collaborationScope;
+    const confirmationAtSend = confirmPersistentCollaboration;
     const settings = { model, provider, reasoningEffort, mode: isGoalStreaming ? 'task' : runMode };
     if (taskBusyForQueue) {
       setQueuedMessage({
@@ -613,20 +651,31 @@ export function TaskChat({
         content: messageText,
         settings,
         invitedProfileIds,
+        collaborationScope: scopeAtSend,
+        confirmPersistentCollaboration: confirmationAtSend,
       });
       setQueuedSendError(null);
       setInput('');
       setSelectedProfiles([]);
+      setCollaborationScope('discussion');
+      setConfirmPersistentCollaboration(false);
       setActiveMention(null);
       return;
     }
 
     setInput('');
     setSelectedProfiles([]);
+    setCollaborationScope('discussion');
+    setConfirmPersistentCollaboration(false);
     setActiveMention(null);
     pendingRevealRef.current = true;
     setOutgoingRevealActive(true);
-    const result = await sendMessage(taskId, messageText, settings, { invitedProfileIds });
+    const result = await sendMessage(taskId, messageText, settings, {
+      invitedProfileIds,
+      collaborationScope: scopeAtSend,
+      confirmPersistentCollaboration: confirmationAtSend,
+    });
+    if (result.ok && scopeAtSend !== 'discussion') await refreshPersistentGrants();
     if (!result.ok && result.conflict) {
       pendingRevealRef.current = false;
       setOutgoingRevealActive(false);
@@ -635,8 +684,10 @@ export function TaskChat({
       // otherwise attachments are silently dropped on a busy-task conflict.
       setInput(messageText);
       setSelectedProfiles(selectedAtSend);
+      setCollaborationScope(scopeAtSend);
+      setConfirmPersistentCollaboration(confirmationAtSend);
     }
-  }, [submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, setUploadError]);
+  }, [submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;
@@ -703,6 +754,8 @@ export function TaskChat({
     setReasoningEffort(queuedMessage.settings.reasoningEffort ?? null);
     setRunMode(queuedMessage.settings.mode ?? 'task');
     setSelectedProfiles(profiles.filter((profile) => queuedMessage.invitedProfileIds.includes(profile.id)));
+    setCollaborationScope(queuedMessage.collaborationScope);
+    setConfirmPersistentCollaboration(queuedMessage.confirmPersistentCollaboration);
     setActiveMention(null);
     setQueuedMessage(null);
     setQueuedSendError(null);
@@ -982,6 +1035,25 @@ export function TaskChat({
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
+          {persistentGrants.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-100 px-4 py-2 text-xs dark:border-zinc-700">
+              <span className="mr-1 font-medium text-zinc-500 dark:text-zinc-400">Persistent collaborators</span>
+              {persistentGrants.map((grant) => (
+                <span key={`${grant.scope}:${grant.profileId}`} className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-1 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">
+                  {profiles.find((profile) => profile.id === grant.profileId)?.displayName ?? grant.profileId}
+                  <span className="text-zinc-400">· {grant.scope}</span>
+                  <button
+                    type="button"
+                    aria-label={`Revoke ${grant.scope} collaboration for ${grant.profileId}`}
+                    onClick={() => void handleRevokePersistentGrant(grant)}
+                    className="rounded-full p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-600"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <ProfileInviteControls
             selected={selectedProfiles}
             activeMention={null}
@@ -990,6 +1062,35 @@ export function TaskChat({
             onSelect={selectMentionProfile}
             onRemove={(profileId) => setSelectedProfiles((current) => removeProfileInvite(current, profileId))}
           />
+          {selectedProfiles.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 px-4 py-2 text-xs dark:border-zinc-700">
+              <label htmlFor="collaboration-scope" className="font-medium text-zinc-600 dark:text-zinc-300">Invite scope</label>
+              <select
+                id="collaboration-scope"
+                aria-label="Collaboration invitation scope"
+                value={collaborationScope}
+                onChange={(event) => {
+                  setCollaborationScope(event.target.value as CollaborationInvitationScope);
+                  setConfirmPersistentCollaboration(false);
+                }}
+                className="rounded-md border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-600 dark:bg-zinc-900"
+              >
+                <option value="discussion">This discussion</option>
+                <option value="task">This task</option>
+                {projectId && <option value="project">This Project</option>}
+              </select>
+              {collaborationScope !== 'discussion' && (
+                <label className="flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                  <input
+                    type="checkbox"
+                    checked={confirmPersistentCollaboration}
+                    onChange={(event) => setConfirmPersistentCollaboration(event.target.checked)}
+                  />
+                  Keep these profiles on future {collaborationScope} discussions
+                </label>
+              )}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             value={input}

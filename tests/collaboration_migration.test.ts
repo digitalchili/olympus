@@ -48,6 +48,15 @@ try {
   assert.ok(columns.some((column) => column.name === 'phase_round'));
   const index = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_collaboration_contributions_run'").get() as { sql: string };
   assert.match(index.sql, /phase_round/);
+  const grantTables = db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name IN ('task_collaboration_grants', 'project_collaboration_grants')
+    ORDER BY name
+  `).all() as Array<{ name: string }>;
+  assert.deepEqual(grantTables.map((row) => row.name), [
+    'project_collaboration_grants',
+    'task_collaboration_grants',
+  ]);
   db.close();
 } finally {
   await rm(root, { recursive: true, force: true });

@@ -1,11 +1,11 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useParams } from 'react-router';
 import { MoreHorizontal, Trash2, Loader2, Pencil, Check } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { StatusIcon } from './StatusIcon';
 import { useStore, optimisticMoveTask } from '../lib/store';
 import { toast } from 'sonner';
-import { deleteTask, fetchCollaborations, patchTask, moveTask, markTaskViewed } from '../lib/api';
+import { deleteTask, fetchCollaborations, fetchProject, patchTask, moveTask, markTaskViewed } from '../lib/api';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { timeAgo } from '../lib/format';
@@ -21,11 +21,12 @@ import { taskProfileLabel } from '../lib/profiles';
 import type { AgentRunSettings } from '../lib/api';
 import type { CollaborationRun, TaskStatus } from '@shared/types';
 import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
+import { usePageHeader } from './Header';
 
 export function TaskDetailPage() {
-  const { taskId } = useParams<{ taskId: string }>();
+  const { taskId, projectId } = useParams<{ taskId: string; projectId?: string }>();
   const navigate = useProfileNavigate();
-  const { profiles } = useProfile();
+  const { activeProfileId, profiles } = useProfile();
   const location = useLocation();
   const locationState = location.state as {
     initialMessage?: string;
@@ -47,13 +48,48 @@ export function TaskDetailPage() {
   const [showMenu, setShowMenu] = useState(false);
   const [activeTab, setActiveTab] = useState<'answer' | 'collaboration'>('answer');
   const [collaborationRuns, setCollaborationRuns] = useState<CollaborationRun[]>([]);
+  const [projectName, setProjectName] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const markViewedInFlightRef = useRef<string | null>(null);
   const titleAnimation = useRenameAnimation(task?.title ?? '', task?.id ?? null);
+  const parentPath = projectId ? `/projects/${encodeURIComponent(projectId)}` : '/';
+  const pageHeader = useMemo(() => ({
+    crumbs: projectId
+      ? [
+          { label: 'Projects', to: '/projects' },
+          { label: projectName ?? 'Project', to: parentPath },
+          { label: task?.title ?? 'Task' },
+        ]
+      : [
+          { label: 'Tasks', to: '/' },
+          { label: task?.title ?? 'Task' },
+        ],
+  }), [parentPath, projectId, projectName, task?.title]);
+  usePageHeader(pageHeader);
+
+  useEffect(() => {
+    if (!projectId || !task || task.project_id !== projectId) {
+      setProjectName(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchProject(projectId, activeProfileId)
+      .then(({ project }) => { if (!cancelled) setProjectName(project.name); })
+      .catch(() => { if (!cancelled) setProjectName(null); });
+    return () => { cancelled = true; };
+  }, [activeProfileId, projectId, task]);
 
   useEffect(() => {
     if (task) setTitleDraft(task.title);
   }, [task?.id, task?.title]);
+
+  useEffect(() => {
+    if (!task || !projectId || task.project_id === projectId) return;
+    const canonicalPath = task.project_id
+      ? `/projects/${encodeURIComponent(task.project_id)}/tasks/${encodeURIComponent(task.id)}`
+      : `/tasks/${encodeURIComponent(task.id)}`;
+    navigate(canonicalPath, { replace: true, state: location.state });
+  }, [location.state, navigate, projectId, task]);
 
   useEffect(() => {
     if (!task || task.last_agent_response_at === null) return;
@@ -140,7 +176,7 @@ export function TaskDetailPage() {
       const previousStatus = task.status;
       const taskId = task.id;
       optimisticMoveTask(task, 'done', upsertTask, moveTask);
-      navigate('/');
+      navigate(parentPath);
       toast('Task completed', {
         icon: <Check size={14} strokeWidth={2.5} className="text-zinc-500 dark:text-zinc-400" />,
         action: {
@@ -155,7 +191,7 @@ export function TaskDetailPage() {
     } else {
       await optimisticMoveTask(task, status, upsertTask, moveTask);
     }
-  }, [task, upsertTask, navigate]);
+  }, [task, upsertTask, navigate, parentPath]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -163,7 +199,7 @@ export function TaskDetailPage() {
         e.key === 'Escape'
         && !isEditableTarget(e.target)
         && !document.querySelector('[role="dialog"][aria-modal="true"]')
-      ) navigate('/');
+      ) navigate(parentPath);
       if (e.key === 'd' && e.metaKey && e.shiftKey && task && task.status !== 'done') {
         e.preventDefault();
         handleStatusChange('done');
@@ -171,16 +207,16 @@ export function TaskDetailPage() {
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [navigate, task, handleStatusChange]);
+  }, [navigate, task, handleStatusChange, parentPath]);
 
   const handleDelete = useCallback(async () => {
     if (!task) return;
     try {
       await deleteTask(task.id);
       removeTask(task.id);
-      navigate('/');
+      navigate(parentPath);
     } catch {}
-  }, [task, removeTask, navigate]);
+  }, [task, removeTask, navigate, parentPath]);
 
   if (!task) {
     if (!tasksLoaded) {
@@ -377,6 +413,7 @@ export function TaskDetailPage() {
           )}
           <TaskChat
             taskId={task.id}
+            projectId={task.project_id}
             initialMessage={initialMessage}
             initialSettings={initialSettings}
             initialInvitedProfileIds={initialInvitedProfileIds}

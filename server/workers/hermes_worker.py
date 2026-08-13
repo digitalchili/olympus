@@ -645,6 +645,38 @@ def _task_key_for(request: dict[str, Any]) -> str:
     )
 
 
+OLYMPUS_WORKDIR_KEYS: set[str] = set()
+
+
+def _apply_task_workdir(request: dict[str, Any]) -> None:
+    """Bind Hermes terminal and file tools to this task's persisted workspace."""
+    session_id = string_or_none(request.get("sessionId"))
+    task_id = string_or_none(request.get("taskId"))
+    keys = list(dict.fromkeys(key for key in (session_id, task_id) if key))
+    workdir = string_or_none(request.get("workdir"))
+    bound_keys = [key for key in keys if key in OLYMPUS_WORKDIR_KEYS]
+    if not workdir and not bound_keys:
+        return
+
+    try:
+        from tools.terminal_tool import clear_task_env_overrides, register_task_env_overrides
+    except Exception as exc:
+        raise WorkerError("Hermes task workspace support is unavailable.", code="worker_error") from exc
+
+    if not workdir:
+        for key in bound_keys:
+            clear_task_env_overrides(key)
+            OLYMPUS_WORKDIR_KEYS.discard(key)
+        return
+
+    normalized = os.path.realpath(os.path.expanduser(workdir))
+    if not os.path.isabs(workdir) or not os.path.isdir(normalized):
+        raise WorkerError("Task workspace must be an existing absolute directory.", code="bad_request")
+    for key in keys:
+        register_task_env_overrides(key, {"cwd": normalized})
+        OLYMPUS_WORKDIR_KEYS.add(key)
+
+
 def _try_mark_task_active(task_key: str, request_id: str) -> bool:
     with ACTIVE_TASKS_LOCK:
         if task_key in ACTIVE_TASKS:
@@ -1498,6 +1530,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     message = request.get("message")
     if not isinstance(message, str) or not message.strip():
         raise WorkerError("Chat request message is required.", code="bad_request")
+
+    _apply_task_workdir(request)
 
     session_db, session_id = open_session(session_id)
     history = load_agent_history(session_db, session_id)

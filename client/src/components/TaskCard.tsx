@@ -1,14 +1,17 @@
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
-import { Loader2, MoreHorizontal, Target } from 'lucide-react';
+import { FolderKanban, Loader2, MoreHorizontal, Target } from 'lucide-react';
+import { Link } from 'react-router';
 import { ProfileLink, useProfile } from '../contexts/ProfileContext';
-import type { Task, TaskRunState } from '@shared/types';
+import { DEFAULT_PROFILE_NAME, type ProjectSummary, type Task, type TaskRunState, type TaskStatus } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
 import { isActiveRun } from '../lib/store';
 import { hasUnseenAgentResponse } from '../lib/taskState';
 import { taskProfileLabel } from '../lib/profiles';
 import { TaskContextMenu } from './TaskContextMenu';
 import { RenameTitle } from './RenameTitle';
+import { toWithProfile } from '../lib/profileQuery';
+import { projectChipClasses, projectTaskPath } from '../lib/projectTaskPresentation';
 
 const BUSY_LABELS: Record<string, string> = { compact: 'Compacting...', goal: 'Working toward goal...' };
 
@@ -80,7 +83,21 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
   );
 }
 
-export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
+export function TaskCard({
+  task,
+  run,
+  project,
+  showLocation = false,
+  onMoveTask,
+  onDeleteTask,
+}: {
+  task: Task;
+  run?: TaskRunState;
+  project?: ProjectSummary;
+  showLocation?: boolean;
+  onMoveTask: (task: Task, status: TaskStatus) => Promise<void>;
+  onDeleteTask: (task: Task) => Promise<void>;
+}) {
   const {
     attributes,
     listeners,
@@ -130,15 +147,29 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
                 : 'border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
         }`}
       >
-        <ProfileLink
-          to={`/tasks/${task.id}`}
+        <Link
+          to={toWithProfile(projectTaskPath(task, project), task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)}
           ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
-          className="block p-3.5 pr-8 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/60 dark:focus-visible:ring-zinc-500/70"
+          className={`block p-3.5 pr-8 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/60 dark:focus-visible:ring-zinc-500/70 ${showLocation ? 'pb-2' : ''}`}
         >
           <TaskCardBody task={task} run={run} />
-        </ProfileLink>
+        </Link>
+        {showLocation && project && (
+          <div className="relative z-10 px-3.5 pb-3">
+              <ProfileLink
+                to={`/projects/${encodeURIComponent(project.id)}`}
+                aria-label={`Project: ${project.name}`}
+                onPointerDown={stopPropagation}
+                onMouseDown={stopPropagation}
+                className={`inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors ${projectChipClasses(project.id)}`}
+              >
+                <FolderKanban size={12} className="shrink-0" />
+                <span className="truncate">{project.name}</span>
+              </ProfileLink>
+          </div>
+        )}
         <button
           type="button"
           onPointerDown={stopPropagation}
@@ -159,16 +190,19 @@ export function TaskCard({ task, run }: { task: Task; run?: TaskRunState }) {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={closeContextMenu}
+          onMoveTask={onMoveTask}
+          onDeleteTask={onDeleteTask}
         />
       )}
     </>
   );
 }
 
-export function TaskCardOverlay({ task, run }: { task: Task; run?: TaskRunState }) {
+export function TaskCardOverlay({ task, run, project, showLocation = false }: { task: Task; run?: TaskRunState; project?: ProjectSummary; showLocation?: boolean }) {
   return (
     <div className="p-3.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 shadow-2xl rotate-[2deg] scale-105 w-[280px] pointer-events-none">
       <TaskCardBody task={task} run={run} />
+      {showLocation && project && <div className={`mt-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium ring-1 ring-inset ${projectChipClasses(project.id)}`}><FolderKanban size={12} />{project.name}</div>}
     </div>
   );
 }

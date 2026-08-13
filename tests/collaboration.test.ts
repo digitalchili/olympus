@@ -22,6 +22,7 @@ try {
     collectContributors,
     contributorSystemMessage,
     isPrivateCollaborationEvent,
+    parseCollaborationInvitationScope,
     validateCollaborationInvites,
   } = await import('../server/collaboration.js');
   const registry = new LocalProfileRegistry(hermesHome, root);
@@ -29,6 +30,22 @@ try {
   const validated = validateCollaborationInvites(['default', 'writer'], 'default', registry);
   assert.equal(validated.ownerInvited, true);
   assert.deepEqual(validated.participants.map((profile) => profile.id), ['writer']);
+  assert.equal(parseCollaborationInvitationScope(undefined), 'discussion');
+  assert.equal(parseCollaborationInvitationScope('discussion'), 'discussion');
+  assert.throws(
+    () => parseCollaborationInvitationScope('task'),
+    (error) => error instanceof LocalProfileError && error.code === 'PERSISTENT_COLLABORATION_CONFIRMATION_REQUIRED',
+  );
+  assert.throws(
+    () => parseCollaborationInvitationScope('project'),
+    (error) => error instanceof LocalProfileError && error.code === 'PERSISTENT_COLLABORATION_CONFIRMATION_REQUIRED',
+  );
+  assert.equal(parseCollaborationInvitationScope('task', true), 'task');
+  assert.equal(parseCollaborationInvitationScope('project', true), 'project');
+  assert.throws(
+    () => parseCollaborationInvitationScope('forever'),
+    (error) => error instanceof LocalProfileError && error.code === 'INVALID_COLLABORATION_SCOPE',
+  );
   assert.throws(
     () => validateCollaborationInvites(['writer', 'writer'], 'default', registry),
     (error) => error instanceof LocalProfileError && error.code === 'DUPLICATE_COLLABORATOR',

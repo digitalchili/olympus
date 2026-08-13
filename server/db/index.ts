@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,6 +66,127 @@ function ensureCollaborationContributionIndex(): void {
   `);
 }
 
+function migrateStudioGitHubConnectionStates(): void {
+  const row = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'studio_github_connection_states'
+  `).get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'manifest'")) return;
+
+  const columns = db.prepare('PRAGMA table_info(studio_github_connection_states)').all() as Array<{ name: string }>;
+  const hasFlow = columns.some((column) => column.name === 'flow');
+  const hasInstallationId = columns.some((column) => column.name === 'installation_id');
+  const legacyFlow = hasFlow ? 'flow' : "'install'";
+  const legacyInstallationId = hasInstallationId ? 'installation_id' : 'NULL';
+
+  db.exec(`
+    ALTER TABLE studio_github_connection_states RENAME TO studio_github_connection_states_legacy;
+    CREATE TABLE studio_github_connection_states (
+      state_hash TEXT PRIMARY KEY,
+      flow TEXT NOT NULL CHECK(flow IN ('manifest', 'install', 'oauth')),
+      installation_id INTEGER,
+      expires_at INTEGER NOT NULL,
+      consumed_at INTEGER,
+      CHECK(
+        (flow IN ('manifest', 'install') AND installation_id IS NULL)
+        OR (flow = 'oauth' AND installation_id > 0)
+      )
+    );
+    INSERT INTO studio_github_connection_states (
+      state_hash, flow, installation_id, expires_at, consumed_at
+    )
+    SELECT state_hash, ${legacyFlow}, ${legacyInstallationId}, expires_at, consumed_at
+    FROM studio_github_connection_states_legacy;
+    DROP TABLE studio_github_connection_states_legacy;
+  `);
+}
+
+function normalizedProjectName(value: string): string {
+  return value.trim().normalize('NFKC').toLocaleLowerCase('en-US');
+}
+
+function migrateLegacyStudioProjects(): void {
+  const legacy = db.prepare(`
+    SELECT id, name, provider, provider_repository_id, installation_id, owner,
+      full_name, private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    FROM studio_projects
+    ORDER BY created_at, id
+  `).all() as Array<{
+    id: string;
+    name: string;
+    provider: 'github';
+    provider_repository_id: number;
+    installation_id: number;
+    owner: string;
+    full_name: string;
+    private: number;
+    default_branch: string;
+    html_url: string;
+    clone_url: string;
+    mode: 'read_only';
+    created_at: number;
+    updated_at: number;
+  }>;
+
+  const projectExists = db.prepare('SELECT 1 FROM projects WHERE id = ?');
+  const nameExists = db.prepare('SELECT 1 FROM projects WHERE name_key = ?');
+  const insertProject = db.prepare(`
+    INSERT INTO projects (
+      id, name, name_key, purpose, manager_profile_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'default', ?, ?)
+  `);
+  const insertHistory = db.prepare(`
+    INSERT OR IGNORE INTO project_manager_history (
+      id, project_id, profile_id, effective_from, effective_to, changed_by
+    ) VALUES (?, ?, 'default', ?, NULL, 'legacy-studio-migration')
+  `);
+  const insertLink = db.prepare(`
+    INSERT OR IGNORE INTO project_repository_links (
+      project_id, provider, provider_repository_id, installation_id, owner, full_name,
+      private, default_branch, html_url, clone_url, mode, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const row of legacy) {
+    if (!projectExists.get(row.id)) {
+      let name = row.name.trim() || row.full_name;
+      let nameKey = normalizedProjectName(name);
+      if (nameExists.get(nameKey)) {
+        name = row.full_name;
+        nameKey = normalizedProjectName(name);
+      }
+      if (nameExists.get(nameKey)) {
+        name = `${row.full_name} (${row.id.slice(0, 8)})`;
+        nameKey = normalizedProjectName(name);
+      }
+      insertProject.run(
+        row.id,
+        name,
+        nameKey,
+        `Imported from GitHub: ${row.full_name}`,
+        row.created_at,
+        row.updated_at,
+      );
+    }
+    insertHistory.run(randomUUID(), row.id, row.created_at);
+    insertLink.run(
+      row.id,
+      row.provider,
+      row.provider_repository_id,
+      row.installation_id,
+      row.owner,
+      row.full_name,
+      row.private,
+      row.default_branch,
+      row.html_url,
+      row.clone_url,
+      row.mode,
+      row.created_at,
+      row.updated_at,
+    );
+  }
+}
+
 function recoverInterruptedCollaborations(): void {
   const now = Date.now();
   db.prepare(`
@@ -97,10 +219,31 @@ try {
   db.exec(schema);
   migrateCollaborationContributions();
   ensureCollaborationContributionIndex();
+  migrateStudioGitHubConnectionStates();
   ensureColumn('tasks', 'agent_provider', 'TEXT');
   ensureColumn('tasks', 'workdir', 'TEXT');
   ensureColumn('tasks', 'profile_name', 'TEXT');
   ensureColumn('tasks', 'routing_source', 'TEXT');
+  ensureColumn('tasks', 'project_id', 'TEXT REFERENCES projects(id) ON DELETE SET NULL');
+  ensureColumn('tasks', 'handling_profile_id', 'TEXT');
+  ensureColumn('tasks', 'delegated_worker_id', 'TEXT');
+  ensureColumn('studio_github_installations', 'label', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('studio_github_installations', 'permission_mode', "TEXT NOT NULL DEFAULT 'upgrade_required'");
+  db.prepare(`
+    UPDATE studio_github_installations
+    SET label = account_login
+    WHERE TRIM(label) = ''
+  `).run();
+  db.prepare(`
+    UPDATE tasks
+    SET handling_profile_id = COALESCE(NULLIF(profile_name, ''), 'default')
+    WHERE handling_profile_id IS NULL
+  `).run();
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_handler ON tasks(handling_profile_id, updated_at DESC);
+  `);
+  migrateLegacyStudioProjects();
   recoverInterruptedCollaborations();
   recoverInterruptedDelegations();
   db.exec('COMMIT');

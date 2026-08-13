@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
+  CollaborationInvitationScope,
   ContextUsage,
   LiveChatMessage,
   LiveChatRun,
@@ -22,6 +23,8 @@ export type SendMessageResult =
 interface SendMessageOptions {
   appendLocalError?: boolean;
   invitedProfileIds?: string[];
+  collaborationScope?: CollaborationInvitationScope;
+  confirmPersistentCollaboration?: boolean;
 }
 
 export type ChatMessage = Omit<TaskMessage, 'task_id'> & {
@@ -572,7 +575,11 @@ export function useChat() {
         body: JSON.stringify({
           content,
           ...(runSettings ? { settings: runSettings } : {}),
-          ...(options?.invitedProfileIds?.length ? { invitedProfileIds: options.invitedProfileIds } : {}),
+          ...(options?.invitedProfileIds?.length ? {
+            invitedProfileIds: options.invitedProfileIds,
+            collaborationScope: options.collaborationScope ?? 'discussion',
+            ...(options.confirmPersistentCollaboration ? { confirmPersistentCollaboration: true } : {}),
+          } : {}),
         }),
         signal: abort.signal,
       });

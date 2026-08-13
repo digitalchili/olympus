@@ -5,12 +5,30 @@ import {
   type LocalProfileRegistry,
   type LocalProfileTarget,
 } from './local-profiles.js';
-import type { CollaborationContributionPhase, TaskMessage } from '../shared/types.js';
+import type { CollaborationContributionPhase, CollaborationInvitationScope, TaskMessage } from '../shared/types.js';
 
 export const MAX_COLLABORATORS = 9;
 const MAX_VISIBLE_CONTRIBUTION_CHARS = 8_000;
 const MAX_VISIBLE_TASK_MESSAGES = 20;
 const MAX_VISIBLE_TASK_CONTEXT_CHARS = 12_000;
+
+export function parseCollaborationInvitationScope(
+  value: unknown,
+  confirmedPersistent = false,
+): CollaborationInvitationScope {
+  if (value === undefined || value === null || value === 'discussion') return 'discussion';
+  if (value === 'task' || value === 'project') {
+    if (!confirmedPersistent) {
+      throw new LocalProfileError(
+        409,
+        `Persistent ${value} collaboration requires explicit grant confirmation`,
+        'PERSISTENT_COLLABORATION_CONFIRMATION_REQUIRED',
+      );
+    }
+    return value;
+  }
+  throw new LocalProfileError(400, 'collaborationScope must be discussion, task, or project', 'INVALID_COLLABORATION_SCOPE');
+}
 
 export interface ValidatedCollaborationInvites {
   participants: LocalProfileTarget[];

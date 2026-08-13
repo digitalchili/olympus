@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 const root = await mkdtemp(join(tmpdir(), 'olympus-profile-search-isolation-'));
 const hermesHome = join(root, 'hermes');
 const writerHome = join(hermesHome, 'profiles', 'writer');
+const reviewerHome = join(hermesHome, 'profiles', 'reviewer');
 const dispatchHome = join(root, 'dispatch');
 const previousHermesHome = process.env.HERMES_HOME;
 const previousDispatchHome = process.env.OLYMPUS_DISPATCH_HOME;
@@ -33,40 +34,60 @@ function createHermesState(path: string, sessionId: string, content: string): vo
   db.close();
 }
 
-async function search(base: string, query: string, profile?: string): Promise<Array<{ taskId: string; role: string; snippet: string }>> {
+async function search(base: string, query: string, profile?: string, projectId?: string): Promise<Array<{ taskId: string; handlingProfileId: string; role: string; snippet: string }>> {
   const params = new URLSearchParams({ q: query });
   if (profile) params.set('profile', profile);
+  if (projectId) params.set('projectId', projectId);
   const response = await fetch(`${base}/api/search?${params}`);
   assert.equal(response.status, 200);
-  return (await response.json() as { results: Array<{ taskId: string; role: string; snippet: string }> }).results;
+  return (await response.json() as { results: Array<{ taskId: string; handlingProfileId: string; role: string; snippet: string }> }).results;
 }
 
 try {
   await mkdir(writerHome, { recursive: true });
+  await mkdir(reviewerHome, { recursive: true });
   await writeFile(join(hermesHome, 'config.yaml'), '{}\n');
   await writeFile(join(writerHome, 'profile.yaml'), 'displayName: Writer\n');
   await writeFile(join(writerHome, 'config.yaml'), '{}\n');
+  await writeFile(join(reviewerHome, 'profile.yaml'), 'displayName: Reviewer\n');
+  await writeFile(join(reviewerHome, 'config.yaml'), '{}\n');
   process.env.HERMES_HOME = hermesHome;
   process.env.OLYMPUS_DISPATCH_HOME = dispatchHome;
   process.env.DB_PATH = join(dispatchHome, 'data', 'test.db');
 
-  const [{ searchRouter }, queries, { default: dispatchDb }] = await Promise.all([
+  const [{ searchRouter }, queries, projects, { default: dispatchDb }] = await Promise.all([
     import('../server/routes/search.js'),
     import('../server/db/queries.js'),
+    import('../server/db/projects.js'),
     import('../server/db/index.js'),
   ]);
+
+  const project = projects.createProject({
+    name: 'Cross-profile search project',
+    purpose: 'Verify ACL-scoped multi-profile task search',
+    managerProfileId: 'default',
+    changedBy: 'test',
+  });
+  projects.grantProjectProfileAccess({
+    projectId: project.id,
+    profileId: 'writer',
+    role: 'view',
+    grantedBy: 'default',
+  });
 
   const defaultTask = queries.insertTask({
     title: 'Beta metadata secret',
     description: 'Only the default profile may find betametadatasecret',
     status: 'in_progress',
     profile_name: null,
+    project_id: project.id,
   });
   const writerTask = queries.insertTask({
     title: 'Alpha metadata',
     description: 'Only writer may find alphametadatasecret',
     status: 'in_progress',
     profile_name: 'writer',
+    project_id: project.id,
   });
 
   await mkdir(dirname(join(hermesHome, 'state.db')), { recursive: true });
@@ -107,6 +128,21 @@ try {
       [[defaultTask.id, 'user']],
       'omitting profile preserves legacy default message search behavior',
     );
+    assert.deepEqual(
+      (await search(base, 'belongs', 'writer', project.id))
+        .map((result) => [result.taskId, result.handlingProfileId, result.role])
+        .sort((left, right) => left[0].localeCompare(right[0])),
+      [
+        [defaultTask.id, 'default', 'user'],
+        [writerTask.id, 'writer', 'user'],
+      ].sort((left, right) => left[0].localeCompare(right[0])),
+      'authorized Project search spans only the Project tasks across immutable handler databases',
+    );
+    const denied = await fetch(`${base}/api/search?${new URLSearchParams({
+      q: 'belongs', profile: 'reviewer', projectId: project.id,
+    })}`);
+    assert.equal(denied.status, 404);
+    assert.equal((await denied.json() as { code: string }).code, 'PROJECT_NOT_FOUND');
   } finally {
     server.close();
     await once(server, 'close');

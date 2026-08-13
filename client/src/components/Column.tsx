@@ -1,13 +1,13 @@
 import { useDroppable } from '@dnd-kit/core';
 import { MoreHorizontal, Plus } from 'lucide-react';
 import { useCallback, useState } from 'react';
+import { useNavigate, type To } from 'react-router';
 
-import type { Task, TaskRunState, TaskStatus } from '@shared/types';
+import type { ProjectSummary, Task, TaskRunState, TaskStatus } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { ColumnActionsMenu } from './ColumnActionsMenu';
 import { StatusIcon } from './StatusIcon';
 import { TaskCard } from './TaskCard';
-import { useProfileNavigate } from '../contexts/ProfileContext';
 
 interface ColumnProps {
   status: TaskStatus;
@@ -15,12 +15,17 @@ interface ColumnProps {
   taskRuns: Map<string, TaskRunState>;
   isLast?: boolean;
   onRequestDeleteAll: (status: TaskStatus) => void;
+  createTaskTo: To;
+  onMoveTask: (task: Task, status: TaskStatus) => Promise<void>;
+  onDeleteTask: (task: Task) => Promise<void>;
+  projectById?: Map<string, ProjectSummary>;
+  showTaskLocation?: boolean;
 }
 
-export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll }: ColumnProps) {
+export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll, createTaskTo, onMoveTask, onDeleteTask, projectById, showTaskLocation = false }: ColumnProps) {
   const { label } = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const navigate = useProfileNavigate();
+  const navigate = useNavigate();
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const showAddButton = status === 'in_progress';
 
@@ -55,7 +60,7 @@ export function Column({ status, tasks, taskRuns, isLast = false, onRequestDelet
           {showAddButton && (
             <button
               type="button"
-              onClick={() => navigate('/tasks/new')}
+              onClick={() => navigate(createTaskTo)}
               aria-label="Create task"
               title="Create task"
               className="h-6 w-6 inline-flex items-center justify-center rounded-md text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
@@ -78,13 +83,17 @@ export function Column({ status, tasks, taskRuns, isLast = false, onRequestDelet
             key={task.id}
             task={task}
             run={taskRuns.get(task.id)}
+            onMoveTask={onMoveTask}
+            onDeleteTask={onDeleteTask}
+            project={task.project_id ? projectById?.get(task.project_id) : undefined}
+            showLocation={showTaskLocation}
           />
         ))}
         {showAddButton && (
           <div className="h-9 shrink-0">
             <button
               type="button"
-              onClick={() => navigate('/tasks/new')}
+              onClick={() => navigate(createTaskTo)}
               aria-label="Create task"
               title="Create task"
               className="h-9 w-full inline-flex items-center justify-center rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800/60 hover:border-zinc-300 dark:hover:border-zinc-700 transition-[background-color,border-color,color]"

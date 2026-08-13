@@ -19,6 +19,153 @@ export interface UpdateStatus {
   error?: string;
 }
 
+export interface StudioGitHubInstallation {
+  id: number;
+  accountLogin: string;
+  accountType: 'User' | 'Organization';
+  label: string;
+  permissionMode: 'read_write' | 'upgrade_required';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface StudioGitHubRepository {
+  id: number;
+  name: string;
+  fullName: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+}
+
+export interface StudioProject {
+  id: string;
+  name: string;
+  provider: 'github';
+  providerRepositoryId: number;
+  installationId: number;
+  owner: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  mode: 'read_only' | 'branch_pr';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const PROJECT_ACCESS_ROLES = ['view', 'contribute', 'manage'] as const;
+export type ProjectAccessRole = (typeof PROJECT_ACCESS_ROLES)[number];
+
+export interface ProjectProfileGrant {
+  projectId: string;
+  profileId: string;
+  role: ProjectAccessRole;
+  grantedBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  purpose: string;
+  managerProfileId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectManagerProjection {
+  id: string;
+  displayName: string;
+  provider: string | null;
+  model: string | null;
+}
+
+export interface ProjectSummary extends Project {
+  manager: ProjectManagerProjection;
+  repositoryLink?: ProjectRepositoryLink | null;
+}
+
+export interface ProjectManagerHistoryEntry {
+  id: string;
+  projectId: string;
+  profileId: string;
+  effectiveFrom: number;
+  effectiveTo: number | null;
+  changedBy: string;
+}
+
+export interface ProjectRepositoryLink {
+  projectId: string;
+  provider: 'github';
+  providerRepositoryId: number;
+  installationId: number;
+  owner: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  mode: 'read_only' | 'branch_pr';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectReference {
+  id: string;
+  projectId: string;
+  originalFilename: string;
+  safeFilename: string;
+  mimeType: string;
+  extension: string;
+  sizeBytes: number;
+  sha256: string;
+  storagePath: string;
+  status: 'uploaded' | 'extracting' | 'indexed' | 'failed' | 'deleted';
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  indexedAt: number | null;
+  deletedAt: number | null;
+}
+
+export type ProjectReferenceListItem = Omit<ProjectReference, 'storagePath'>;
+
+export interface ProjectReferenceChunk {
+  id: string;
+  projectId: string;
+  referenceId: string;
+  versionId: string;
+  chunkIndex: number;
+  text: string;
+  pageNumber: number | null;
+  sheetName: string | null;
+  cellRange: string | null;
+  createdAt: number;
+}
+
+export interface ProjectReferenceCitation {
+  referenceId: string;
+  originalFilename: string;
+  chunkIndex: number;
+  pageNumber: number | null;
+  sheetName: string | null;
+  cellRange: string | null;
+}
+
+export interface ProjectReferenceSearchResult {
+  chunkId: string;
+  referenceId: string;
+  snippet: string;
+  citation: ProjectReferenceCitation;
+}
+
+export const PROJECT_REFERENCE_ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.csv', '.xlsx', '.png', '.jpg', '.jpeg'] as const;
+
 export const CHAT_RUN_MODES = ['task', 'goal'] as const;
 export type ChatRunMode = (typeof CHAT_RUN_MODES)[number];
 export const OLYMPUS_GOAL_MAX_TURNS = 20;
@@ -60,6 +207,11 @@ export interface HermesProfile {
   isDefault: boolean;
   capabilities: HermesProfileCapabilities;
   health: HermesProfileHealth;
+}
+
+export interface ProfileTaskAttention {
+  profileId: string;
+  reviewCount: number;
 }
 
 export interface HermesProfileSettings {
@@ -153,6 +305,9 @@ export interface Task {
   agent_provider: string | null;
   reasoning_effort: ReasoningEffort | null;
   workdir: string | null;
+  project_id: string | null;
+  handling_profile_id: string | null;
+  delegated_worker_id: string | null;
   created_at: number;
   updated_at: number;
   last_agent_response_at: number | null;
@@ -173,6 +328,42 @@ export interface TaskHandoff {
   state: TaskHandoffState;
   created_at: number;
   updated_at: number;
+}
+
+export type ProjectEditorLeaseStatus = 'active' | 'released';
+export type ProjectVersionAction = 'commit_push' | 'revert';
+
+export interface ProjectEditorLease {
+  id: string;
+  projectId: string;
+  taskId: string;
+  profileId: string;
+  repositoryFullName: string;
+  baseBranch: string;
+  branchName: string;
+  workdir: string;
+  baseSha: string | null;
+  status: ProjectEditorLeaseStatus;
+  createdAt: number;
+  updatedAt: number;
+  releasedAt: number | null;
+}
+
+export type PublicProjectEditorLease = Omit<ProjectEditorLease, 'workdir'>;
+
+export interface ProjectVersion {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  leaseId: string | null;
+  action: ProjectVersionAction;
+  commitSha: string;
+  parentSha: string | null;
+  revertedVersionId: string | null;
+  branchName: string;
+  commitMessage: string;
+  changedFiles: string[];
+  pushedAt: number;
 }
 
 export interface TaskHandoffWithTasks extends TaskHandoff {
@@ -225,6 +416,17 @@ export type CollaborationRunStatus = (typeof COLLABORATION_RUN_STATUSES)[number]
 
 export type CollaborationContributionPhase = 'proposal' | 'review';
 export type CollaborationContributionStatus = 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
+
+export type CollaborationInvitationScope = 'discussion' | 'task' | 'project';
+
+export interface PersistentCollaborationGrant {
+  scope: Exclude<CollaborationInvitationScope, 'discussion'>;
+  scopeId: string;
+  profileId: string;
+  grantedBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export interface CollaborationContribution {
   id: string;

@@ -6,19 +6,17 @@ import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { StatusIcon } from './StatusIcon';
-import { useStore, optimisticMoveTask } from '../lib/store';
-import { moveTask, deleteTask } from '../lib/api';
 
 interface Props {
   task: Task;
   x: number;
   y: number;
   onClose: () => void;
+  onMoveTask: (task: Task, status: TaskStatus) => Promise<void>;
+  onDeleteTask: (task: Task) => Promise<void>;
 }
 
-export function TaskContextMenu({ task, x, y, onClose }: Props) {
-  const upsertTask = useStore((s) => s.upsertTask);
-  const removeTask = useStore((s) => s.removeTask);
+export function TaskContextMenu({ task, x, y, onClose, onMoveTask, onDeleteTask }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -52,14 +50,13 @@ export function TaskContextMenu({ task, x, y, onClose }: Props) {
 
   async function handleMove(status: TaskStatus) {
     onClose();
-    await optimisticMoveTask(task, status, upsertTask, moveTask);
+    await onMoveTask(task, status);
   }
 
   async function handleDelete() {
     onClose();
     try {
-      await deleteTask(task.id);
-      removeTask(task.id);
+      await onDeleteTask(task);
     } catch {}
   }
 

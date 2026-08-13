@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   agent_provider    TEXT,
   reasoning_effort  TEXT,
   workdir           TEXT,
+  project_id        TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  handling_profile_id TEXT,
+  delegated_worker_id TEXT,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
   last_agent_response_at  INTEGER,
@@ -128,3 +131,219 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 
 CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
   ON channel_messages(thread_id, created_at, hermes_message_id);
+
+CREATE TABLE IF NOT EXISTS studio_github_connection_states (
+  state_hash TEXT PRIMARY KEY,
+  flow TEXT NOT NULL CHECK(flow IN ('manifest', 'install', 'oauth')),
+  installation_id INTEGER,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  CHECK(
+    (flow IN ('manifest', 'install') AND installation_id IS NULL)
+    OR (flow = 'oauth' AND installation_id > 0)
+  )
+);
+
+CREATE TABLE IF NOT EXISTS studio_github_installations (
+  id INTEGER PRIMARY KEY CHECK(id > 0),
+  account_login TEXT NOT NULL,
+  account_type TEXT NOT NULL CHECK(account_type IN ('User', 'Organization')),
+  label TEXT NOT NULL,
+  permission_mode TEXT NOT NULL DEFAULT 'upgrade_required' CHECK(permission_mode IN ('read_write', 'upgrade_required')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS studio_github_app_config (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  encrypted_payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS studio_projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider = 'github'),
+  provider_repository_id INTEGER NOT NULL CHECK(provider_repository_id > 0),
+  installation_id INTEGER NOT NULL CHECK(installation_id > 0) REFERENCES studio_github_installations(id),
+  owner TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
+  default_branch TEXT NOT NULL,
+  html_url TEXT NOT NULL,
+  clone_url TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'branch_pr' CHECK(mode IN ('read_only', 'branch_pr')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(provider, provider_repository_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_studio_projects_updated
+  ON studio_projects(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id                 TEXT PRIMARY KEY,
+  name               TEXT NOT NULL,
+  name_key           TEXT NOT NULL UNIQUE,
+  purpose            TEXT NOT NULL,
+  manager_profile_id TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_updated
+  ON projects(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_manager_history (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  profile_id     TEXT NOT NULL,
+  effective_from INTEGER NOT NULL,
+  effective_to   INTEGER,
+  changed_by     TEXT NOT NULL,
+  CHECK(effective_to IS NULL OR effective_to >= effective_from)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_manager_history_open
+  ON project_manager_history(project_id)
+  WHERE effective_to IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_project_manager_history_project
+  ON project_manager_history(project_id, effective_from);
+
+CREATE TABLE IF NOT EXISTS project_profile_grants (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL,
+  role        TEXT NOT NULL CHECK(role IN ('view', 'contribute', 'manage')),
+  granted_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY(project_id, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_repository_links (
+  project_id             TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  provider               TEXT NOT NULL CHECK(provider = 'github'),
+  provider_repository_id INTEGER NOT NULL CHECK(provider_repository_id > 0),
+  installation_id        INTEGER NOT NULL CHECK(installation_id > 0) REFERENCES studio_github_installations(id),
+  owner                  TEXT NOT NULL,
+  full_name              TEXT NOT NULL,
+  private                INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
+  default_branch         TEXT NOT NULL,
+  html_url               TEXT NOT NULL,
+  clone_url              TEXT NOT NULL,
+  mode                   TEXT NOT NULL DEFAULT 'read_only' CHECK(mode IN ('read_only', 'branch_pr')),
+  created_at             INTEGER NOT NULL,
+  updated_at             INTEGER NOT NULL,
+  UNIQUE(provider, provider_repository_id)
+);
+
+CREATE TABLE IF NOT EXISTS task_collaboration_grants (
+  task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL,
+  granted_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY(task_id, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_collaboration_grants (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL,
+  granted_by  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY(project_id, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_editor_leases (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  profile_id           TEXT NOT NULL,
+  repository_full_name TEXT NOT NULL,
+  base_branch          TEXT NOT NULL,
+  branch_name          TEXT NOT NULL,
+  workdir              TEXT NOT NULL,
+  base_sha             TEXT,
+  status               TEXT NOT NULL CHECK(status IN ('active', 'released')),
+  lease_token          TEXT NOT NULL,
+  created_at           INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL,
+  released_at          INTEGER,
+  CHECK(released_at IS NULL OR released_at >= created_at)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_editor_active
+  ON project_editor_leases(project_id)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_project_editor_task
+  ON project_editor_leases(task_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_versions (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id             TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  lease_id            TEXT REFERENCES project_editor_leases(id) ON DELETE SET NULL,
+  action              TEXT NOT NULL CHECK(action IN ('commit_push', 'revert')),
+  commit_sha          TEXT NOT NULL,
+  parent_sha          TEXT,
+  reverted_version_id TEXT REFERENCES project_versions(id) ON DELETE SET NULL,
+  branch_name         TEXT NOT NULL,
+  commit_message      TEXT NOT NULL,
+  changed_files_json  TEXT NOT NULL,
+  pushed_at           INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_versions_project
+  ON project_versions(project_id, pushed_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_references (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  original_filename TEXT NOT NULL,
+  safe_filename     TEXT NOT NULL,
+  mime_type         TEXT NOT NULL,
+  extension         TEXT NOT NULL,
+  size_bytes        INTEGER NOT NULL CHECK(size_bytes >= 0),
+  sha256            TEXT NOT NULL,
+  storage_path      TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK(status IN ('uploaded', 'extracting', 'indexed', 'failed', 'deleted')),
+  error             TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  indexed_at        INTEGER,
+  deleted_at        INTEGER,
+  UNIQUE(project_id, sha256)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_references_project
+  ON project_references(project_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_reference_versions (
+  id           TEXT PRIMARY KEY,
+  reference_id TEXT NOT NULL REFERENCES project_references(id) ON DELETE CASCADE,
+  sha256       TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  UNIQUE(reference_id, sha256)
+);
+
+CREATE TABLE IF NOT EXISTS project_reference_chunks (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  reference_id TEXT NOT NULL REFERENCES project_references(id) ON DELETE CASCADE,
+  version_id   TEXT NOT NULL REFERENCES project_reference_versions(id) ON DELETE CASCADE,
+  chunk_index  INTEGER NOT NULL CHECK(chunk_index >= 0),
+  text         TEXT NOT NULL,
+  page_number  INTEGER,
+  sheet_name   TEXT,
+  cell_range   TEXT,
+  created_at   INTEGER NOT NULL,
+  UNIQUE(reference_id, chunk_index)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS project_reference_chunks_fts
+  USING fts5(chunk_id UNINDEXED, project_id UNINDEXED, reference_id UNINDEXED, text);

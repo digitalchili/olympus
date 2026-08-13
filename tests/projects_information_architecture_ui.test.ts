@@ -1,0 +1,93 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const sidebar = await readFile('client/src/components/Sidebar.tsx', 'utf8');
+const header = await readFile('client/src/components/Header.tsx', 'utf8');
+const board = await readFile('client/src/components/Board.tsx', 'utf8');
+const column = await readFile('client/src/components/Column.tsx', 'utf8');
+const card = await readFile('client/src/components/TaskCard.tsx', 'utf8');
+const detail = await readFile('client/src/components/ProjectDetailPage.tsx', 'utf8');
+const newTask = await readFile('client/src/components/NewTaskPage.tsx', 'utf8');
+const app = await readFile('client/src/App.tsx', 'utf8');
+const taskDetail = await readFile('client/src/components/TaskDetailPage.tsx', 'utf8');
+const profileContext = await readFile('client/src/contexts/ProfileContext.tsx', 'utf8');
+const taskCard = await readFile('client/src/components/TaskCard.tsx', 'utf8');
+
+assert.match(sidebar, /FolderKanban/);
+assert.match(sidebar, /label="Tasks"/);
+assert.doesNotMatch(sidebar, /label="All Tasks"/);
+assert.match(header, /let title = 'Tasks'/);
+assert.doesNotMatch(header, /All Tasks/);
+assert.match(header, /<nav aria-label="Breadcrumb"/);
+assert.match(app, /path="\/projects\/:projectId\/tasks\/:taskId" element=\{<TaskDetailPage \/>\}/);
+assert.match(taskDetail, /task\.project_id === projectId/);
+assert.match(taskDetail, /fetchProject\(projectId, activeProfileId\)/);
+assert.match(taskDetail, /if \(!projectId \|\| !task \|\| task\.project_id !== projectId\)/);
+assert.match(profileContext, /\^\\\/projects\\\/\[\^\/\]\+\\\/tasks\\\/\[\^\/\]\+\$/);
+assert.match(taskCard, /to=\{`\/projects\/\$\{encodeURIComponent\(project\.id\)\}`\}/);
+assert.match(taskDetail, /replace: true/);
+
+assert.match(board, /Every task you can access/);
+assert.match(board, /projectById=/);
+assert.match(board, /showTaskLocation/);
+assert.match(column, /showTaskLocation/);
+assert.match(column, /project=\{task\.project_id \? projectById\?\.get\(task\.project_id\) : undefined\}/);
+assert.doesNotMatch(card, /Inbox/);
+assert.match(card, /projectTaskPath/);
+assert.match(card, /projectChipClasses/);
+assert.match(card, /Project: \$\{project\.name\}/);
+
+for (const tab of ['Board', 'References', 'Activity', 'Settings']) {
+  assert.match(detail, new RegExp(`>${tab}<`));
+}
+assert.match(detail, /useSearchParams/);
+assert.match(detail, /usePageHeader/);
+assert.match(detail, /label: project\?\.name \?\? 'Project'/);
+assert.match(detail, /activeTab === 'board'/);
+assert.match(detail, /activeTab === 'references'/);
+assert.match(detail, /activeTab === 'activity'/);
+assert.match(detail, /activeTab === 'settings'/);
+assert.doesNotMatch(detail, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/);
+assert.match(detail, /Project owner & task routing/);
+assert.match(detail, /Controls who owns this Project and becomes the default handler for new tasks/);
+assert.match(detail, /Reassign Project owner/);
+assert.match(detail, />Reassign owner</);
+assert.match(detail, /\/> Collaborators</);
+assert.match(detail, /Give other profiles access without changing the Project owner or task routing/);
+assert.doesNotMatch(detail, /Owner · full access/);
+assert.match(detail, /No collaborators yet/);
+assert.match(detail, />Profile</);
+assert.match(detail, />Permission</);
+assert.match(detail, />Grant access</);
+assert.doesNotMatch(detail, />Managed by</);
+assert.doesNotMatch(detail, />Project access</);
+assert.doesNotMatch(detail, />Change manager</);
+assert.doesNotMatch(detail, />Add or update access</);
+assert.doesNotMatch(detail, /manage · manager/);
+assert.match(detail, /Drop files here or click to browse/);
+assert.match(detail, /onDragOver/);
+assert.match(detail, /onDrop/);
+assert.match(detail, /multiple/);
+assert.match(detail, /25 MB per file/);
+assert.match(detail, /aria-live="polite"/);
+assert.match(detail, /Uploaded \$\{pendingFiles\.length\}/);
+assert.match(detail, /dropEffect = uploadingReference \? 'none' : 'copy'/);
+assert.match(detail, /Wait for the current upload to finish/);
+assert.match(detail, /referenceUploadLock\.current/);
+assert.match(detail, /className="peer sr-only"/);
+
+assert.match(newTask, /const projectLocked = Boolean\(initialProjectId\)/);
+assert.match(newTask, /disabled=\{projectLocked \|\| isCreating\}/);
+assert.match(newTask, /Future tasks use the Project manager policy/);
+assert.match(newTask, /projectSelectionPending/);
+assert.match(newTask, /Waiting for Project/);
+assert.match(newTask, /aria-label="Project"/);
+assert.match(newTask, /aria-label="Profile"/);
+assert.match(newTask, /<option value="">No project<\/option>/);
+assert.doesNotMatch(newTask, /Location\s*<select/);
+assert.doesNotMatch(newTask, /<option value="">Inbox<\/option>/);
+assert.doesNotMatch(newTask, /Handled by/);
+assert.doesNotMatch(newTask, /ProjectFolderPicker/);
+assert.match(newTask, /max-w-4xl/);
+
+console.log('Projects information architecture UI tests passed');

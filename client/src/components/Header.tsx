@@ -50,7 +50,7 @@ export function usePageHeader(config: PageHeaderConfig) {
 
 function HeaderCrumbs({ crumbs }: { crumbs: PageHeaderCrumb[] }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+    <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm font-medium">
       {crumbs.map((crumb, index) => (
         <div key={`${crumb.label}:${index}`} className="flex min-w-0 items-center gap-2">
           {index > 0 && <ChevronRight size={14} className="shrink-0 text-zinc-300 dark:text-zinc-700" />}
@@ -63,15 +63,16 @@ function HeaderCrumbs({ crumbs }: { crumbs: PageHeaderCrumb[] }) {
           )}
         </div>
       ))}
-    </div>
+    </nav>
   );
 }
 
 export function Header() {
   const location = useLocation();
   const pageHeader = useContext(PageHeaderEntryContext)?.config ?? null;
-  const match = useMatch('/tasks/:taskId');
-  const taskId = match?.params.taskId;
+  const directTaskMatch = useMatch('/tasks/:taskId');
+  const projectTaskMatch = useMatch('/projects/:projectId/tasks/:taskId');
+  const taskId = directTaskMatch?.params.taskId ?? projectTaskMatch?.params.taskId;
   const task = useStore((s) => taskId ? s.tasks.find((t) => t.id === taskId) : null);
 
   const isSettings = location.pathname === '/settings';
@@ -80,10 +81,15 @@ export function Header() {
   const isSkills = location.pathname === '/skills' || location.pathname.startsWith('/skills/');
   const isFiles = location.pathname === '/files';
   const isChannels = location.pathname === '/channels';
+  const isProjects = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
+  const isProjectDetail = /^\/projects\/[^/]+$/.test(location.pathname);
+  const isProjectTask = isNewTask && new URLSearchParams(location.search).has('project');
 
   let title = 'Tasks';
   let showParent = false;
   let truncate = false;
+  let parentTitle = 'Tasks';
+  let parentTo = '/';
 
   if (isSettings) {
     title = 'Settings';
@@ -95,9 +101,20 @@ export function Header() {
     title = 'Files';
   } else if (isChannels) {
     title = 'Channels';
+  } else if (isProjectDetail) {
+    title = 'Project';
+    showParent = true;
+    parentTitle = 'Projects';
+    parentTo = '/projects';
+  } else if (isProjects) {
+    title = 'Projects';
   } else if (isNewTask) {
     title = 'New Task';
     showParent = true;
+    if (isProjectTask) {
+      parentTitle = 'Projects';
+      parentTo = '/projects';
+    }
   } else if (task) {
     title = 'Task';
     showParent = true;
@@ -117,8 +134,8 @@ export function Header() {
       <div className="flex items-center gap-2 min-w-0">
         {showParent && (
           <>
-            <ProfileLink to="/" className="text-sm font-medium text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors shrink-0">
-              Tasks
+            <ProfileLink to={parentTo} className="text-sm font-medium text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors shrink-0">
+              {parentTitle}
             </ProfileLink>
             <ChevronRight size={14} className="text-zinc-300 dark:text-zinc-600 shrink-0" />
           </>

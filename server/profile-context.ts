@@ -22,9 +22,8 @@ export function requestProfile(req: Request, registry: LocalProfileRegistry = lo
 }
 
 export function taskBelongsToProfile(task: Task, profile: Pick<LocalProfileTarget, 'id' | 'isDefault'>): boolean {
-  return profile.isDefault
-    ? task.profile_name === null || task.profile_name === profile.id
-    : task.profile_name === profile.id;
+  const handler = task.handling_profile_id ?? task.profile_name ?? 'default';
+  return handler === profile.id;
 }
 
 export function requireTaskForProfile(

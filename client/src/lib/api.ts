@@ -33,10 +33,25 @@ import type {
   HermesChannelMessagesResult,
   HermesChannelThreadsResult,
   HermesProfile,
+  ProfileTaskAttention,
   HermesProfileCreateInput,
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
   ProfileBuilderSuggestion,
+  PersistentCollaborationGrant,
+  ProjectAccessRole,
+  PublicProjectEditorLease,
+  ProjectManagerHistoryEntry,
+  ProjectProfileGrant,
+  ProjectVersion,
+  ProjectReferenceChunk,
+  ProjectReferenceListItem,
+  ProjectReferenceSearchResult,
+  ProjectSummary,
+  ProjectRepositoryLink,
+  StudioGitHubInstallation,
+  StudioGitHubRepository,
+  StudioProject,
   UpdateStatus,
 } from '@shared/types';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
@@ -74,6 +89,7 @@ async function request<T>(path: string, init?: RequestInit, profileScoped = true
     const code = isRecord(body) && typeof body.code === 'string' ? body.code : undefined;
     throw new ApiError(message, res.status, code);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -85,15 +101,17 @@ export function fetchTasks() {
   return request<{ tasks: Task[] }>('/tasks');
 }
 
-export function moveTask(id: string, status: TaskStatus) {
-  return request<{ task: Task }>(`/tasks/${id}/move`, {
+export function moveTask(id: string, status: TaskStatus, profileId?: string | null) {
+  const path = profileId ? apiPathWithProfile(`/tasks/${id}/move`, profileId) : `/tasks/${id}/move`;
+  return request<{ task: Task }>(path, {
     method: 'POST',
     body: JSON.stringify({ status }),
-  });
+  }, !profileId);
 }
 
-export function deleteTask(id: string) {
-  return request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' });
+export function deleteTask(id: string, profileId?: string | null) {
+  const path = profileId ? apiPathWithProfile(`/tasks/${id}`, profileId) : `/tasks/${id}`;
+  return request<{ ok: boolean }>(path, { method: 'DELETE' }, !profileId);
 }
 
 export function patchTask(id: string, fields: { title?: string; description?: string; status?: TaskStatus; workdir?: string | null }) {
@@ -113,19 +131,32 @@ export function createTask(
   description: string,
   title?: string,
   workdir?: string | null,
-  requestedProfileName?: string | null,
+  options?: {
+    projectId?: string | null;
+    handlingProfileId?: string | null;
+    routingProfileId?: string | null;
+  },
 ) {
-  const path = requestedProfileName
-    ? apiPathWithProfile('/tasks', requestedProfileName)
+  const routingProfileId = options?.routingProfileId ?? options?.handlingProfileId;
+  const path = routingProfileId
+    ? apiPathWithProfile('/tasks', routingProfileId)
     : '/tasks';
   return request<{ task: Task }>(path, {
     method: 'POST',
-    body: JSON.stringify({ description, title, workdir, requestedProfileName }),
-  });
+    body: JSON.stringify({
+      description,
+      title,
+      workdir,
+      projectId: options?.projectId ?? null,
+      handlingProfileId: options?.handlingProfileId ?? null,
+    }),
+  }, !routingProfileId);
 }
 
 export interface TaskSearchResult {
   taskId: string;
+  projectId: string | null;
+  handlingProfileId: string;
   taskTitle: string;
   taskStatus: TaskStatus;
   role: 'task' | 'user' | 'assistant' | 'system' | 'tool';
@@ -133,8 +164,10 @@ export interface TaskSearchResult {
   timestamp: number;
 }
 
-export function searchTasks(query: string) {
-  return request<{ results: TaskSearchResult[] }>(`/search?q=${encodeURIComponent(query)}`);
+export function searchTasks(query: string, projectId?: string) {
+  const params = new URLSearchParams({ q: query });
+  if (projectId) params.set('projectId', projectId);
+  return request<{ results: TaskSearchResult[] }>(`/search?${params.toString()}`);
 }
 
 export function fetchMessages(taskId: string, before?: string | null) {
@@ -145,6 +178,21 @@ export function fetchMessages(taskId: string, before?: string | null) {
 
 export function fetchCollaborations(taskId: string) {
   return request<{ runs: CollaborationRun[] }>(`/tasks/${taskId}/collaborations`);
+}
+
+export function fetchCollaborationGrants(taskId: string) {
+  return request<{ grants: PersistentCollaborationGrant[] }>(`/tasks/${encodeURIComponent(taskId)}/collaboration-grants`);
+}
+
+export function revokeCollaborationGrant(
+  taskId: string,
+  scope: PersistentCollaborationGrant['scope'],
+  profileId: string,
+) {
+  return request<{ revoked: boolean }>(
+    `/tasks/${encodeURIComponent(taskId)}/collaboration-grants/${scope}/${encodeURIComponent(profileId)}`,
+    { method: 'DELETE' },
+  );
 }
 
 export function fetchSession(taskId: string) {
@@ -167,6 +215,256 @@ export function applyUpdate() {
   return request<{ accepted: true }>('/updates/apply', { method: 'POST' }, false);
 }
 
+export function fetchStudioGitHubStatus() {
+  return request<{ configured: boolean; installations: StudioGitHubInstallation[] }>('/studio/github/status', undefined, false);
+}
+
+export function connectStudioGitHub(owner: string | null) {
+  return request<{
+    url: string;
+    method: 'GET' | 'POST';
+    fields: Record<string, string>;
+  }>('/studio/github/connect', {
+    method: 'POST',
+    body: JSON.stringify({ owner }),
+  }, false);
+}
+
+export function updateStudioGitHubInstallation(installationId: number, label: string) {
+  return request<{ installation: StudioGitHubInstallation }>(
+    `/studio/github/installations/${encodeURIComponent(installationId)}`,
+    { method: 'PATCH', body: JSON.stringify({ label }) },
+    false,
+  );
+}
+
+export function deleteStudioGitHubInstallation(installationId: number) {
+  return request<void>(
+    `/studio/github/installations/${encodeURIComponent(installationId)}`,
+    { method: 'DELETE' },
+    false,
+  );
+}
+
+export function fetchStudioRepositories(installationId: number) {
+  return request<{ repositories: StudioGitHubRepository[] }>(
+    `/studio/github/repositories?installationId=${encodeURIComponent(installationId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function fetchStudioProjects() {
+  return request<{ projects: StudioProject[] }>('/studio/projects', undefined, false);
+}
+
+export function importStudioProject(installationId: number, repositoryId: number) {
+  return request<{ project: StudioProject }>('/studio/projects', {
+    method: 'POST',
+    body: JSON.stringify({ installationId, repositoryId }),
+  }, false);
+}
+
+export function fetchProjects() {
+  return request<{ projects: ProjectSummary[] }>('/projects', undefined, false);
+}
+
+export function createProject(input: { name: string; purpose: string; managerProfileId: string; repositoryLink?: { installationId: number; repositoryId: number } | null }) {
+  return request<{ project: ProjectSummary }>('/projects', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, false);
+}
+
+export function fetchProject(projectId: string, profileId?: string | null) {
+  const path = profileId
+    ? apiPathWithProfile(`/projects/${encodeURIComponent(projectId)}`, profileId)
+    : `/projects/${encodeURIComponent(projectId)}`;
+  return request<{ project: ProjectSummary; managerHistory: ProjectManagerHistoryEntry[] }>(
+    path,
+    undefined,
+    false,
+  );
+}
+
+export function updateProject(projectId: string, input: { name?: string; purpose?: string; repositoryLink?: { installationId: number; repositoryId: number } | null }) {
+  return request<{ project: ProjectSummary }>(`/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  }, false);
+}
+
+
+export function fetchProjectRepositoryLink(projectId: string) {
+  return request<{ repositoryLink: ProjectRepositoryLink | null }>(
+    `/projects/${encodeURIComponent(projectId)}/repository`,
+    undefined,
+    false,
+  );
+}
+
+export function upsertProjectRepositoryLink(projectId: string, installationId: number, repositoryId: number) {
+  return request<{ repositoryLink: ProjectRepositoryLink }>(
+    `/projects/${encodeURIComponent(projectId)}/repository`,
+    { method: 'PUT', body: JSON.stringify({ installationId, repositoryId }) },
+    false,
+  );
+}
+
+export function deleteProjectRepositoryLink(projectId: string) {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/repository`,
+    { method: 'DELETE' },
+    false,
+  );
+}
+
+export function fetchProjectGrants(projectId: string) {
+  return request<{ grants: ProjectProfileGrant[] }>(
+    `/projects/${encodeURIComponent(projectId)}/grants`,
+    undefined,
+    false,
+  );
+}
+
+export function setProjectGrant(projectId: string, profileId: string, role: ProjectAccessRole) {
+  return request<{ grant: ProjectProfileGrant }>(
+    `/projects/${encodeURIComponent(projectId)}/grants/${encodeURIComponent(profileId)}`,
+    { method: 'PUT', body: JSON.stringify({ role }) },
+    false,
+  );
+}
+
+export function revokeProjectGrant(projectId: string, profileId: string) {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/grants/${encodeURIComponent(profileId)}`,
+    { method: 'DELETE' },
+    false,
+  );
+}
+
+export function fetchProjectTasks(projectId: string) {
+  return request<{ tasks: Task[] }>(
+    `/projects/${encodeURIComponent(projectId)}/tasks`,
+    undefined,
+    false,
+  );
+}
+
+export interface ProjectGitStatus {
+  clean: boolean;
+  changedFiles: string[];
+  summary: string;
+  diff: string;
+}
+
+export function fetchProjectEditor(projectId: string) {
+  return request<{ editor: PublicProjectEditorLease | null }>(`/projects/${encodeURIComponent(projectId)}/editor`, undefined, false);
+}
+
+export function acquireProjectEditor(projectId: string, taskId: string) {
+  return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/acquire`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
+export function releaseProjectEditor(projectId: string, taskId: string) {
+  return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/release`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
+export function fetchProjectEditorStatus(projectId: string, taskId: string) {
+  return request<{ status: ProjectGitStatus }>(
+    `/projects/${encodeURIComponent(projectId)}/editor/status?taskId=${encodeURIComponent(taskId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function fetchProjectVersions(projectId: string) {
+  return request<{ versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/versions`, undefined, false);
+}
+
+export function commitPushProject(projectId: string, taskId: string, message: string) {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/commit-push`, {
+    method: 'POST', body: JSON.stringify({ taskId, message }),
+  }, false);
+}
+
+export function revertProjectVersion(projectId: string, taskId: string, versionId: string) {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(
+    `/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/revert`,
+    { method: 'POST', body: JSON.stringify({ taskId }) },
+    false,
+  );
+}
+
+export function reassignProjectManager(
+  projectId: string,
+  managerProfileId: string,
+  previousManagerRole: 'view' | 'contribute' | null,
+) {
+  return request<{ project: ProjectSummary }>(`/projects/${encodeURIComponent(projectId)}/reassign`, {
+    method: 'POST',
+    body: JSON.stringify({ managerProfileId, previousManagerRole }),
+  }, false);
+}
+
+export function fetchProjectReferences(projectId: string) {
+  return request<{ references: ProjectReferenceListItem[] }>(
+    `/projects/${encodeURIComponent(projectId)}/references`,
+    undefined,
+    false,
+  );
+}
+
+export function uploadProjectReference(projectId: string, file: File, signal?: AbortSignal) {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  return request<{ reference: ProjectReferenceListItem }>(
+    `/projects/${encodeURIComponent(projectId)}/references`,
+    { method: 'POST', body: formData, signal },
+    false,
+  );
+}
+
+export function fetchProjectReference(projectId: string, referenceId: string) {
+  return request<{ reference: ProjectReferenceListItem; chunks: ProjectReferenceChunk[] }>(
+    `/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}`,
+    undefined,
+    false,
+  );
+}
+
+export function searchProjectReferences(projectId: string, q: string) {
+  return request<{ results: ProjectReferenceSearchResult[] }>(
+    `/projects/${encodeURIComponent(projectId)}/references/search?q=${encodeURIComponent(q)}`,
+    undefined,
+    false,
+  );
+}
+
+export function reindexProjectReference(projectId: string, referenceId: string) {
+  return request<{ reference: ProjectReferenceListItem }>(
+    `/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}/reindex`,
+    { method: 'POST' },
+    false,
+  );
+}
+
+export function deleteProjectReference(projectId: string, referenceId: string) {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}`,
+    { method: 'DELETE' },
+    false,
+  );
+}
+
+export function projectReferenceDownloadUrl(projectId: string, referenceId: string) {
+  return `${BASE}/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(referenceId)}/download`;
+}
+
 export interface InstallationSettings {
   name: string;
 }
@@ -184,6 +482,10 @@ export function updateInstallationName(name: string) {
 
 export function fetchHermesProfiles(includeInactive = false) {
   return request<{ profiles: HermesProfile[] }>(includeInactive ? '/profiles?includeInactive=true' : '/profiles');
+}
+
+export function fetchProfileAttention() {
+  return request<{ profiles: ProfileTaskAttention[] }>('/profiles/attention', undefined, false);
 }
 
 export function fetchHermesChannels(profileId?: string) {

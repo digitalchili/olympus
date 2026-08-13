@@ -12,25 +12,28 @@ import { assertProfileAcceptingWork, isProfileDeleting } from '../profile-deleti
 
 const stmtAllTasks = db.prepare('SELECT * FROM tasks ORDER BY updated_at DESC');
 const stmtTasksByStatus = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC');
-const stmtTasksByProfile = db.prepare('SELECT * FROM tasks WHERE profile_name = ? ORDER BY updated_at DESC');
-const stmtTasksByProfileAndStatus = db.prepare('SELECT * FROM tasks WHERE profile_name = ? AND status = ? ORDER BY updated_at DESC');
-const stmtDefaultProfileTasks = db.prepare('SELECT * FROM tasks WHERE (profile_name IS NULL OR profile_name = ?) ORDER BY updated_at DESC');
-const stmtDefaultProfileTasksByStatus = db.prepare('SELECT * FROM tasks WHERE (profile_name IS NULL OR profile_name = ?) AND status = ? ORDER BY updated_at DESC');
+const stmtTasksByProfile = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY updated_at DESC');
+const stmtTasksByProfileAndStatus = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY updated_at DESC');
+const stmtDefaultProfileTasks = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY updated_at DESC');
+const stmtDefaultProfileTasksByStatus = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY updated_at DESC');
+const stmtTasksByProject = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY updated_at DESC');
 const stmtGetTask = db.prepare('SELECT * FROM tasks WHERE id = ?');
 const stmtInsertTask = db.prepare(`
   INSERT INTO tasks (
     id, title, description, status, profile_name, routing_source, agent_model, agent_provider, reasoning_effort, workdir,
+    project_id, handling_profile_id, delegated_worker_id,
     created_at, updated_at, last_agent_response_at, last_viewed_at,
     last_context_used_tokens, last_context_window_tokens
   )
   VALUES (
     @id, @title, @description, @status, @profile_name, @routing_source, @agent_model, @agent_provider, @reasoning_effort, @workdir,
+    @project_id, @handling_profile_id, @delegated_worker_id,
     @created_at, @updated_at, @last_agent_response_at, @last_viewed_at,
     @last_context_used_tokens, @last_context_window_tokens
   )
 `);
 const stmtDeleteTask = db.prepare('DELETE FROM tasks WHERE id = ?');
-const stmtDeleteTasksByProfile = db.prepare('DELETE FROM tasks WHERE profile_name = ?');
+const stmtDeleteTasksByProfile = db.prepare('DELETE FROM tasks WHERE handling_profile_id = ?');
 const stmtTouchTask = db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?');
 const stmtMarkTaskViewed = db.prepare(`
   UPDATE tasks
@@ -39,6 +42,16 @@ const stmtMarkTaskViewed = db.prepare(`
     AND last_agent_response_at IS NOT NULL
     AND (last_viewed_at IS NULL OR last_viewed_at < last_agent_response_at)
 `);
+const stmtProfileTaskAttention = db.prepare(`
+  SELECT handling_profile_id AS profileId, COUNT(*) AS reviewCount
+  FROM tasks
+  WHERE status = 'in_review'
+    AND last_agent_response_at IS NOT NULL
+    AND (last_viewed_at IS NULL OR last_viewed_at < last_agent_response_at)
+  GROUP BY handling_profile_id
+  ORDER BY handling_profile_id
+`);
+
 export function getAllTasks(status?: TaskStatus): Task[] {
   return status ? stmtTasksByStatus.all(status) as Task[] : stmtAllTasks.all() as Task[];
 }
@@ -54,6 +67,14 @@ export function getTasksForProfile(profileId: string, isDefault: boolean, status
     : stmtTasksByProfile.all(profileId) as Task[];
 }
 
+export function getTasksForProject(projectId: string): Task[] {
+  return stmtTasksByProject.all(projectId) as Task[];
+}
+
+export function getProfileTaskAttention(): Array<{ profileId: string; reviewCount: number }> {
+  return stmtProfileTaskAttention.all() as Array<{ profileId: string; reviewCount: number }>;
+}
+
 export function getTask(id: string): Task | undefined {
   return stmtGetTask.get(id) as Task | undefined;
 }
@@ -67,10 +88,14 @@ export function insertTask(task: {
   reasoning_effort?: ReasoningEffort | null;
   workdir?: string | null;
   profile_name?: string | null;
+  project_id?: string | null;
+  handling_profile_id?: string | null;
+  delegated_worker_id?: string | null;
   routing_source?: TaskRoutingSource | null;
   last_agent_response_at?: number | null;
 }): Task {
-  assertProfileAcceptingWork(task.profile_name ?? DEFAULT_PROFILE_NAME);
+  const handlingProfileId = task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME;
+  assertProfileAcceptingWork(handlingProfileId);
   const id = uuid();
   const now = Date.now();
   const row = {
@@ -78,12 +103,15 @@ export function insertTask(task: {
     title: task.title,
     description: task.description ?? null,
     status: task.status,
-    profile_name: task.profile_name ?? null,
+    profile_name: task.profile_name === undefined ? handlingProfileId : task.profile_name,
     routing_source: task.routing_source ?? null,
     agent_model: task.agent_model ?? null,
     agent_provider: task.agent_provider ?? null,
     reasoning_effort: task.reasoning_effort ?? null,
     workdir: task.workdir ?? null,
+    project_id: task.project_id ?? null,
+    handling_profile_id: handlingProfileId,
+    delegated_worker_id: task.delegated_worker_id ?? null,
     created_at: now,
     updated_at: now,
     last_agent_response_at: task.last_agent_response_at ?? null,
@@ -100,6 +128,7 @@ const ALLOWED_UPDATE_FIELDS = new Set<string>([
   'description',
   'status',
   'profile_name',
+  'handling_profile_id',
   'routing_source',
   'agent_model',
   'agent_provider',
@@ -117,6 +146,7 @@ type TaskUpdateFields = Pick<
   | 'description'
   | 'status'
   | 'profile_name'
+  | 'handling_profile_id'
   | 'routing_source'
   | 'agent_model'
   | 'agent_provider'
@@ -140,12 +170,16 @@ function getUpdateStmt(fieldKeys: string[]): ReturnType<typeof db.prepare> {
 
 export function updateTask(
   id: string,
-  fields: Partial<TaskUpdateFields>,
+  inputFields: Partial<TaskUpdateFields>,
 ): Task | undefined {
   const current = getTask(id);
-  if (!current || isProfileDeleting(current.profile_name ?? DEFAULT_PROFILE_NAME)) return undefined;
-  if (fields.profile_name !== undefined) {
-    assertProfileAcceptingWork(fields.profile_name ?? DEFAULT_PROFILE_NAME);
+  if (!current || isProfileDeleting(current.handling_profile_id ?? current.profile_name ?? DEFAULT_PROFILE_NAME)) return undefined;
+  const fields = { ...inputFields };
+  if (fields.profile_name !== undefined || fields.handling_profile_id !== undefined) {
+    const nextHandler = fields.handling_profile_id ?? fields.profile_name ?? DEFAULT_PROFILE_NAME;
+    assertProfileAcceptingWork(nextHandler);
+    fields.profile_name = fields.profile_name ?? nextHandler;
+    fields.handling_profile_id = nextHandler;
   }
   const fieldKeys: string[] = [];
   const values: Record<string, unknown> = { id };
@@ -165,7 +199,7 @@ export function updateTask(
 
 export function touchTask(id: string): void {
   const task = getTask(id);
-  if (!task || isProfileDeleting(task.profile_name ?? DEFAULT_PROFILE_NAME)) return;
+  if (!task || isProfileDeleting(task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)) return;
   stmtTouchTask.run(Date.now(), id);
 }
 
@@ -186,7 +220,7 @@ export function recordAgentResponse(taskId: string, at = Date.now(), context?: C
 
 export function markTaskViewed(id: string): { task: Task | undefined; changed: boolean } {
   const current = getTask(id);
-  if (!current || isProfileDeleting(current.profile_name ?? DEFAULT_PROFILE_NAME)) {
+  if (!current || isProfileDeleting(current.handling_profile_id ?? current.profile_name ?? DEFAULT_PROFILE_NAME)) {
     return { task: current, changed: false };
   }
   const result = stmtMarkTaskViewed.run(id);
@@ -198,7 +232,7 @@ export function markTaskViewed(id: string): { task: Task | undefined; changed: b
 
 export function deleteTask(id: string): boolean {
   const task = getTask(id);
-  if (!task || isProfileDeleting(task.profile_name ?? DEFAULT_PROFILE_NAME)) return false;
+  if (!task || isProfileDeleting(task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)) return false;
   const result = stmtDeleteTask.run(id);
   return result.changes > 0;
 }

@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { REASONING_EFFORTS, type ProfileBuilderSuggestion, type ReasoningEffort } from '../../shared/types.js';
 import type { AgentRunOptions } from '../adapters/types.js';
-import { deleteTasksForProfile, getTasksForProfile } from '../db/queries.js';
+import { deleteTasksForProfile, getProfileTaskAttention, getTasksForProfile } from '../db/queries.js';
+import { countProjectsManagedByProfile } from '../db/projects.js';
+import { getActiveProjectEditorForProfile } from '../db/project-cp.js';
 import { isRecord } from '../errors.js';
 import { broadcast } from '../events.js';
 import {
@@ -86,6 +88,17 @@ function sendLocalProfileError(res: Response, error: unknown, fallback: string) 
   return res.status(500).json({ error: fallback, code: 'PROFILE_LIFECYCLE_ERROR' });
 }
 
+function assertProfileDoesNotManageProjects(profileId: string): void {
+  const managedProjectCount = countProjectsManagedByProfile(profileId);
+  if (managedProjectCount > 0) {
+    throw new LocalProfileError(
+      409,
+      `Reassign ${managedProjectCount} managed Project${managedProjectCount === 1 ? '' : 's'} before changing this profile`,
+      'PROFILE_MANAGES_PROJECTS',
+    );
+  }
+}
+
 function publicProfile(id: string) {
   return localProfileRegistry.allPublicProfiles().find((profile) => profile.id === id);
 }
@@ -109,6 +122,11 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
     res.json({ profiles: includeInactive
       ? localProfileRegistry.allPublicProfiles()
       : localProfileRegistry.publicProfiles() });
+  });
+
+  router.get('/attention', (_req, res) => {
+    const activeProfileIds = new Set(localProfileRegistry.publicProfiles().map((profile) => profile.id));
+    res.json({ profiles: getProfileTaskAttention().filter((item) => activeProfileIds.has(item.profileId)) });
   });
 
   router.post('/draft', currentProfileGate, async (req, res) => {
@@ -169,7 +187,9 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
   router.post('/:id/deactivate', targetProfileGate, async (req, res) => {
     try {
       const currentProfileId = requestProfile(req).id;
-      const updated = await localProfileRegistry.setActive(routeProfileId(req), false, currentProfileId);
+      const targetProfileId = routeProfileId(req);
+      assertProfileDoesNotManageProjects(targetProfileId);
+      const updated = await localProfileRegistry.setActive(targetProfileId, false, currentProfileId);
       res.json({ profile: publicProfile(updated.id) });
     } catch (error) {
       sendLocalProfileError(res, error, 'Could not deactivate profile');
@@ -196,6 +216,13 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
         req.body?.confirmation,
         currentProfileId,
       );
+      assertProfileDoesNotManageProjects(target.id);
+      if (getActiveProjectEditorForProfile(target.id)) {
+        return res.status(409).json({
+          error: 'Release this profile’s Project editor before deleting the profile',
+          code: 'PROJECT_EDITOR_ACTIVE',
+        });
+      }
       deletionLock = beginProfileDeletion(target.id);
 
       const initialTasks = getTasksForProfile(target.id, false);
