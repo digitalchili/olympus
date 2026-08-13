@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, FolderKanban, Search, MessageCircle } from 'lucide-react';
-import type { HermesChannel } from '@shared/types';
+import type { HermesChannel, ProfileTaskAttention } from '@shared/types';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
-import { fetchHermesChannels, fetchInstallationSettings } from '../lib/api';
+import { fetchHermesChannels, fetchInstallationSettings, fetchProfileAttention } from '../lib/api';
 import { channelInboxPath, enabledChannelInboxes, selectedChannelInbox } from '../lib/channelInbox';
 import { ProfileLink, useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { ProfilePicker } from './ProfilePicker';
@@ -13,6 +13,7 @@ const isMac = /Mac/.test(navigator.userAgent);
 
 export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   const location = useLocation();
+  const rawNavigate = useNavigate();
   const navigate = useProfileNavigate();
   const { profiles, activeProfileId, isLoading: profilesLoading, setActiveProfileId } = useProfile();
   const collapsed = useStore((s) => s.sidebarCollapsed);
@@ -20,6 +21,51 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   const installationName = useStore((s) => s.installationName);
   const setInstallationName = useStore((s) => s.setInstallationName);
   const [channels, setChannels] = useState<HermesChannel[]>([]);
+  const [attentionByProfile, setAttentionByProfile] = useState<Map<string, ProfileTaskAttention>>(new Map());
+  const [pulseAttention, setPulseAttention] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let previousTotal: number | null = null;
+    let pulseTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refresh = () => {
+      void fetchProfileAttention().then(({ profiles: attention }) => {
+        if (cancelled) return;
+        const total = attention.reduce((sum, item) => sum + item.reviewCount, 0);
+        setAttentionByProfile(new Map(attention.map((item) => [item.profileId, item])));
+        if (previousTotal !== null && total > previousTotal) {
+          setPulseAttention(true);
+          if (pulseTimer) clearTimeout(pulseTimer);
+          pulseTimer = setTimeout(() => setPulseAttention(false), 1800);
+        }
+        previousTotal = total;
+      }).catch(() => undefined);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+
+    refresh();
+    const interval = window.setInterval(refresh, 15_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      if (pulseTimer) clearTimeout(pulseTimer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  const handleProfileChange = (profileId: string) => {
+    if ((attentionByProfile.get(profileId)?.reviewCount ?? 0) > 0) {
+      rawNavigate({ pathname: '/', search: `?profile=${encodeURIComponent(profileId)}` });
+      return;
+    }
+    setActiveProfileId(profileId);
+  };
 
   useEffect(() => {
     fetchInstallationSettings().then(({ name }) => setInstallationName(name)).catch(() => undefined);
@@ -269,7 +315,9 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
                 profiles={profiles}
                 activeProfileId={activeProfileId}
                 loading={profilesLoading}
-                onChange={setActiveProfileId}
+                attentionByProfile={attentionByProfile}
+                pulseAttention={pulseAttention}
+                onChange={handleProfileChange}
               />
             </div>
           )}
@@ -279,7 +327,9 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
                 profiles={profiles}
                 activeProfileId={activeProfileId}
                 loading={profilesLoading}
-                onChange={setActiveProfileId}
+                attentionByProfile={attentionByProfile}
+                pulseAttention={pulseAttention}
+                onChange={handleProfileChange}
               />
             </div>
           )}

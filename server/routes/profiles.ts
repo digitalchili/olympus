@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { REASONING_EFFORTS, type ProfileBuilderSuggestion, type ReasoningEffort } from '../../shared/types.js';
 import type { AgentRunOptions } from '../adapters/types.js';
-import { deleteTasksForProfile, getTasksForProfile } from '../db/queries.js';
+import { deleteTasksForProfile, getProfileTaskAttention, getTasksForProfile } from '../db/queries.js';
 import { countProjectsManagedByProfile } from '../db/projects.js';
 import { isRecord } from '../errors.js';
 import { broadcast } from '../events.js';
@@ -121,6 +121,11 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
     res.json({ profiles: includeInactive
       ? localProfileRegistry.allPublicProfiles()
       : localProfileRegistry.publicProfiles() });
+  });
+
+  router.get('/attention', (_req, res) => {
+    const activeProfileIds = new Set(localProfileRegistry.publicProfiles().map((profile) => profile.id));
+    res.json({ profiles: getProfileTaskAttention().filter((item) => activeProfileIds.has(item.profileId)) });
   });
 
   router.post('/draft', currentProfileGate, async (req, res) => {

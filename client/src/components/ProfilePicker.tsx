@@ -1,20 +1,25 @@
 import { Bot, Check, ChevronDown } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
-import type { HermesProfile } from '@shared/types';
+import type { HermesProfile, ProfileTaskAttention } from '@shared/types';
 
 interface ProfilePickerProps {
   profiles: HermesProfile[];
   activeProfileId: string;
   loading: boolean;
+  attentionByProfile: Map<string, ProfileTaskAttention>;
+  pulseAttention: boolean;
   onChange: (profileId: string) => void;
 }
 
-export function ProfilePicker({ profiles, activeProfileId, loading, onChange }: ProfilePickerProps) {
+export function ProfilePicker({ profiles, activeProfileId, loading, attentionByProfile, pulseAttention, onChange }: ProfilePickerProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listboxId = useId();
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
+  const otherReviewCount = profiles.reduce((total, profile) => (
+    profile.id === activeProfileId ? total : total + (attentionByProfile.get(profile.id)?.reviewCount ?? 0)
+  ), 0);
 
   useEffect(() => {
     if (!open) return;
@@ -44,7 +49,7 @@ export function ProfilePicker({ profiles, activeProfileId, loading, onChange }: 
         ref={triggerRef}
         type="button"
         disabled={loading || profiles.length === 0}
-        aria-label="Active Hermes profile"
+        aria-label={`Switch profile. Active profile ${activeProfile?.displayName ?? activeProfileId}.${otherReviewCount > 0 ? ` ${otherReviewCount} task${otherReviewCount === 1 ? '' : 's'} ready for review in other profiles.` : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
@@ -52,8 +57,15 @@ export function ProfilePicker({ profiles, activeProfileId, loading, onChange }: 
         onClick={() => setOpen((current) => !current)}
         className="group flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
       >
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300">
+        <span className="relative flex size-6 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300">
           <Bot size={13} />
+          {otherReviewCount > 0 && (
+            <span
+              aria-hidden="true"
+              title={`${otherReviewCount} ready for review`}
+              className={`absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-white bg-purple-500 dark:border-zinc-900 ${pulseAttention ? 'motion-safe:animate-pulse' : ''}`}
+            />
+          )}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">
@@ -82,6 +94,7 @@ export function ProfilePicker({ profiles, activeProfileId, loading, onChange }: 
           <div className="max-h-72 overflow-y-auto">
             {profiles.map((profile) => {
               const selected = profile.id === activeProfileId;
+              const reviewCount = attentionByProfile.get(profile.id)?.reviewCount ?? 0;
               return (
                 <button
                   key={profile.id}
@@ -121,8 +134,20 @@ export function ProfilePicker({ profiles, activeProfileId, loading, onChange }: 
                       {profile.description || profile.id}
                     </span>
                   </span>
-                  <span className="flex size-5 shrink-0 items-center justify-center text-zinc-700 dark:text-zinc-200">
-                    {selected && <Check size={14} />}
+                  <span className="flex shrink-0 items-center gap-2">
+                    {reviewCount > 0 && (
+                      <span
+                        aria-label={`${reviewCount} task${reviewCount === 1 ? '' : 's'} ready for review`}
+                        className="flex items-center gap-1.5 text-[10px] font-semibold text-purple-600 dark:text-purple-300"
+                      >
+                        <span className="size-2 rounded-full bg-purple-500" aria-hidden="true" />
+                        <span className="tabular-nums">{reviewCount}</span>
+                        <span className="sr-only">Ready for review</span>
+                      </span>
+                    )}
+                    <span className="flex size-5 items-center justify-center text-zinc-700 dark:text-zinc-200">
+                      {selected && <Check size={14} />}
+                    </span>
                   </span>
                 </button>
               );

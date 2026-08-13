@@ -209,6 +209,11 @@ export interface HermesProfile {
   health: HermesProfileHealth;
 }
 
+export interface ProfileTaskAttention {
+  profileId: string;
+  reviewCount: number;
+}
+
 export interface HermesProfileSettings {
   id: string;
   displayName: string;

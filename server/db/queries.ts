@@ -42,6 +42,15 @@ const stmtMarkTaskViewed = db.prepare(`
     AND last_agent_response_at IS NOT NULL
     AND (last_viewed_at IS NULL OR last_viewed_at < last_agent_response_at)
 `);
+const stmtProfileTaskAttention = db.prepare(`
+  SELECT handling_profile_id AS profileId, COUNT(*) AS reviewCount
+  FROM tasks
+  WHERE status = 'in_review'
+    AND last_agent_response_at IS NOT NULL
+    AND (last_viewed_at IS NULL OR last_viewed_at < last_agent_response_at)
+  GROUP BY handling_profile_id
+  ORDER BY handling_profile_id
+`);
 
 export function getAllTasks(status?: TaskStatus): Task[] {
   return status ? stmtTasksByStatus.all(status) as Task[] : stmtAllTasks.all() as Task[];
@@ -60,6 +69,10 @@ export function getTasksForProfile(profileId: string, isDefault: boolean, status
 
 export function getTasksForProject(projectId: string): Task[] {
   return stmtTasksByProject.all(projectId) as Task[];
+}
+
+export function getProfileTaskAttention(): Array<{ profileId: string; reviewCount: number }> {
+  return stmtProfileTaskAttention.all() as Array<{ profileId: string; reviewCount: number }>;
 }
 
 export function getTask(id: string): Task | undefined {

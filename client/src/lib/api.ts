@@ -33,6 +33,7 @@ import type {
   HermesChannelMessagesResult,
   HermesChannelThreadsResult,
   HermesProfile,
+  ProfileTaskAttention,
   HermesProfileCreateInput,
   HermesProfileSettings,
   HermesProfileSettingsUpdate,
@@ -430,6 +431,10 @@ export function updateInstallationName(name: string) {
 
 export function fetchHermesProfiles(includeInactive = false) {
   return request<{ profiles: HermesProfile[] }>(includeInactive ? '/profiles?includeInactive=true' : '/profiles');
+}
+
+export function fetchProfileAttention() {
+  return request<{ profiles: ProfileTaskAttention[] }>('/profiles/attention', undefined, false);
 }
 
 export function fetchHermesChannels(profileId?: string) {
