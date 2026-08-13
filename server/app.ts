@@ -24,13 +24,15 @@ import { normalizeDelegationEvent } from './delegation-events.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { ProfileAgentAdapter } from './adapters/routing.js';
 import { initSSE, addClient, sendEvent, closeClientsForRestart, broadcast } from './events.js';
-import { closeSubscribersForRestart, getRunStatuses } from './live-chat.js';
+import { closeSubscribersForRestart, getRunStatuses, interruptActiveRuns } from './live-chat.js';
 import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
 import { createDrainRouter, maintenanceGuard } from './drain-http.js';
 import { createActiveRequestTracker } from './active-requests.js';
 import { getActiveTaskRunCount } from './task-run-lifecycle.js';
 import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsToProfile } from './profile-context.js';
+import { createRuntimeLiveness } from './runtime-liveness.js';
+import { operationalLog } from './observability.js';
 
 const app = express();
 
@@ -57,6 +59,15 @@ adapter.onDelegationReset((profileId) => {
 });
 const activeRequests = createActiveRequestTracker();
 const drainController = new DrainController(() => getActiveTaskRunCount() + activeRequests.count());
+const workerLiveness = createRuntimeLiveness({
+  checkWorker: () => adapter.healthCheck(),
+  onFailure: (status) => {
+    operationalLog('worker_readiness_failed', status);
+    for (const run of interruptActiveRuns('Hermes worker became unavailable. Your message was not completed; resend to retry.')) {
+      broadcast({ type: 'task_run_updated', run });
+    }
+  },
+});
 
 app.get('/api/health', async (_req, res) => {
   const hermes = await adapter.healthCheck();
@@ -65,8 +76,15 @@ app.get('/api/health', async (_req, res) => {
 
 app.get('/api/ready', async (_req, res) => {
   const status = drainController.status();
-  const hermes = status.ready ? await adapter.healthCheck() : false;
-  res.status(status.ready && hermes ? 200 : 503).json({ ...status, hermes });
+  const probe = status.ready ? await workerLiveness.probe() : { ready: false, checked: false };
+  res.status(status.ready && probe.ready ? 200 : 503).json({
+    ...status,
+    ready: status.ready && probe.ready,
+    hermes: probe.ready,
+    workerChecked: probe.checked,
+    workerFailures: workerLiveness.status().failures,
+    workerRetryAfter: workerLiveness.status().retryAfter,
+  });
 });
 
 app.use('/api/maintenance', createDrainRouter(drainController, undefined, () => {

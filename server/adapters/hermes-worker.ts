@@ -19,6 +19,7 @@ import type {
 import type { AgentAdapter, AgentRunOptions, AgentRunSettings, StreamEvent } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
+import { operationalLog, redactOperationalReason } from '../observability.js';
 
 // A cold Hermes Python worker can spend tens of seconds importing providers and state.
 // Keep the UI responsive after startup rather than killing a healthy worker prematurely.
@@ -103,6 +104,17 @@ function formatWorkerError(error: string | WorkerErrorPayload | undefined): stri
 
 function workerErrorCode(error: string | WorkerErrorPayload | undefined): string | undefined {
   return typeof error === 'object' ? error.code : undefined;
+}
+
+function withTimeout<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolveWork, rejectWork) => {
+    const timeout = setTimeout(() => rejectWork(new Error(message)), timeoutMs);
+    timeout.unref();
+    void work.then(
+      (value) => { clearTimeout(timeout); resolveWork(value); },
+      (error) => { clearTimeout(timeout); rejectWork(error); },
+    );
+  });
 }
 
 class HermesWorkerError extends Error {
@@ -207,6 +219,25 @@ export class HermesWorkerClient {
     }
 
     await this.readyPromise;
+  }
+
+  async healthCheck(timeoutMs = 10_000): Promise<boolean> {
+    try {
+      const result = await withTimeout(
+        (async () => {
+          await this.start();
+          return await this.request<{ ok: boolean }>('health', timeoutMs);
+        })(),
+        timeoutMs,
+        `Hermes worker heartbeat timed out after ${timeoutMs}ms`,
+      );
+      if (!result.ok) throw new Error('Hermes worker healthcheck failed');
+      return true;
+    } catch (error) {
+      operationalLog('worker_heartbeat_failed', { reason: redactOperationalReason(error) });
+      await this.stop().catch(() => undefined);
+      return false;
+    }
   }
 
   async stop(signal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
@@ -543,12 +574,7 @@ export class HermesWorkerAdapter implements AgentAdapter {
   }
 
   async healthCheck(): Promise<boolean> {
-    try {
-      await this.client.start();
-      return true;
-    } catch {
-      return false;
-    }
+    return await this.client.healthCheck();
   }
 
   async getMessages(sessionId: string, taskId: string): Promise<TaskMessage[]> {

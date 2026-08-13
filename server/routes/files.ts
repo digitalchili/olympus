@@ -25,6 +25,8 @@ import { Router, type Request, type Response } from 'express';
 import { expandHomePrefix, resolveOlympusHome, resolveOlympusWorkspaceDir, resolveProjectRoot } from '../paths.js';
 import { discoverLocalProfileTargets } from '../local-profiles.js';
 import { errorCode, isRecord } from '../errors.js';
+import { createUploadLifecycle } from '../upload-lifecycle.js';
+import { operationalLog, redactOperationalReason } from '../observability.js';
 import type {
   FileEntry,
   FileEntryType,
@@ -55,12 +57,21 @@ const TEXT_SAMPLE_BYTES = 8192;
 const MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_TEXT_FILE_SIZE_DISPLAY = '10 MiB';
 const UPLOAD_TMP_DIR = join(tmpdir(), 'olympus-dispatch-uploads');
+const UPLOAD_REQUEST_TIMEOUT_MS = Number.parseInt(process.env.OLYMPUS_UPLOAD_REQUEST_TIMEOUT_MS || '360000', 10);
+
+type UploadRequest = Request & { uploadRequestId?: string; uploadRequestDir?: string };
 
 mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
 
 const uploadMiddleware = multer({
   storage: multer.diskStorage({
-    destination: UPLOAD_TMP_DIR,
+    destination: (req, _file, callback) => {
+      const request = req as UploadRequest;
+      const requestDir = request.uploadRequestDir;
+      if (!requestDir) return callback(new Error('Upload request was not initialized'), '');
+      mkdirSync(requestDir, { recursive: true });
+      callback(null, requestDir);
+    },
     filename: (_req, file, callback) => {
       callback(null, `${Date.now()}-${randomUUID()}-${basename(file.originalname)}`);
     },
@@ -257,13 +268,54 @@ filesRouter.post('/create', async (req, res) => {
 });
 
 filesRouter.post('/upload', (req, res) => {
+  const request = req as UploadRequest;
+  const requestId = randomUUID();
+  const requestDir = join(UPLOAD_TMP_DIR, requestId);
+  request.uploadRequestId = requestId;
+  request.uploadRequestDir = requestDir;
+  const lifecycle = createUploadLifecycle({ requestId, requestDir });
+  let settled = false;
+  let aborted = false;
+  const finish = (outcome: 'success' | 'failed' | 'aborted' | 'timeout', reason?: string) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    const files = Array.isArray(request.files) ? request.files : [];
+    const size = files.reduce((total, file) => total + file.size, 0);
+    operationalLog('upload', lifecycle.logFields(outcome, reason, size));
+    void lifecycle.cleanup();
+  };
+  const abort = (reason: string) => {
+    aborted = true;
+    finish('aborted', reason);
+  };
+  const timeout = setTimeout(() => {
+    if (res.writableEnded) return;
+    aborted = true;
+    finish('timeout', 'request_timeout');
+    req.destroy(new Error('Upload request timed out'));
+  }, UPLOAD_REQUEST_TIMEOUT_MS);
+  timeout.unref();
+
+  req.once('aborted', () => abort('client_aborted'));
+  res.once('close', () => {
+    if (!res.writableEnded) abort('response_closed');
+  });
+
   uploadMiddleware(req, res, (error) => {
+    if (aborted) return;
     if (error) {
+      finish('failed', redactOperationalReason(error));
       sendFileError(res, error, 'Failed to upload files');
       return;
     }
 
-    void handleUploadRequest(req, res);
+    void handleUploadRequest(req, res)
+      .then(() => finish(res.statusCode >= 200 && res.statusCode < 300 ? 'success' : 'failed'))
+      .catch((uploadError) => {
+        finish('failed', redactOperationalReason(uploadError));
+        sendFileError(res, uploadError, 'Failed to upload files');
+      });
   });
 });
 
@@ -309,6 +361,7 @@ filesRouter.delete('/', async (req, res) => {
 
 async function handleUploadRequest(req: Request, res: Response): Promise<void> {
   const uploadedFiles = Array.isArray(req.files) ? req.files : [];
+  const movedDestinationPaths: string[] = [];
 
   try {
     if (uploadedFiles.length === 0) {
@@ -344,6 +397,7 @@ async function handleUploadRequest(req: Request, res: Response): Promise<void> {
       } catch {
         await copyFile(file.path, destinationPath);
       }
+      movedDestinationPaths.push(destinationPath);
       uploadedRootPaths.add(join(targetDirectory, segments[0]));
     }
 
@@ -353,6 +407,9 @@ async function handleUploadRequest(req: Request, res: Response): Promise<void> {
 
     res.status(201).json({ uploaded: uploadedFiles.length, entries });
   } catch (error) {
+    // The request is atomic from the user's perspective: if a later file fails,
+    // remove any files already moved out of the request-specific temp directory.
+    await Promise.all(movedDestinationPaths.map((path) => unlink(path).catch(() => undefined)));
     sendFileError(res, error, 'Failed to upload files');
   } finally {
     await Promise.all(uploadedFiles.map((file) => unlink(file.path).catch(() => undefined)));

@@ -338,6 +338,18 @@ export function discardRun(taskId: string): boolean {
   return runs.delete(taskId);
 }
 
+export function interruptActiveRuns(reason: string): TaskRunState[] {
+  const interrupted: TaskRunState[] = [];
+  for (const run of runs.values()) {
+    if (run.status !== 'streaming' && run.status !== 'compacting') continue;
+    applyEvent(run.taskId, { type: 'error', error: reason });
+    const state = runState(run);
+    interrupted.push(state);
+    broadcast(run.taskId, { type: 'snapshot', run: cloneRun(run) });
+  }
+  return interrupted;
+}
+
 export function closeSubscribersForTasks(taskIds: Iterable<string>): void {
   for (const taskId of taskIds) {
     const taskSubscribers = subscribers.get(taskId);

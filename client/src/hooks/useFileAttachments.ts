@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type Dra
 import { deleteFileEntry, uploadChatAttachment } from '../lib/api';
 import { attachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
+import { failedUpload, retryUpload, uploadBlocksSend as filesBlockSend } from '../lib/upload-recovery';
 
 export type PendingFile = {
   id: string;
@@ -57,7 +58,7 @@ export function useFileAttachments(uploadBucketId: string) {
           : toErrorMessage(err, `Failed to upload ${pendingFile.file.name}`);
         setPendingFiles((prev) => prev.map((file) => (
           file.id === pendingFile.id
-            ? { ...file, status: 'error', error: message }
+            ? failedUpload(file, message)
             : file
         )));
         setUploadError(message);
@@ -102,12 +103,7 @@ export function useFileAttachments(uploadBucketId: string) {
     const target = pendingFiles.find((file) => file.id === id);
     if (!target) return;
 
-    const retryTarget: PendingFile = {
-      ...target,
-      status: 'uploading',
-      uploadedPath: undefined,
-      error: undefined,
-    };
+    const retryTarget: PendingFile = retryUpload(target);
     setPendingFiles((prev) => prev.map((file) => file.id === id ? retryTarget : file));
     startUpload(retryTarget);
   }, [pendingFiles, startUpload]);
@@ -141,7 +137,7 @@ export function useFileAttachments(uploadBucketId: string) {
 
   const hasUploadingFiles = pendingFiles.some((file) => file.status === 'uploading');
   const hasFailedUploads = pendingFiles.some((file) => file.status === 'error');
-  const uploadBlocksSend = hasUploadingFiles || hasFailedUploads;
+  const uploadBlocksSend = filesBlockSend(pendingFiles);
   const sendBlockedLabel = hasUploadingFiles
     ? 'Uploading files'
     : hasFailedUploads
