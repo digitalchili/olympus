@@ -32,6 +32,25 @@ type WorkerRequestInput = WorkerRequest extends infer Request
     : never
   : never;
 
+type ChatWorkerRequestInput = Omit<Extract<WorkerRequest, { type: 'chat' }>, 'id'>;
+
+export function buildChatWorkerRequest(
+  sessionId: string,
+  message: string,
+  options?: AgentRunOptions,
+): ChatWorkerRequestInput {
+  return {
+    type: 'chat',
+    sessionId,
+    message,
+    systemMessage: options?.systemMessage,
+    settings: options?.settings ?? {},
+    taskId: options?.task?.id,
+    taskTitle: options?.task?.title ?? null,
+    workdir: options?.task?.workdir ?? null,
+  };
+}
+
 type PendingRequest = {
   kind: 'request';
   resolve: (value: WorkerResult) => void;
@@ -510,15 +529,7 @@ export class HermesWorkerAdapter implements AgentAdapter {
     message: string,
     options?: AgentRunOptions,
   ): AsyncIterable<StreamEvent> {
-    for await (const event of this.client.stream({
-      type: 'chat',
-      sessionId,
-      message,
-      systemMessage: options?.systemMessage,
-      settings: options?.settings ?? {},
-      taskId: options?.task?.id,
-      taskTitle: options?.task?.title ?? null,
-    })) {
+    for await (const event of this.client.stream(buildChatWorkerRequest(sessionId, message, options))) {
       switch (event.type) {
         case 'text_delta':
           yield { type: 'text_delta', content: event.content ?? '' };

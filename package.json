@@ -37,7 +37,7 @@
     "test:docker-e2e": "sh tests/docker_e2e.sh",
     "test:macos-e2e": "sh tests/macos_failure_e2e.sh",
     "lint:shell": "for file in scripts/docker/*.sh scripts/macos/*.sh tests/*_e2e.sh; do sh -n \"$file\" || exit 1; done",
-    "test": "python3 tests/test_hermes_worker_resolve.py && python3 tests/test_hermes_sessions_pagination.py && python3 tests/test_delegation_event_projection.py && python3 tests/test_worker_environment_overrides.py && for test_file in tests/*.test.ts; do TSX_TSCONFIG_PATH=client/tsconfig.json node --import tsx \"$test_file\" || exit 1; done"
+    "test": "python3 tests/test_hermes_worker_resolve.py && python3 tests/test_hermes_sessions_pagination.py && python3 tests/test_delegation_event_projection.py && python3 tests/test_worker_environment_overrides.py && python3 tests/test_worker_task_workdir.py && for test_file in tests/*.test.ts; do TSX_TSCONFIG_PATH=client/tsconfig.json node --import tsx \"$test_file\" || exit 1; done"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

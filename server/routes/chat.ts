@@ -273,7 +273,7 @@ async function streamChatTurn(
     const stream = adapter.chatStream(sessionId, content, {
       systemMessage: taskSystemMessage(runTask, options.supplementalSystemMessage),
       settings: taskRunSettings(runTask),
-      task: { id: runTask.id, title: runTask.title },
+      task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
     });
 
     for await (const rawEvent of stream) {

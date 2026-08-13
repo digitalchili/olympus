@@ -46,6 +46,7 @@ export type WorkerRequest =
       settings: AgentRunSettings;
       taskId?: string;
       taskTitle?: string | null;
+      workdir?: string | null;
     }
   | {
       id: string;

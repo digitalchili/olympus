@@ -20,6 +20,7 @@ export interface AgentRunOptions {
   task?: {
     id: string;
     title?: string | null;
+    workdir?: string | null;
   };
 }
 
