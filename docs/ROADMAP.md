@@ -49,6 +49,8 @@ Olympus v0.5.1 currently persists local control-plane state in SQLite. New contr
 |---|---|
 | `shipped` | Verified in a merged release/source revision. |
 | `active` | Being implemented on an identified branch/task; not yet shipped. |
+| `active-prototype` | A narrow subset is implemented, but the canonical contract and merge requirements are incomplete. |
+| `merge-blocker` | Must be resolved before an overlapping active branch may merge. |
 | `approved-next` | Architecture accepted and ordered next, but implementation has not started. |
 | `candidate` | Valuable idea requiring design or sequencing. |
 | `deferred` | Intentionally postponed. |
@@ -114,7 +116,9 @@ The active work must converge with the canonical direction rather than establish
 
 ### CP-001 — Canonical `control_events` and projectors
 
-**Status:** `approved-next`
+**Status:** `merge-blocker` for the active foundation; full projector/SSE work remains `approved-next`
+
+The active branch already introduces `task_control_events`. Its relationship to the canonical event envelope must be settled before that branch merges: either emit `control_events` directly, or define `task_control_events` explicitly as a task-domain append source projected into `control_events`. A second independent workflow ledger is not acceptable.
 
 Add a versioned append-only envelope for bounded workflow facts:
 
@@ -158,7 +162,9 @@ Requirements:
 
 ### CP-002 — Immutable task snapshots
 
-**Status:** `active`
+**Status:** `active-prototype`
+
+The active prototype proves monotonic snapshot versions, deterministic payload hashing, and task binding. The remaining fields below—including exact source/reference/artifact hashes and a capability-lease ID—are merge requirements, not features already claimed as implemented.
 
 Persist the exact dispatch contract:
 
@@ -208,7 +214,9 @@ Olympus validates referenced evidence before allowing policy transitions. A rece
 
 ### CP-005 — Append-only, attributable verification evidence
 
-**Status:** `active`
+**Status:** `active-prototype`
+
+The active prototype records attributable evidence rows and separates worker claims from system verification. Storage-level update/delete prevention, evidence hashes, run-receipt binding, and supersession semantics remain merge requirements.
 
 Minimum record:
 
@@ -279,11 +287,11 @@ Project references and worker-produced artifacts remain separate resource classe
 
 ### CP-008 — Evidence-gated task and release transitions
 
-**Status:** `active`
+**Status:** `active-prototype`
 
 Canonical policy states retain the distinction between implementation, submission, verification, approval, and deployment. Workers may claim or submit only within a lease. Olympus policy owns verification. Human approval owns releasability. Deployment is a separate server action with its own receipt and observed status.
 
-Generic task mutation APIs must not bypass this policy. The board is a projection, not a second state authority.
+No task-status mutation seam may bypass this policy, including internal `updateTask` callers, import/migration helpers, HTTP routes, and background jobs. Completion must use one policy-aware function, or a narrowly named internal escape hatch whose callers and tests prove that an unreleasable task cannot become `done`. The board is a projection, not a second state authority.
 
 ### CP-009 — Server-owned direct commands
 
@@ -443,10 +451,10 @@ Implementation rules:
 
 ## Existing detailed plans and design references
 
-- [`docs/plans/2026-08-05-v0-4-visible-delegation.md`](plans/2026-08-05-v0-4-visible-delegation.md) — visible delegated work and bounded handoff direction.
-- [`docs/plans/2026-08-10-olympus-global-projects-v1.md`](plans/2026-08-10-olympus-global-projects-v1.md) — global Projects, ACL, references, GitHub and isolated execution.
-- [`docs/plans/2026-08-10-somboon-studio-control-plane.md`](plans/2026-08-10-somboon-studio-control-plane.md) — read-only-first GitHub/Studio safety and staged execution authority.
-- [`docs/plans/portable-install-updates.md`](plans/portable-install-updates.md) — portable installation, drain, update and rollback.
+- [`docs/plans/2026-08-05-v0-4-visible-delegation.md`](plans/2026-08-05-v0-4-visible-delegation.md) — **implemented baseline, partially superseded.** Sanitized delegation visibility and bounded handoffs remain authoritative; future lifecycle work maps to CP-001, CP-003, CP-004, CP-006, and CP-011.
+- [`docs/plans/2026-08-10-olympus-global-projects-v1.md`](plans/2026-08-10-olympus-global-projects-v1.md) — **partially implemented, partially superseded.** Project identity, ACL, repository links, references, editor leases, and version records are the baseline. Proposed `project_task_leases`, `task_workspaces`, and queue/evidence concepts must map to current `project_editor_leases`, capability leases, durable attempts, snapshots, and verification evidence rather than creating duplicate authorities.
+- [`docs/plans/2026-08-10-somboon-studio-control-plane.md`](plans/2026-08-10-somboon-studio-control-plane.md) — **partially implemented, first-slice assumptions superseded.** Its read-only safety principles remain; v0.5.1 branch/push/version foundations supersede the original no-push first-slice description. CP-006, CP-008, and CP-009 govern future write authority.
+- [`docs/plans/portable-install-updates.md`](plans/portable-install-updates.md) — **partially implemented.** Native/Docker installation, readiness, drain, and update foundations are current; event/projector recovery and durable attempt reconciliation remain future work under CP-010 and CP-011.
 
 These plans contain useful implementation history but do not override this roadmap’s current product direction or architecture invariants.
 
