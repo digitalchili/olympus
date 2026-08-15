@@ -55,6 +55,6 @@ npm test
 npm run build
 ```
 
-See [INSTALL.md](INSTALL.md), [Docker operations](docs/docker.md), [Dokploy](docs/dokploy.md), [upgrades](docs/upgrading.md), the [standalone local self-update runner](docs/standalone-self-update.md), and [development notes](docs/development.md).
+See the canonical [Olympus roadmap](docs/ROADMAP.md), [INSTALL.md](INSTALL.md), [Docker operations](docs/docker.md), [Dokploy](docs/dokploy.md), [upgrades](docs/upgrading.md), the [standalone local self-update runner](docs/standalone-self-update.md), and [development notes](docs/development.md).
 
 Olympus Dispatch is based on the MIT-licensed Minions project.
