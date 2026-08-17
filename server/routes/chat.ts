@@ -52,7 +52,7 @@ import { LocalProfileError } from '../local-profiles.js';
 import { acquireProfileWork } from '../profile-deletion.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
-import { runWatchdogConfig, withRunWatchdog, type RunWatchdogReason } from '../run-watchdog.js';
+import { RunWatchdogError, runWatchdogConfig, withRunWatchdog, type RunWatchdogReason } from '../run-watchdog.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
@@ -318,7 +318,11 @@ async function streamChatTurn(
     }
   } catch (error) {
     hadError = true;
-    const event: StreamEvent = { type: 'error', error: toErrorMessage(error, 'Hermes chat stream failed') };
+    const event: StreamEvent = {
+      type: 'error',
+      error: toErrorMessage(error, 'Hermes chat stream failed'),
+      code: error instanceof RunWatchdogError ? error.code : undefined,
+    };
     applyEvent(runTask.id, event);
     broadcastLive(runTask.id, event);
   }

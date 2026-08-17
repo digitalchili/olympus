@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import type { GoalStateSnapshot, LiveChatRun, LiveChatMessage, LiveChatRunStatus, TaskRunState, ToolProgressEvent } from '../shared/types.js';
+import { shouldAppendRunErrorToReply } from '../shared/run-errors.js';
 import type { StreamEvent } from './adapters/types.js';
 
 export type LiveChatEvent = StreamEvent | { type: 'snapshot'; run: LiveChatRun };
@@ -246,7 +247,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     const error = event.error || 'Unknown error';
     run.status = 'error';
     run.error = error;
-    if (event.code !== 'iteration_limit' && !assistant.content.includes(`[Error: ${error}]`)) {
+    if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
       assistant.content = assistant.content
         ? `${assistant.content}\n[Error: ${error}]`
         : `[Error: ${error}]`;

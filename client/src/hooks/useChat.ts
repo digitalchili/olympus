@@ -13,6 +13,7 @@ import { apiPathWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
+import { shouldAppendRunErrorToReply } from '@shared/run-errors';
 
 export type { ContextUsage, ToolProgressEvent };
 
@@ -85,7 +86,7 @@ export function applyLiveErrorEvent(
   run.status = 'error';
   run.error = error;
   const assistant = ensureAssistant(run);
-  if (event.code !== 'iteration_limit' && !assistant.content.includes(`[Error: ${error}]`)) {
+  if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
     assistant.content = assistant.content
       ? `${assistant.content}\n[Error: ${error}]`
       : `[Error: ${error}]`;

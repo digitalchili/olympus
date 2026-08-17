@@ -62,7 +62,9 @@ async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
       idleTimeoutMs: 20,
       onTimeout: async () => { interrupted += 1; },
     })),
-    (error) => error instanceof RunWatchdogError && error.reason === 'idle',
+    (error) => error instanceof RunWatchdogError
+      && error.reason === 'idle'
+      && error.code === 'run_idle_timeout',
   );
   assert.equal(interrupted, 1, 'an idle run is interrupted exactly once');
   assert.equal(returned, 1, 'the stalled source iterator receives best-effort cleanup');
@@ -84,7 +86,9 @@ async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
       idleTimeoutMs: 50,
       onTimeout: async () => { interrupted += 1; },
     })),
-    (error) => error instanceof RunWatchdogError && error.reason === 'runtime',
+    (error) => error instanceof RunWatchdogError
+      && error.reason === 'runtime'
+      && error.code === 'run_runtime_timeout',
   );
   assert.equal(interrupted, 1, 'a busy runaway run is interrupted at the wall-clock limit');
 }

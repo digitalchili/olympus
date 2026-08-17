@@ -51,4 +51,48 @@ assert.equal(
   'the EventSource projection must not append internal iteration-limit errors to reply prose',
 );
 
+const idleTaskId = 'idle-timeout-reply-test';
+startRun(idleTaskId, idleTaskId, 'Do a task with progress');
+applyEvent(idleTaskId, { type: 'text_delta', content: 'Useful work before the idle stop.' });
+applyEvent(idleTaskId, {
+  type: 'error',
+  code: 'run_idle_timeout',
+  error: 'Hermes run produced no activity for 300000ms and was stopped',
+});
+assert.equal(
+  getRun(idleTaskId)?.messages.at(-1)?.content,
+  'Useful work before the idle stop.',
+  'idle watchdog status must not be appended to server-projected reply prose',
+);
+
+const runtimeClientRun: LiveChatRun = structuredClone(clientRun);
+runtimeClientRun.status = 'streaming';
+runtimeClientRun.error = undefined;
+runtimeClientRun.messages.at(-1)!.content = 'Useful work before the runtime stop.';
+applyLiveErrorEvent(runtimeClientRun, {
+  type: 'error',
+  code: 'run_runtime_timeout',
+  error: 'Hermes run exceeded its maximum runtime for 1800000ms and was stopped',
+}, 300);
+assert.equal(
+  runtimeClientRun.messages.at(-1)?.content,
+  'Useful work before the runtime stop.',
+  'runtime watchdog status must not be appended to live reply prose',
+);
+
+const providerClientRun: LiveChatRun = structuredClone(clientRun);
+providerClientRun.status = 'streaming';
+providerClientRun.error = undefined;
+providerClientRun.messages.at(-1)!.content = 'Partial provider response.';
+applyLiveErrorEvent(providerClientRun, {
+  type: 'error',
+  code: 'provider_error',
+  error: 'Provider request failed',
+}, 400);
+assert.equal(
+  providerClientRun.messages.at(-1)?.content,
+  'Partial provider response.\n[Error: Provider request failed]',
+  'genuine provider errors must remain visible in reply prose',
+);
+
 console.log('Iteration-limit reply projection tests passed');

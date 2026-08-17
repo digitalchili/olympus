@@ -9,6 +9,7 @@ export interface RunWatchdogOptions {
 
 export class RunWatchdogError extends Error {
   readonly reason: RunWatchdogReason;
+  readonly code: 'run_idle_timeout' | 'run_runtime_timeout';
   cause?: unknown;
 
   constructor(reason: RunWatchdogReason, timeoutMs: number) {
@@ -16,6 +17,7 @@ export class RunWatchdogError extends Error {
     super(`Hermes run ${label} for ${timeoutMs}ms and was stopped`);
     this.name = 'RunWatchdogError';
     this.reason = reason;
+    this.code = reason === 'idle' ? 'run_idle_timeout' : 'run_runtime_timeout';
   }
 }
 
