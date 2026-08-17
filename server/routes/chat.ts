@@ -52,6 +52,7 @@ import { LocalProfileError } from '../local-profiles.js';
 import { acquireProfileWork } from '../profile-deletion.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
+import { runWatchdogConfig, withRunWatchdog, type RunWatchdogReason } from '../run-watchdog.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
@@ -270,10 +271,18 @@ async function streamChatTurn(
   let pendingSteer: string | undefined;
 
   try {
-    const stream = adapter.chatStream(sessionId, content, {
+    const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
       systemMessage: taskSystemMessage(runTask, options.supplementalSystemMessage),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
+    }), {
+      ...runWatchdogConfig(),
+      onTimeout: async (reason: RunWatchdogReason) => {
+        const message = reason === 'idle'
+          ? 'Stopped automatically because the run stopped producing activity.'
+          : 'Stopped automatically because the run exceeded the Olympus runtime limit.';
+        await adapter.interruptChat(sessionId, message);
+      },
     });
 
     for await (const rawEvent of stream) {

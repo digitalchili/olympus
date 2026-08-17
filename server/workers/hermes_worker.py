@@ -1260,6 +1260,14 @@ def _parse_reasoning(effort: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _agent_max_iterations() -> int:
+    try:
+        value = int(os.environ.get("OLYMPUS_AGENT_MAX_ITERATIONS", "40"))
+    except (TypeError, ValueError):
+        return 40
+    return value if value > 0 else 40
+
+
 def _create_agent(
     *,
     session_id: str,
@@ -1314,6 +1322,7 @@ def _create_agent(
     agent_params = _AIAgent_PARAMS
     agent_kwargs: dict[str, Any] = {
         "model": resolved_model,
+        "max_iterations": _agent_max_iterations(),
         "provider": resolved_provider,
         "base_url": resolved_base_url,
         "api_key": runtime.get("api_key"),
@@ -1369,6 +1378,22 @@ def _agent_failure_message(text: str) -> str | None:
     if clean.startswith(failure_prefixes):
         return clean
 
+    return None
+
+
+def _agent_result_failure(result: dict[str, Any]) -> tuple[str, str] | None:
+    if result.get("failed") is True:
+        message = str(result.get("error") or result.get("final_response") or "Hermes agent reported failure")
+        return message, "agent_failed"
+    if result.get("completed") is False:
+        reason = str(result.get("turn_exit_reason") or "")
+        if reason.startswith("max_iterations_reached("):
+            return (
+                "Hermes reached the Olympus tool-iteration limit before completing this turn.",
+                "iteration_limit",
+            )
+        message = str(result.get("error") or result.get("final_response") or "Hermes agent did not complete the turn")
+        return message, "agent_incomplete"
     return None
 
 
@@ -1715,6 +1740,11 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 on_text_delta(final_text)
             if result.get("last_reasoning") and len(state["thinking"]) == thinking_before:
                 on_reasoning_delta(str(result["last_reasoning"]))
+
+            result_failure = _agent_result_failure(result)
+            if result_failure:
+                message, code = result_failure
+                raise WorkerError(message, code=code)
 
             if not pending_background_delegations:
                 break

@@ -7,9 +7,11 @@ to the built-in openrouter provider, which holds no credentials on managed
 instances (HTTP 401 "User not found").
 """
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "workers"))
 
@@ -33,6 +35,32 @@ MANAGED_CFG = {
 
 
 class ResolveModelProviderTest(unittest.TestCase):
+    def test_olympus_caps_tool_iterations_below_hermes_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OLYMPUS_AGENT_MAX_ITERATIONS", None)
+            self.assertEqual(hermes_worker._agent_max_iterations(), 40)
+
+        with patch.dict(os.environ, {"OLYMPUS_AGENT_MAX_ITERATIONS": "12"}):
+            self.assertEqual(hermes_worker._agent_max_iterations(), 12)
+
+        with patch.dict(os.environ, {"OLYMPUS_AGENT_MAX_ITERATIONS": "invalid"}):
+            self.assertEqual(hermes_worker._agent_max_iterations(), 40)
+
+    def test_incomplete_agent_result_is_not_reported_as_success(self):
+        self.assertEqual(
+            hermes_worker._agent_result_failure({
+                "completed": False,
+                "failed": False,
+                "turn_exit_reason": "max_iterations_reached(40)",
+            }),
+            ("Hermes reached the Olympus tool-iteration limit before completing this turn.", "iteration_limit"),
+        )
+        self.assertEqual(
+            hermes_worker._agent_result_failure({"completed": False, "failed": True, "error": "provider failed"}),
+            ("provider failed", "agent_failed"),
+        )
+        self.assertIsNone(hermes_worker._agent_result_failure({"completed": True, "failed": False}))
+
     def test_explicit_custom_provider_honored_for_catalog_model(self):
         result = hermes_worker._resolve_model_provider(
             "anthropic/claude-sonnet-5", MANAGED_CFG, requested_provider="custom:agent37"
