@@ -246,7 +246,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     const error = event.error || 'Unknown error';
     run.status = 'error';
     run.error = error;
-    if (!assistant.content.includes(`[Error: ${error}]`)) {
+    if (event.code !== 'iteration_limit' && !assistant.content.includes(`[Error: ${error}]`)) {
       assistant.content = assistant.content
         ? `${assistant.content}\n[Error: ${error}]`
         : `[Error: ${error}]`;

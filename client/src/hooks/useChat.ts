@@ -44,7 +44,7 @@ type LiveEvent =
       label?: string;
     }
   | { type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; attachments?: TaskMessage['attachments'] }
-  | { type: 'error'; error?: string };
+  | { type: 'error'; error?: string; code?: string };
 
 function compactSettings(settings?: AgentRunSettings): AgentRunSettings | undefined {
   if (!settings) return undefined;
@@ -74,6 +74,23 @@ function ensureAssistant(run: LiveChatRun): LiveChatMessage {
   };
   run.messages.push(msg);
   return msg;
+}
+
+export function applyLiveErrorEvent(
+  run: LiveChatRun,
+  event: Extract<LiveEvent, { type: 'error' }>,
+  now = Date.now(),
+): void {
+  const error = event.error || 'Unknown error';
+  run.status = 'error';
+  run.error = error;
+  const assistant = ensureAssistant(run);
+  if (event.code !== 'iteration_limit' && !assistant.content.includes(`[Error: ${error}]`)) {
+    assistant.content = assistant.content
+      ? `${assistant.content}\n[Error: ${error}]`
+      : `[Error: ${error}]`;
+  }
+  run.updatedAt = now;
 }
 
 function mergeToolProgress(tools: ToolProgressEvent[], event: Extract<LiveEvent, { type: 'tool_progress' }>) {
@@ -397,16 +414,7 @@ export function useChat() {
     }
 
     if (event.type === 'error') {
-      const error = event.error || 'Unknown error';
-      run.status = 'error';
-      run.error = error;
-      const assistant = ensureAssistant(run);
-      if (!assistant.content.includes(`[Error: ${error}]`)) {
-        assistant.content = assistant.content
-          ? `${assistant.content}\n[Error: ${error}]`
-          : `[Error: ${error}]`;
-      }
-      run.updatedAt = Date.now();
+      applyLiveErrorEvent(run, event);
       publishState();
       return;
     }
