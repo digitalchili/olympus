@@ -8,7 +8,7 @@ import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
-import { ApiError, compactTask, fetchCollaborationGrants, fetchHermesProfiles, interruptTask, revokeCollaborationGrant, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
+import { ApiError, compactTask, deleteQueuedTaskMessage, fetchCollaborationGrants, fetchHermesProfiles, fetchQueuedTaskMessage, interruptTask, putQueuedTaskMessage, revokeCollaborationGrant, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
 import { deliverQueuedSteer } from '../lib/steerDelivery';
 import { useStore } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
@@ -24,9 +24,10 @@ import {
 } from '../lib/profileMentions';
 import { ProfileInviteControls } from './ProfileInviteControls';
 import { useProfile } from '../contexts/ProfileContext';
-import type { ChatRunMode, CollaborationInvitationScope, CollaborationRun, GoalStateSnapshot, PersistentCollaborationGrant } from '@shared/types';
+import type { ChatRunMode, CollaborationInvitationScope, CollaborationRun, GoalStateSnapshot, PersistentCollaborationGrant, QueuedTaskMessage } from '@shared/types';
 import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility';
 import { DelegationActivity } from './DelegationActivity';
+import { visibleToolProgress } from '../lib/toolProgressDisplay';
 
 interface TaskChatProps {
   taskId: string;
@@ -37,14 +38,7 @@ interface TaskChatProps {
   collaborationRuns?: CollaborationRun[];
 }
 
-type QueuedMessage = {
-  id: string;
-  content: string;
-  settings: AgentRunSettings;
-  invitedProfileIds: string[];
-  collaborationScope: CollaborationInvitationScope;
-  confirmPersistentCollaboration: boolean;
-};
+type QueuedMessage = QueuedTaskMessage;
 
 const ThinkingBlock = memo(function ThinkingBlock({ content, isLive }: { content: string; isLive: boolean }) {
   const [expanded, setExpanded] = useState(isLive);
@@ -290,6 +284,7 @@ export function TaskChat({
   const [compactDone, setCompactDone] = useState(false);
   const [compactAfterIndex, setCompactAfterIndex] = useState(-1);
   const [queuedMessage, setQueuedMessage] = useState<QueuedMessage | null>(null);
+  const [queueHydratedTaskId, setQueueHydratedTaskId] = useState<string | null>(null);
   const [queuedSendError, setQueuedSendError] = useState<string | null>(null);
   const [autoSendingQueuedId, setAutoSendingQueuedId] = useState<string | null>(null);
   const [steeringQueuedId, setSteeringQueuedId] = useState<string | null>(null);
@@ -415,6 +410,7 @@ export function TaskChat({
     setCompactDone(false);
     setCompactAfterIndex(-1);
     setQueuedMessage(null);
+    setQueueHydratedTaskId(null);
     setSelectedProfiles([]);
     setCollaborationScope('discussion');
     setConfirmPersistentCollaboration(false);
@@ -454,6 +450,16 @@ export function TaskChat({
         if (cancelled) return;
         setMessageLoadError(true);
         setLoadedTaskId(taskId);
+      });
+    fetchQueuedTaskMessage(taskId)
+      .then(({ queuedMessage: persisted }) => {
+        if (!cancelled) {
+          setQueuedMessage(persisted);
+          setQueueHydratedTaskId(taskId);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setQueuedSendError('Could not reload the queued message.');
       });
     return () => { cancelled = true; };
   }, [taskId, loadMessages, sendMessage, clearFiles]);
@@ -563,8 +569,13 @@ export function TaskChat({
     setOutgoingRevealActive(true);
     setQueuedSendError(null);
 
-    const result = await sendMessage(taskId, message.content, message.settings, {
+    const completedGoal = taskRun?.kind === 'goal' && taskRun.goal?.status === 'done';
+    const effectiveSettings = completedGoal && message.settings.mode === 'goal'
+      ? { ...message.settings, mode: 'task' as const }
+      : message.settings;
+    const result = await sendMessage(taskId, message.content, effectiveSettings, {
       appendLocalError: false,
+      queuedMessageId: message.id,
       invitedProfileIds: message.invitedProfileIds,
       collaborationScope: message.collaborationScope,
       confirmPersistentCollaboration: message.confirmPersistentCollaboration,
@@ -580,12 +591,13 @@ export function TaskChat({
 
     if (pendingAutoSendRef.current === message.id) pendingAutoSendRef.current = null;
     setAutoSendingQueuedId((current) => current === message.id ? null : current);
-  }, [refreshPersistentGrants, sendMessage, taskId]);
+  }, [refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
 
   useEffect(() => {
     if (!queuedMessage || taskBusyForQueue || configPending || queuedSendError) return;
+    if (loadedTaskId !== taskId || queueHydratedTaskId !== taskId) return;
     void sendQueuedMessage(queuedMessage);
-  }, [configPending, queuedMessage, queuedSendError, sendQueuedMessage, taskBusyForQueue]);
+  }, [configPending, loadedTaskId, queueHydratedTaskId, queuedMessage, queuedSendError, sendQueuedMessage, taskBusyForQueue, taskId]);
 
   useEffect(() => {
     if (!isStreaming) setInterruptInFlight(false);
@@ -646,20 +658,26 @@ export function TaskChat({
     const confirmationAtSend = confirmPersistentCollaboration;
     const settings = { model, provider, reasoningEffort, mode: isGoalStreaming ? 'task' : runMode };
     if (taskBusyForQueue) {
-      setQueuedMessage({
-        id: createUuid(),
-        content: messageText,
-        settings,
-        invitedProfileIds,
-        collaborationScope: scopeAtSend,
-        confirmPersistentCollaboration: confirmationAtSend,
-      });
-      setQueuedSendError(null);
-      setInput('');
-      setSelectedProfiles([]);
-      setCollaborationScope('discussion');
-      setConfirmPersistentCollaboration(false);
-      setActiveMention(null);
+      try {
+        const { queuedMessage: persisted } = await putQueuedTaskMessage(taskId, {
+          id: createUuid(),
+          content: messageText,
+          settings,
+          invitedProfileIds,
+          collaborationScope: scopeAtSend,
+          confirmPersistentCollaboration: confirmationAtSend,
+        });
+        setQueuedMessage(persisted);
+        setQueuedSendError(null);
+        setInput('');
+        setSelectedProfiles([]);
+        setCollaborationScope('discussion');
+        setConfirmPersistentCollaboration(false);
+        setActiveMention(null);
+      } catch (error) {
+        setInput(messageText);
+        setUploadError(toErrorMessage(error, 'Could not queue the message'));
+      }
       return;
     }
 
@@ -735,6 +753,7 @@ export function TaskChat({
         () => sendQueuedMessage(queuedMessage),
       );
       if (outcome === 'steered') {
+        await deleteQueuedTaskMessage(taskId, queuedMessage.id);
         setQueuedMessage((current) => current?.id === queuedMessage.id ? null : current);
       }
       // When Hermes is between turns or the message has an attachment, it stays
@@ -746,8 +765,14 @@ export function TaskChat({
     }
   }, [queuedIsSending, queuedMessage, sendQueuedMessage, steeringQueuedId, taskId]);
 
-  const handleEditQueuedMessage = useCallback(() => {
+  const handleEditQueuedMessage = useCallback(async () => {
     if (!queuedMessage || queuedIsSending || steeringQueuedId) return;
+    try {
+      await deleteQueuedTaskMessage(taskId, queuedMessage.id);
+    } catch (error) {
+      setQueuedSendError(toErrorMessage(error, 'Could not edit the queued message'));
+      return;
+    }
     setInput(queuedMessage.content);
     setModel(queuedMessage.settings.model ?? null);
     setProvider(queuedMessage.settings.provider ?? null);
@@ -760,13 +785,18 @@ export function TaskChat({
     setQueuedMessage(null);
     setQueuedSendError(null);
     window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [profiles, queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId]);
+  }, [profiles, queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId, taskId]);
 
-  const handleRemoveQueuedMessage = useCallback(() => {
-    if (queuedIsSending) return;
-    setQueuedMessage(null);
-    setQueuedSendError(null);
-  }, [queuedIsSending]);
+  const handleRemoveQueuedMessage = useCallback(async () => {
+    if (!queuedMessage || queuedIsSending) return;
+    try {
+      await deleteQueuedTaskMessage(taskId, queuedMessage.id);
+      setQueuedMessage(null);
+      setQueuedSendError(null);
+    } catch (error) {
+      setQueuedSendError(toErrorMessage(error, 'Could not remove the queued message'));
+    }
+  }, [queuedIsSending, queuedMessage, taskId]);
 
   const handleRetryQueuedMessage = useCallback(() => {
     if (!queuedMessage || taskBusyForQueue || configPending || queuedIsSending) return;
@@ -942,6 +972,7 @@ export function TaskChat({
               const toolsToShow = hideCollaborationInternals
                 ? []
                 : isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
+              const visibleTools = visibleToolProgress(toolsToShow);
               const showSpinner = isLastAssistant && isStreaming && !msg.content && !thinkingContent && !activeTools.some(t => t.status === 'running');
               const { text: assistantText } = splitAttachmentMessage(msg.content);
               const timestampLabel = messageTimestampTitle(msg);
@@ -957,9 +988,9 @@ export function TaskChat({
                       {thinkingToShow && (
                         <ThinkingBlock content={thinkingToShow} isLive={isLiveThinking} />
                       )}
-                      {toolsToShow.length > 0 && (
-                        <div className="mb-4 space-y-2.5">
-                          {toolsToShow.map((tool, i) => (
+                      {visibleTools.length > 0 && (
+                        <div className="mb-4">
+                          {visibleTools.map((tool, i) => (
                             <ToolCallBlock key={`${tool.tool}-${i}`} tool={tool} />
                           ))}
                         </div>

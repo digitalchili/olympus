@@ -49,6 +49,7 @@ import type {
   ProjectReferenceSearchResult,
   ProjectSummary,
   ProjectRepositoryLink,
+  QueuedTaskMessage,
   StudioGitHubInstallation,
   StudioGitHubRepository,
   StudioProject,
@@ -581,6 +582,23 @@ export function steerTask(taskId: string, content: string) {
   return request<{ steered: boolean; queued: boolean }>(`/tasks/${taskId}/steer`, {
     method: 'POST',
     body: JSON.stringify({ content }),
+  });
+}
+
+export function fetchQueuedTaskMessage(taskId: string) {
+  return request<{ queuedMessage: QueuedTaskMessage | null }>(`/tasks/${taskId}/queued-message`);
+}
+
+export function putQueuedTaskMessage(taskId: string, message: Omit<QueuedTaskMessage, 'taskId' | 'createdAt' | 'updatedAt'>) {
+  return request<{ queuedMessage: QueuedTaskMessage }>(`/tasks/${taskId}/queued-message`, {
+    method: 'PUT',
+    body: JSON.stringify(message),
+  });
+}
+
+export function deleteQueuedTaskMessage(taskId: string, queuedMessageId: string) {
+  return request<void>(`/tasks/${taskId}/queued-message/${encodeURIComponent(queuedMessageId)}`, {
+    method: 'DELETE',
   });
 }
 

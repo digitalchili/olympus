@@ -22,6 +22,18 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
+CREATE TABLE IF NOT EXISTS task_message_queue (
+  task_id                          TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  id                               TEXT NOT NULL UNIQUE,
+  content                          TEXT NOT NULL,
+  settings_json                    TEXT NOT NULL,
+  invited_profile_ids_json         TEXT NOT NULL,
+  collaboration_scope              TEXT NOT NULL,
+  confirm_persistent_collaboration INTEGER NOT NULL DEFAULT 0 CHECK(confirm_persistent_collaboration IN (0, 1)),
+  created_at                       INTEGER NOT NULL,
+  updated_at                       INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS collaboration_runs (
   id                        TEXT PRIMARY KEY,
   task_id                   TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

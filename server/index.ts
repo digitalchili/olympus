@@ -6,6 +6,10 @@ import app, { adapter, drainController } from './app.js';
 import { mountFrontend, type FrontendCleanup } from './frontend.js';
 import { closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
+import { getRunStatus } from './live-chat.js';
+import { getTask } from './db/queries.js';
+import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-queue.js';
+import { configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -64,6 +68,51 @@ async function main() {
     );
   }
   const boundPort = await listenWithFallback(httpServer, HOST, PORT, PORT_FALLBACK_ATTEMPTS);
+  const dispatchHost = HOST === '0.0.0.0' || HOST === '::'
+    ? '127.0.0.1'
+    : HOST.includes(':') && !HOST.startsWith('[') ? `[${HOST}]` : HOST;
+  const queuedMessageDispatcher = createQueuedMessageDispatcher({
+    load: getQueuedTaskMessage,
+    isActive: (taskId) => {
+      const status = getRunStatus(taskId)?.status;
+      return status === 'streaming' || status === 'compacting';
+    },
+    deliver: async (taskId, message) => {
+      const task = getTask(taskId);
+      if (!task) return;
+      const profileId = task.profile_name ?? 'default';
+      const settledRun = getRunStatus(taskId);
+      const settings = settledRun?.kind === 'goal'
+        && settledRun.goal?.status === 'done'
+        && message.settings.mode === 'goal'
+        ? { ...message.settings, mode: 'task' as const }
+        : message.settings;
+      const response = await fetch(
+        `http://${dispatchHost}:${boundPort}/api/tasks/${encodeURIComponent(taskId)}/messages?profile=${encodeURIComponent(profileId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: message.content,
+            settings,
+            invitedProfileIds: message.invitedProfileIds,
+            collaborationScope: message.collaborationScope,
+            confirmPersistentCollaboration: message.confirmPersistentCollaboration,
+            queuedMessageId: message.id,
+          }),
+        },
+      );
+      if (response.status !== 202) {
+        const detail = (await response.text()).slice(0, 500);
+        throw new Error(`Queued message dispatch returned HTTP ${response.status}: ${detail}`);
+      }
+    },
+    onError: (taskId, error) => {
+      console.error(`Queued message dispatch failed for task ${taskId}:`, error instanceof Error ? error.message : error);
+    },
+  });
+  configureQueuedMessageDispatcher(queuedMessageDispatcher);
+  for (const message of listQueuedTaskMessages()) queuedMessageDispatcher.schedule(message.taskId);
 
   const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;

@@ -1,6 +1,23 @@
 export const TASK_STATUSES = ['in_progress', 'in_review', 'done'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
+export interface QueuedTaskMessage {
+  id: string;
+  taskId: string;
+  content: string;
+  settings: {
+    model?: string | null;
+    provider?: string | null;
+    reasoningEffort?: ReasoningEffort | null;
+    mode?: ChatRunMode;
+  };
+  invitedProfileIds: string[];
+  collaborationScope: CollaborationInvitationScope;
+  confirmPersistentCollaboration: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 

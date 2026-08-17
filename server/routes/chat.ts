@@ -54,8 +54,11 @@ import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 import { RunWatchdogError, runWatchdogConfig, withRunWatchdog, type RunWatchdogReason } from '../run-watchdog.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
+import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
+import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
+import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
 chatRouter.use('/:id', requireTaskForProfile(getTask));
@@ -123,6 +126,7 @@ function completeTaskRun(
     broadcastRunSnapshot(taskId);
   }
   finishRun(taskId, ttlMs, runId);
+  scheduleQueuedMessageDispatch(taskId);
 }
 
 chatRouter.get('/:id/messages', async (req, res) => {
@@ -232,9 +236,11 @@ function recordCompletedAgentRun(taskId: string, context: ContextUsage | null): 
 
 function settleRun(taskId: string, runId: string, context: ContextUsage | null): void {
   const status = getRunStatus(taskId);
+  const run = getRun(taskId);
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
-  if (status?.status === 'done') {
+  const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
+  if (status && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
     const updated = recordCompletedAgentRun(taskId, context);
     if (updated) broadcast({ type: 'task_updated', task: updated });
   } else {
@@ -243,6 +249,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
 
   const ttl = status?.status === 'error' ? ERROR_SNAPSHOT_TTL_MS : DONE_SNAPSHOT_TTL_MS;
   finishRun(taskId, ttl, runId);
+  scheduleQueuedMessageDispatch(taskId);
 }
 
 function taskSystemMessage(task: Task, supplemental = ''): string {
@@ -605,6 +612,78 @@ function beginGoalRunOperation(
   return { setup, work };
 }
 
+chatRouter.get('/:id/queued-message', (req, res) => {
+  const task = res.locals.task as Task;
+  res.json({ queuedMessage: getQueuedTaskMessage(task.id) ?? null });
+});
+
+chatRouter.put('/:id/queued-message', (req, res) => {
+  const task = res.locals.task as Task;
+  const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
+  const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
+  const rawInvites = req.body?.invitedProfileIds;
+  if (!id || !content) return res.status(400).json({ error: 'id and content are required' });
+  if (!Array.isArray(rawInvites)) {
+    return res.status(400).json({ error: 'invitedProfileIds must contain at most 9 profile IDs' });
+  }
+
+  let settings: QueuedTaskMessage['settings'];
+  let invitedProfileIds: string[];
+  let collaborationScope: CollaborationInvitationScope;
+  try {
+    const parsed = parseRunSettingsBody({ settings: req.body?.settings });
+    const mode = parseChatRunMode({ settings: req.body?.settings });
+    const ownerProfileId = task.profile_name ?? DEFAULT_PROFILE_NAME;
+    const invites = validateCollaborationInvites(rawInvites, ownerProfileId);
+    invitedProfileIds = [
+      ...invites.participants.map((profile) => profile.id),
+      ...(invites.ownerInvited ? [ownerProfileId] : []),
+    ];
+    collaborationScope = parseCollaborationInvitationScope(
+      req.body?.collaborationScope,
+      req.body?.confirmPersistentCollaboration === true,
+    );
+    if (collaborationScope === 'project') {
+      if (!task.project_id) throw new LocalProfileError(400, 'Project collaboration requires a Project task', 'PROJECT_REQUIRED');
+      requireProfileProjectAccess(task.project_id, requestProfile(req).id, 'manage');
+    }
+    settings = {
+      ...(parsed.taskFields.agent_model !== undefined ? { model: parsed.taskFields.agent_model } : {}),
+      ...(parsed.taskFields.agent_provider !== undefined ? { provider: parsed.taskFields.agent_provider } : {}),
+      ...(parsed.taskFields.reasoning_effort !== undefined ? { reasoningEffort: parsed.taskFields.reasoning_effort } : {}),
+      mode,
+    };
+  } catch (error) {
+    if (error instanceof ProjectAccessError || error instanceof LocalProfileError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    return res.status(400).json({ error: toErrorMessage(error, 'Invalid queued message') });
+  }
+
+  const existing = getQueuedTaskMessage(task.id);
+  const now = Date.now();
+  const queuedMessage: QueuedTaskMessage = {
+    id,
+    taskId: task.id,
+    content,
+    settings,
+    invitedProfileIds,
+    collaborationScope,
+    confirmPersistentCollaboration: req.body?.confirmPersistentCollaboration === true,
+    createdAt: existing && existing.id === id ? existing.createdAt : now,
+    updatedAt: now,
+  };
+  res.json({ queuedMessage: putQueuedTaskMessage(queuedMessage) });
+});
+
+chatRouter.delete('/:id/queued-message/:queuedMessageId', (req, res) => {
+  const task = res.locals.task as Task;
+  if (!deleteQueuedTaskMessage(task.id, req.params.queuedMessageId)) {
+    return res.status(409).json({ error: 'Queued message changed or no longer exists' });
+  }
+  res.status(204).end();
+});
+
 chatRouter.post('/:id/messages', async (req, res) => {
   const task = res.locals.task as Task;
 
@@ -665,6 +744,17 @@ chatRouter.post('/:id/messages', async (req, res) => {
     return res.status(409).json({ error: 'This task already has a message in progress' });
   }
 
+  const queuedMessageId = req.body?.queuedMessageId;
+  if (queuedMessageId !== undefined) {
+    if (typeof queuedMessageId !== 'string' || !queuedMessageId.trim()) {
+      return res.status(400).json({ error: 'queuedMessageId must be a non-empty string' });
+    }
+    const currentQueue = getQueuedTaskMessage(task.id);
+    if (!currentQueue || currentQueue.id !== queuedMessageId || currentQueue.content !== content) {
+      return res.status(409).json({ error: 'Queued message changed or no longer exists' });
+    }
+  }
+
   let runTask = task;
   const taskUpdates: Partial<Pick<Task, 'status' | 'agent_model' | 'agent_provider' | 'reasoning_effort'>> = {};
   if (runSettings.hasFields) {
@@ -691,6 +781,15 @@ chatRouter.post('/:id/messages', async (req, res) => {
   }
 
   const sessionId = runTask.id;
+  const consumedQueue = typeof queuedMessageId === 'string'
+    ? consumeQueuedTaskMessage(task.id, queuedMessageId)
+    : undefined;
+  if (typeof queuedMessageId === 'string' && !consumedQueue) {
+    return res.status(409).json({ error: 'Queued message changed or no longer exists' });
+  }
+  const restoreConsumedQueue = () => {
+    if (consumedQueue) restoreQueuedTaskMessage(consumedQueue);
+  };
 
   if (mode === 'goal') {
     const releaseRunWork = acquireProfileWork(taskProfileId(runTask));
@@ -704,6 +803,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       try {
         started = await operation.setup;
       } catch (error) {
+        restoreConsumedQueue();
         return sendAdapterError(res, error, 'Could not set Hermes goal');
       }
 
@@ -737,6 +837,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
         applyEvent(runTask.id, event);
         broadcastLive(runTask.id, event);
         settleRun(runTask.id, snapshot.runId, null);
+        restoreConsumedQueue();
         return res.status(500).json({ error: message });
       }
       const active: ActiveCollaboration = {

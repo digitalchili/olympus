@@ -23,6 +23,7 @@ export type SendMessageResult =
 
 interface SendMessageOptions {
   appendLocalError?: boolean;
+  queuedMessageId?: string;
   invitedProfileIds?: string[];
   collaborationScope?: CollaborationInvitationScope;
   confirmPersistentCollaboration?: boolean;
@@ -584,6 +585,7 @@ export function useChat() {
         body: JSON.stringify({
           content,
           ...(runSettings ? { settings: runSettings } : {}),
+          ...(options?.queuedMessageId ? { queuedMessageId: options.queuedMessageId } : {}),
           ...(options?.invitedProfileIds?.length ? {
             invitedProfileIds: options.invitedProfileIds,
             collaborationScope: options.collaborationScope ?? 'discussion',

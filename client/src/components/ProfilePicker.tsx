@@ -86,7 +86,7 @@ export function ProfilePicker({ profiles, activeProfileId, loading, attentionByP
           id={listboxId}
           role="listbox"
           aria-label="Hermes profiles"
-          className="absolute bottom-[calc(100%+0.5rem)] left-0 z-50 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl shadow-zinc-950/10 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-black/30"
+          className="absolute bottom-[calc(100%+0.5rem)] left-0 z-50 w-full overflow-hidden rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl shadow-zinc-950/10 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-black/30"
         >
           <div className="px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
             Workspace profile
@@ -106,7 +106,7 @@ export function ProfilePicker({ profiles, activeProfileId, loading, attentionByP
                     setOpen(false);
                     triggerRef.current?.focus();
                   }}
-                  className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors ${
+                  className={`flex w-full min-w-0 items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors ${
                     selected
                       ? 'bg-zinc-100 dark:bg-zinc-800'
                       : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/70'
@@ -122,8 +122,8 @@ export function ProfilePicker({ profiles, activeProfileId, loading, attentionByP
                     />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className="truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">{profile.label}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">{profile.label}</span>
                       {profile.isDefault && (
                         <span className="shrink-0 rounded bg-zinc-200/70 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">
                           Default
