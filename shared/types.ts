@@ -33,7 +33,16 @@ export interface UpdateStatus {
   updateConfigured: boolean;
   releaseUrl: string | null;
   checkedAt: number;
+  pendingUpdate?: {
+    latestVersion: string;
+    requestedAt: number;
+  } | null;
   error?: string;
+}
+
+export interface UpdateApplyResult {
+  accepted: true;
+  queued: boolean;
 }
 
 export interface StudioGitHubInstallation {

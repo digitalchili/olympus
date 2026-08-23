@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
 import { createUpdatesRouter, isVersionNewer, parseGitHubRepositoryUrl } from '../server/routes/updates.js';
+import { DurableUpdateCoordinator, type PendingUpdateRequest } from '../server/update-queue.js';
 
 assert.equal(isVersionNewer('1.2.11', '1.2.10'), true);
 assert.equal(isVersionNewer('1.3.0', '1.2.99'), true);
@@ -23,8 +24,24 @@ globalThis.fetch = async () => {
   throw new Error('No network request should run without a configured update hook.');
 };
 
+let pending: PendingUpdateRequest | null = null;
+const coordinator = new DurableUpdateCoordinator({
+  store: {
+    load: () => pending,
+    saveIfEmpty: (next) => {
+      pending ??= next;
+      return pending;
+    },
+    remove: (request) => {
+      if (pending?.id === request.id) pending = null;
+    },
+  },
+  activeRuns: () => 0,
+  currentVersion: () => '0.5.5',
+  dispatch: async () => 202,
+});
 const app = express();
-app.use('/api/updates', createUpdatesRouter());
+app.use('/api/updates', createUpdatesRouter(coordinator));
 const server = app.listen(0);
 
 try {
