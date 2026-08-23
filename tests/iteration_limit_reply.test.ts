@@ -18,8 +18,8 @@ assert.equal(run.status, 'error', 'the incomplete turn remains retryable and is 
 assert.match(run.error ?? '', /iteration_limit/);
 assert.equal(
   run.messages.at(-1)?.content,
-  'Here is the useful partial result.',
-  'internal iteration-limit errors must not be appended to assistant reply prose',
+  'Here is the useful partial result.\n[Run stopped before completion. Send another message to retry.]',
+  'iteration limits append a concise retryable blocker without exposing internals',
 );
 
 const clientRun: LiveChatRun = {
@@ -47,8 +47,8 @@ assert.equal(clientRun.status, 'error');
 assert.match(clientRun.error ?? '', /iteration_limit/);
 assert.equal(
   clientRun.messages.at(-1)?.content,
-  'Here is the live partial result.',
-  'the EventSource projection must not append internal iteration-limit errors to reply prose',
+  'Here is the live partial result.\n[Run stopped before completion. Send another message to retry.]',
+  'the EventSource projection shows the same concise retryable blocker',
 );
 
 const idleTaskId = 'idle-timeout-reply-test';
@@ -61,8 +61,8 @@ applyEvent(idleTaskId, {
 });
 assert.equal(
   getRun(idleTaskId)?.messages.at(-1)?.content,
-  'Useful work before the idle stop.',
-  'idle watchdog status must not be appended to server-projected reply prose',
+  'Useful work before the idle stop.\n[Run stopped before completion. Send another message to retry.]',
+  'idle watchdog failures show a user-safe blocker',
 );
 
 const runtimeClientRun: LiveChatRun = structuredClone(clientRun);
@@ -76,8 +76,8 @@ applyLiveErrorEvent(runtimeClientRun, {
 }, 300);
 assert.equal(
   runtimeClientRun.messages.at(-1)?.content,
-  'Useful work before the runtime stop.',
-  'runtime watchdog status must not be appended to live reply prose',
+  'Useful work before the runtime stop.\n[Run stopped before completion. Send another message to retry.]',
+  'runtime watchdog failures show a user-safe blocker',
 );
 
 const providerClientRun: LiveChatRun = structuredClone(clientRun);
@@ -91,8 +91,8 @@ applyLiveErrorEvent(providerClientRun, {
 }, 400);
 assert.equal(
   providerClientRun.messages.at(-1)?.content,
-  'Partial provider response.\n[Error: Provider request failed]',
-  'genuine provider errors must remain visible in reply prose',
+  'Partial provider response.\n[Run stopped before completion. Send another message to retry.]',
+  'provider errors expose a concise user-safe blocker instead of raw internals',
 );
 
 console.log('Iteration-limit reply projection tests passed');
