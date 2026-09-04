@@ -125,6 +125,13 @@ try {
   const crossProfileAcquire = await call(`/api/projects/${projectId}/editor/acquire?profile=writer`, 'POST', { taskId: task.id });
   assert.equal(crossProfileAcquire.status, 404, 'a profile contributor cannot take over another profile handler\'s task');
 
+  const crossProfilePrepare = await call(`/api/projects/${projectId}/editor/prepare?profile=writer`, 'POST', { taskId: task.id });
+  assert.equal(crossProfilePrepare.status, 404, 'cross-profile prepare is gated to handler profile');
+
+  const prepared = await call(`/api/projects/${projectId}/editor/prepare`, 'POST', { taskId: task.id });
+  assert.equal(prepared.status, 200, 'prepare acquires or transfers the editor lease');
+  assert.equal((prepared.body.editor as Record<string, unknown>).taskId, task.id);
+
   const acquired = await call(`/api/projects/${projectId}/editor/acquire`, 'POST', { taskId: task.id });
   assert.equal(acquired.status, 200);
   for (const [path, method, body] of [

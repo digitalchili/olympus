@@ -38,7 +38,7 @@ import {
 } from '../project-access.js';
 import type { StudioGitHubGateway } from './studio.js';
 import { getGitHubInstallation } from '../db/studio-projects.js';
-import { createProjectCpService, type ProjectCpService } from '../project-cp.js';
+import { createProjectCpService, ProjectRepositoryBusyError, type ProjectCpService } from '../project-cp.js';
 import { getProjectEditor, listProjectVersions } from '../db/project-cp.js';
 import {
   PROJECT_REFERENCE_MAX_BYTES,
@@ -505,6 +505,33 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       });
       return res.json({ editor: publicEditor(editor) });
     } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/editor/prepare', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      const task = requireProjectEditorTask(req, registry, projectId, taskId);
+      const repositoryLink = requireWriteRepository(projectId);
+      const editor = await projectCp.prepareTask({
+        projectId,
+        taskId,
+        profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
+        repositoryLink,
+        tokenProvider: tokenProvider(github),
+      });
+      return res.json({ editor: publicEditor(editor) });
+    } catch (error) {
+      if (error instanceof ProjectRepositoryBusyError) {
+        return res.status(423).json({
+          error: `${error.activeTaskTitle} is currently using this Project repository. Finish or release it before starting this task.`,
+          code: 'PROJECT_REPOSITORY_BUSY',
+          activeTaskId: error.activeTaskId,
+        });
+      }
       return sendError(res, error);
     }
   });

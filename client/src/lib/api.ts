@@ -392,6 +392,12 @@ export function acquireProjectEditor(projectId: string, taskId: string) {
   }, false);
 }
 
+export function prepareProjectEditor(projectId: string, taskId: string) {
+  return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/prepare`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
 export function releaseProjectEditor(projectId: string, taskId: string) {
   return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/release`, {
     method: 'POST', body: JSON.stringify({ taskId }),

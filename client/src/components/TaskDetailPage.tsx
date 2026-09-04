@@ -1,11 +1,20 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useParams } from 'react-router';
-import { MoreHorizontal, Trash2, Loader2, Pencil, Check } from 'lucide-react';
+import { MoreHorizontal, Trash2, Loader2, Pencil, Check, GitCommitHorizontal } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { StatusIcon } from './StatusIcon';
 import { useStore, optimisticMoveTask } from '../lib/store';
 import { toast } from 'sonner';
-import { deleteTask, fetchCollaborations, fetchProject, patchTask, moveTask, markTaskViewed } from '../lib/api';
+import {
+  deleteTask,
+  fetchCollaborations,
+  fetchProject,
+  fetchProjectEditor,
+  fetchProjectEditorStatus,
+  patchTask,
+  moveTask,
+  markTaskViewed,
+} from '../lib/api';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
 import { timeAgo } from '../lib/format';
@@ -18,10 +27,11 @@ import {
 } from './CollaborationPanel';
 import { RenameReveal, useRenameAnimation } from './RenameTitle';
 import { taskProfileLabel } from '../lib/profiles';
-import type { AgentRunSettings } from '../lib/api';
-import type { CollaborationRun, TaskStatus } from '@shared/types';
+import type { AgentRunSettings, ProjectGitStatus } from '../lib/api';
+import type { CollaborationRun, ProjectSummary, TaskStatus } from '@shared/types';
 import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { usePageHeader } from './Header';
+import { TaskCommitPushModal } from './TaskCommitPushModal';
 
 export function TaskDetailPage() {
   const { taskId, projectId } = useParams<{ taskId: string; projectId?: string }>();
@@ -48,13 +58,21 @@ export function TaskDetailPage() {
   const [showMenu, setShowMenu] = useState(false);
   const [activeTab, setActiveTab] = useState<'answer' | 'collaboration'>('answer');
   const [collaborationRuns, setCollaborationRuns] = useState<CollaborationRun[]>([]);
-  const [projectName, setProjectName] = useState<string | null>(null);
+  const [projectSummary, setProjectSummary] = useState<ProjectSummary | null>(null);
+  const [taskGitStatus, setTaskGitStatus] = useState<ProjectGitStatus | null>(null);
+  const [showCommitPushModal, setShowCommitPushModal] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const markViewedInFlightRef = useRef<string | null>(null);
   const titleAnimation = useRenameAnimation(task?.title ?? '', task?.id ?? null);
-  const parentPath = projectId ? `/projects/${encodeURIComponent(projectId)}` : '/';
+
+  const effectiveProjectId = projectId || task?.project_id || null;
+  const projectName = projectSummary?.name ?? null;
+  const repositoryLink = projectSummary?.repositoryLink ?? null;
+  const canCommitPush = Boolean(effectiveProjectId && repositoryLink && repositoryLink.mode === 'branch_pr');
+
+  const parentPath = effectiveProjectId ? `/projects/${encodeURIComponent(effectiveProjectId)}` : '/';
   const pageHeader = useMemo(() => ({
-    crumbs: projectId
+    crumbs: effectiveProjectId
       ? [
           { label: 'Projects', to: '/projects' },
           { label: projectName ?? 'Project', to: parentPath },
@@ -64,20 +82,49 @@ export function TaskDetailPage() {
           { label: 'Tasks', to: '/' },
           { label: task?.title ?? 'Task' },
         ],
-  }), [parentPath, projectId, projectName, task?.title]);
+  }), [effectiveProjectId, parentPath, projectName, task?.title]);
   usePageHeader(pageHeader);
+
+  const refreshTaskGitStatus = useCallback(async () => {
+    if (!effectiveProjectId || !task) {
+      setTaskGitStatus(null);
+      return;
+    }
+    try {
+      const editorRes = await fetchProjectEditor(effectiveProjectId);
+      if (editorRes.editor?.taskId === task.id) {
+        const statusRes = await fetchProjectEditorStatus(effectiveProjectId, task.id);
+        setTaskGitStatus(statusRes.status);
+      } else {
+        setTaskGitStatus(null);
+      }
+    } catch {
+      setTaskGitStatus(null);
+    }
+  }, [effectiveProjectId, task]);
 
   useEffect(() => {
     if (!projectId || !task || task.project_id !== projectId) {
-      setProjectName(null);
+      setProjectSummary(null);
+      setTaskGitStatus(null);
       return;
     }
     let cancelled = false;
     void fetchProject(projectId, activeProfileId)
-      .then(({ project }) => { if (!cancelled) setProjectName(project.name); })
-      .catch(() => { if (!cancelled) setProjectName(null); });
+      .then(({ project }) => {
+        if (!cancelled) setProjectSummary(project);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectSummary(null);
+      });
     return () => { cancelled = true; };
   }, [activeProfileId, projectId, task]);
+
+  useEffect(() => {
+    if (canCommitPush) {
+      void refreshTaskGitStatus();
+    }
+  }, [canCommitPush, refreshTaskGitStatus, task?.updated_at, task?.last_agent_response_at]);
 
   useEffect(() => {
     if (task) setTitleDraft(task.title);
@@ -309,6 +356,23 @@ export function TaskDetailPage() {
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2.5">
+              {canCommitPush && (
+                <button
+                  type="button"
+                  onClick={() => setShowCommitPushModal(true)}
+                  title="Commit and push changes to GitHub"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white p-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 sm:px-2.5 sm:py-1.5"
+                >
+                  <GitCommitHorizontal size={14} strokeWidth={2.2} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
+                  <span className="hidden sm:inline">Commit & Push</span>
+                  {taskGitStatus && !taskGitStatus.clean && taskGitStatus.changedFiles.length > 0 && (
+                    <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                      {taskGitStatus.changedFiles.length}
+                    </span>
+                  )}
+                </button>
+              )}
+
               {task.status !== 'done' && (
                 <div className="group relative shrink-0">
                   <button
@@ -339,6 +403,19 @@ export function TaskDetailPage() {
                 </button>
                 {showMenu && (
                   <div ref={menuRef} className="absolute right-0 top-full mt-1 min-w-[180px] py-1 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700 shadow-xl z-50">
+                    {canCommitPush && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => { setShowMenu(false); setShowCommitPushModal(true); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-left"
+                        >
+                          <GitCommitHorizontal size={14} className="text-zinc-500 dark:text-zinc-400" />
+                          Commit & Push
+                        </button>
+                        <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
+                      </>
+                    )}
                     <p className="px-3 py-1.5 text-[11px] font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
                       Move to
                     </p>
@@ -429,6 +506,27 @@ export function TaskDetailPage() {
         <DeleteConfirmModal
           onConfirm={() => { setShowDeleteConfirm(false); handleDelete(); }}
           onCancel={() => setShowDeleteConfirm(false)}
+        />
+      )}
+
+      {showCommitPushModal && effectiveProjectId && repositoryLink && (
+        <TaskCommitPushModal
+          open={showCommitPushModal}
+          onClose={() => {
+            setShowCommitPushModal(false);
+            void refreshTaskGitStatus();
+          }}
+          projectId={effectiveProjectId}
+          taskId={task.id}
+          taskTitle={task.title}
+          repositoryLink={repositoryLink}
+          onCommitted={async () => {
+            toast.success('Successfully committed and pushed to GitHub!');
+            if (task.status === 'in_progress') {
+              void handleStatusChange('in_review');
+            }
+            void refreshTaskGitStatus();
+          }}
         />
       )}
     </div>
