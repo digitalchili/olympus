@@ -50,6 +50,25 @@ export interface StorageStatus {
   } | null;
 }
 
+export interface StorageProbeResult {
+  ok: boolean;
+  error?: string;
+  totalBytes?: number;
+  availableBytes?: number;
+  usedBytes?: number;
+  usedPercent?: number;
+  isWritable?: boolean;
+}
+
+export interface SshProbeInput {
+  host: string;
+  port?: number;
+  username: string;
+  authType?: 'key' | 'password';
+  privateKey?: string;
+  remotePath: string;
+}
+
 export interface StudioGitHubInstallation {
   id: number;
   accountLogin: string;

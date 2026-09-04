@@ -54,6 +54,8 @@ import type {
   StudioGitHubRepository,
   StudioProject,
   StorageStatus,
+  StorageProbeResult,
+  SshProbeInput,
   UpdateStatus,
 } from '@shared/types';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
@@ -215,6 +217,22 @@ export function fetchUpdateStatus(refresh = false) {
 
 export function fetchStorageStatus() {
   return request<StorageStatus>('/storage', undefined, false);
+}
+
+export function probeLocalStorage(path: string) {
+  return request<StorageProbeResult>('/storage/probe/local', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  }, false);
+}
+
+export function probeSshStorage(data: SshProbeInput) {
+  return request<StorageProbeResult>('/storage/probe/ssh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  }, false);
 }
 
 export function applyUpdate() {

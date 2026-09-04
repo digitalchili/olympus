@@ -46,5 +46,30 @@ export function createStorageRouter(): Router {
     res.json(status);
   });
 
+  router.post('/probe/local', async (req, res) => {
+    const targetPath = typeof req.body?.path === 'string' ? req.body.path : '';
+    const { testLocalPathProbe } = await import('../storage-probe.js');
+    const result = await testLocalPathProbe(targetPath);
+    res.json(result);
+  });
+
+  router.post('/probe/ssh', async (req, res) => {
+    const { testSshStorageProbe } = await import('../storage-probe.js');
+    const host = typeof req.body?.host === 'string' ? req.body.host : '';
+    const username = typeof req.body?.username === 'string' ? req.body.username : '';
+    const port = typeof req.body?.port === 'number' ? req.body.port : 22;
+    const remotePath = typeof req.body?.remotePath === 'string' ? req.body.remotePath : '';
+    const privateKey = typeof req.body?.privateKey === 'string' ? req.body.privateKey : undefined;
+
+    const result = await testSshStorageProbe({
+      host,
+      username,
+      port,
+      remotePath,
+      privateKey,
+    });
+    res.json(result);
+  });
+
   return router;
 }

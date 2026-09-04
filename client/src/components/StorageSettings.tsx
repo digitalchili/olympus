@@ -11,10 +11,12 @@ import {
   ExternalLink,
   ShieldCheck,
   Terminal,
+  Plus,
 } from 'lucide-react';
 import type { StorageStatus } from '@shared/types';
 import { fetchStorageStatus } from '../lib/api';
 import { toErrorMessage } from '../lib/format';
+import { ConnectStorageWizard } from './ConnectStorageWizard';
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 4) return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
@@ -28,6 +30,7 @@ export function StorageSettings() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -96,14 +99,23 @@ export function StorageSettings() {
               </p>
             </div>
           </div>
-          <button
-            onClick={() => void loadStatus()}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setWizardOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 transition-colors shadow-sm"
+            >
+              <Plus size={13} />
+              Connect Storage Drive
+            </button>
+            <button
+              onClick={() => void loadStatus()}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -235,6 +247,15 @@ sudo sshfs user@remote-host:/path/to/storage /mnt/remote-storage \\
           <span>Existing production storage settings are fully preserved and isolated from container rebuilds.</span>
         </div>
       </section>
+
+      <ConnectStorageWizard
+        isOpen={wizardOpen}
+        onClose={() => {
+          setWizardOpen(false);
+          void loadStatus();
+        }}
+        isDocker={Boolean(status?.isDocker)}
+      />
     </div>
   );
 }
