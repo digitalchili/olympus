@@ -53,6 +53,7 @@ import type {
   StudioGitHubInstallation,
   StudioGitHubRepository,
   StudioProject,
+  StorageStatus,
   UpdateStatus,
 } from '@shared/types';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
@@ -210,6 +211,10 @@ export function fetchAppVersion() {
 
 export function fetchUpdateStatus(refresh = false) {
   return request<UpdateStatus>(refresh ? '/updates?refresh=true' : '/updates', undefined, false);
+}
+
+export function fetchStorageStatus() {
+  return request<StorageStatus>('/storage', undefined, false);
 }
 
 export function applyUpdate() {

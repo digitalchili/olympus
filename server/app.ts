@@ -8,6 +8,7 @@ import { skillsRouter } from './routes/skills.js';
 import { filesRouter } from './routes/files.js';
 import { searchRouter } from './routes/search.js';
 import { createInstallationRouter } from './routes/installation.js';
+import { createStorageRouter } from './routes/storage.js';
 import { createUpdatesRouter } from './routes/updates.js';
 import { createProfilesRouter } from './routes/profiles.js';
 import { createChannelsRouter } from './routes/channels.js';
@@ -137,6 +138,7 @@ app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: stud
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
+app.use('/api/storage', createStorageRouter());
 app.use('/api/updates', createUpdatesRouter());
 app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp }));
 app.use('/api/studio', createStudioRouter({

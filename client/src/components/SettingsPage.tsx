@@ -9,6 +9,7 @@ import { useStore } from '../lib/store';
 import { toErrorMessage } from '../lib/format';
 import { ProfilesSettings } from './ProfilesSettings';
 import { ChannelSettings } from './ChannelSettings';
+import { StorageSettings } from './StorageSettings';
 import { UpdateSettings } from './UpdateSettings';
 import { GitHubSettings } from './GitHubSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
@@ -17,23 +18,25 @@ import {
   type ReasoningEffort,
 } from '@shared/types';
 
-export type SettingsTab = 'general' | 'profiles' | 'git' | 'integrations' | 'updates';
+export type SettingsTab = 'general' | 'profiles' | 'git' | 'integrations' | 'storage' | 'updates';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: 'General Settings' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'git', label: 'Git Connections' },
   { id: 'integrations', label: 'Integrations' },
+  { id: 'storage', label: 'Storage' },
   { id: 'updates', label: 'Updates' },
 ];
 
 function resolveTab(hash: string, searchTab: string | null): SettingsTab {
-  if (searchTab && ['general', 'profiles', 'git', 'integrations', 'updates'].includes(searchTab)) {
+  if (searchTab && ['general', 'profiles', 'git', 'integrations', 'storage', 'updates'].includes(searchTab)) {
     return searchTab as SettingsTab;
   }
   const cleanHash = hash.replace(/^#/, '').toLowerCase();
   if (cleanHash === 'github' || cleanHash === 'git') return 'git';
   if (cleanHash === 'channels' || cleanHash === 'integrations') return 'integrations';
+  if (cleanHash === 'storage') return 'storage';
   if (cleanHash === 'profiles') return 'profiles';
   if (cleanHash === 'updates') return 'updates';
   if (cleanHash === 'general') return 'general';
@@ -289,6 +292,10 @@ export function SettingsPage() {
 
         {activeTab === 'integrations' && (
           <ChannelSettings />
+        )}
+
+        {activeTab === 'storage' && (
+          <StorageSettings />
         )}
 
         {activeTab === 'updates' && (

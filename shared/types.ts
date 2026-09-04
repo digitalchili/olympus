@@ -36,6 +36,20 @@ export interface UpdateStatus {
   error?: string;
 }
 
+export interface StorageStatus {
+  olympusHome: string;
+  hermesHome: string;
+  projectRoot: string;
+  dbPath: string;
+  isDocker: boolean;
+  disk: {
+    totalBytes: number;
+    freeBytes: number;
+    usedBytes: number;
+    usedPercent: number;
+  } | null;
+}
+
 export interface StudioGitHubInstallation {
   id: number;
   accountLogin: string;
