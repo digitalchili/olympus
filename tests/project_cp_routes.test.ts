@@ -213,6 +213,28 @@ try {
   assert.equal(repositoryChangeAfterHistoryBlocked.body.code, 'PROJECT_COMMIT_PUSH_BLOCKED');
   assert.equal(getProjectEditor(projectId), null);
 
+  // Test on-demand GitHub sync
+  const initialSync = await call(`/api/projects/${projectId}/sync`, 'POST');
+  assert.equal(initialSync.status, 200);
+  assert.equal((initialSync.body as Record<string, unknown>).updated, false);
+
+  // Push an external commit to the remote repository
+  await writeFile(join(seed, 'EXTERNAL.md'), 'updated from outside\n');
+  await git(seed, ['add', 'EXTERNAL.md']);
+  await git(seed, ['-c', 'user.name=Seed', '-c', 'user.email=seed@example.test', 'commit', '-m', 'External commit']);
+  await git(seed, ['push', remote, 'main']);
+
+  const updatedSync = await call(`/api/projects/${projectId}/sync`, 'POST');
+  assert.equal(updatedSync.status, 200, JSON.stringify(updatedSync.body));
+  assert.equal((updatedSync.body as Record<string, unknown>).updated, true);
+  assert.equal(await readFile(join(workdir, 'EXTERNAL.md'), 'utf8'), 'updated from outside\n');
+
+  // Test dirty working tree protection
+  await writeFile(join(workdir, 'uncommitted.txt'), 'local uncommitted file\n');
+  const dirtySync = await call(`/api/projects/${projectId}/sync`, 'POST');
+  assert.equal(dirtySync.status, 409, 'sync must fail if working tree has uncommitted changes');
+  await rm(join(workdir, 'uncommitted.txt'));
+
   const rawRows = JSON.stringify(db.prepare('SELECT * FROM project_editor_leases').all())
     + JSON.stringify(db.prepare('SELECT * FROM project_versions').all());
   assert.equal(rawRows.includes('ghs_FAKE'), false, 'tokens are never stored in CP tables');

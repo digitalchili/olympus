@@ -430,6 +430,14 @@ export function revertProjectVersion(projectId: string, taskId: string, versionI
   );
 }
 
+export function syncProjectFromGitHub(projectId: string) {
+  return request<{ updated: boolean; currentSha: string; message: string }>(
+    `/projects/${encodeURIComponent(projectId)}/sync`,
+    { method: 'POST' },
+    false,
+  );
+}
+
 export function reassignProjectManager(
   projectId: string,
   managerProfileId: string,

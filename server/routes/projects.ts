@@ -133,6 +133,9 @@ function sendError(res: Response, error: unknown): Response {
   if (/not the Project editor|already has an editor|no changes|Commit or discard|not ready for Commit & Push|will not push directly|version not found/i.test(message)) {
     return res.status(/version not found/i.test(message) ? 404 : 409).json({ error: message, code: 'PROJECT_COMMIT_PUSH_BLOCKED' });
   }
+  if (/merge conflict|conflict/i.test(message)) {
+    return res.status(409).json({ error: 'Merge conflict encountered while pulling from GitHub. Please resolve on GitHub or inspect the project checkout.', code: 'PROJECT_MERGE_CONFLICT' });
+  }
   if (/Project not found/i.test(message)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
   if (/already exists/i.test(message)) return res.status(409).json({ error: message, code: 'PROJECT_NAME_EXISTS' });
   if (/required|too long|invalid control|invalid.*role/i.test(message)) return res.status(400).json({ error: message, code: 'INVALID_PROJECT' });
@@ -585,6 +588,22 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       }
 
       return res.json({ message });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/sync', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const repositoryLink = requireWriteRepository(projectId);
+      const result = await projectCp.sync({
+        projectId,
+        repositoryLink,
+        tokenProvider: tokenProvider(github),
+      });
+      return res.json(result);
     } catch (error) {
       return sendError(res, error);
     }

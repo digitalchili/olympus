@@ -48,6 +48,12 @@ export class ProjectRepositoryBusyError extends Error {
   }
 }
 
+export interface ProjectCpSyncResult {
+  updated: boolean;
+  currentSha: string;
+  message: string;
+}
+
 export interface ProjectCpService {
   acquireEditor(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
   prepareTask(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
@@ -62,6 +68,11 @@ export interface ProjectCpService {
     deployToDefaultBranch?: boolean;
   }): Promise<ProjectVersion>;
   revert(input: { projectId: string; taskId: string; repositoryLink: ProjectRepositoryLink; versionId: string; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
+  sync(input: {
+    projectId: string;
+    repositoryLink: ProjectRepositoryLink;
+    tokenProvider?: InstallationTokenProvider;
+  }): Promise<ProjectCpSyncResult>;
 }
 
 interface ProjectCpServiceOptions {
@@ -468,6 +479,47 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
           changedFiles: restoredStatus.changedFiles,
           pushedAt: now(),
         });
+      });
+    },
+
+    async sync(input) {
+      return serialized(input.projectId, async () => {
+        await mkdir(options.rootDir, { recursive: true });
+        const workdir = managedWorkdir(options.rootDir, input.projectId);
+        const checkoutExists = await pathExists(workdir);
+        const token = await tokenFor(input.repositoryLink, input.tokenProvider);
+        const auth = { env: gitHubAuthEnv(token) };
+
+        if (!checkoutExists) {
+          await git(options.rootDir, ['clone', '--branch', input.repositoryLink.defaultBranch, '--single-branch', input.repositoryLink.cloneUrl, workdir], auth);
+          const branchName = generatedBranch(input.projectId);
+          await git(workdir, ['checkout', '-b', branchName]);
+          await ensureIdentity(git, workdir);
+          const currentSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+          return {
+            updated: true,
+            currentSha,
+            message: `Cloned and synced repository at ${currentSha.slice(0, 7)}`,
+          };
+        }
+
+        const status = await git(workdir, ['status', '--porcelain']);
+        if (status.stdout.trim()) {
+          throw new Error('Project checkout has uncommitted changes; please commit or discard them before syncing.');
+        }
+
+        const headBefore = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+        await syncManagedCheckout(workdir, input.repositoryLink, input.tokenProvider);
+        const headAfter = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+
+        const updated = headBefore !== headAfter;
+        return {
+          updated,
+          currentSha: headAfter,
+          message: updated
+            ? `Successfully pulled latest changes from GitHub (${headAfter.slice(0, 7)})`
+            : `Already up to date with GitHub (${headAfter.slice(0, 7)})`,
+        };
       });
     },
   };
