@@ -387,9 +387,9 @@ export function fetchProjectVersions(projectId: string) {
   return request<{ versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/versions`, undefined, false);
 }
 
-export function commitPushProject(projectId: string, taskId: string, message: string) {
+export function commitPushProject(projectId: string, taskId: string, message: string, deployToDefaultBranch = false) {
   return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/commit-push`, {
-    method: 'POST', body: JSON.stringify({ taskId, message }),
+    method: 'POST', body: JSON.stringify({ taskId, message, deployToDefaultBranch }),
   }, false);
 }
 

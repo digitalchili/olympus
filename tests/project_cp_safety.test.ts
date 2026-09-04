@@ -81,6 +81,31 @@ try {
   });
   assert.equal(recovered.commitSha, remoteAcceptedSha, 'remote-accepted ambiguous pushes become visible checkpoints');
   assert.equal(listProjectVersions(project.id).length, 1);
+
+  head = 'b'.repeat(40);
+  dirty = true;
+  calls.length = 0;
+  const deployRunner = async (_cwd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
+    calls.push({ args, env: options?.env });
+    if (args[0] === 'status') return { stdout: dirty ? ' M README.md\0' : '', stderr: '' };
+    if (args[0] === 'diff') return { stdout: 'diff --git a/README.md b/README.md\n', stderr: '' };
+    if (args[0] === 'rev-parse') return { stdout: `${head}\n`, stderr: '' };
+    if (args[0] === 'commit') { head = 'c'.repeat(40); dirty = false; return { stdout: '', stderr: '' }; }
+    return { stdout: '', stderr: '' };
+  };
+  const deployService = createProjectCpService({ rootDir: join(root, 'managed'), gitRunner: deployRunner });
+  const deployed = await deployService.commitPush({
+    projectId: project.id,
+    taskId: task.id,
+    repositoryLink: link,
+    message: 'Deploy commit to default branch',
+    tokenProvider: async () => 'ghs_SECRET_TEST',
+    deployToDefaultBranch: true,
+  });
+  assert.equal(deployed.branchName, 'main', 'version record reflects deployment to default branch');
+  const deployPushCall = calls.find((call) => call.args[0] === 'push');
+  assert.ok(deployPushCall?.args.includes('HEAD:refs/heads/main'), 'push includes refspec for default branch');
+  assert.ok(deployPushCall?.args.includes('HEAD:refs/heads/olympus/safe-test'), 'push also includes refspec for working branch');
 } finally {
   await rm(root, { recursive: true, force: true });
 }

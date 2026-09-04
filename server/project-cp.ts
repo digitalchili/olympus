@@ -53,7 +53,14 @@ export interface ProjectCpService {
   prepareTask(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
   releaseEditor(input: { projectId: string; taskId: string }): Promise<ProjectEditorLease>;
   status(input: { projectId: string; taskId: string }): Promise<ProjectGitStatus>;
-  commitPush(input: { projectId: string; taskId: string; repositoryLink: ProjectRepositoryLink; message: string; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
+  commitPush(input: {
+    projectId: string;
+    taskId: string;
+    repositoryLink: ProjectRepositoryLink;
+    message: string;
+    tokenProvider?: InstallationTokenProvider;
+    deployToDefaultBranch?: boolean;
+  }): Promise<ProjectVersion>;
   revert(input: { projectId: string; taskId: string; repositoryLink: ProjectRepositoryLink; versionId: string; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
 }
 
@@ -197,15 +204,21 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     parentSha: string;
     commitSha: string;
     tokenProvider?: InstallationTokenProvider;
+    targetBranch?: string;
+    deployToDefaultBranch?: boolean;
   }): Promise<void> {
     const token = await tokenFor(input.repositoryLink, input.tokenProvider);
+    const targetBranch = input.targetBranch ?? input.lease.branchName;
+    const refspecs = input.deployToDefaultBranch && targetBranch !== input.lease.branchName
+      ? [`HEAD:refs/heads/${input.lease.branchName}`, `HEAD:refs/heads/${targetBranch}`]
+      : [`HEAD:refs/heads/${input.lease.branchName}`];
     try {
-      await git(input.lease.workdir, ['push', 'origin', `HEAD:refs/heads/${input.lease.branchName}`], { env: gitHubAuthEnv(token) });
+      await git(input.lease.workdir, ['push', 'origin', ...refspecs], { env: gitHubAuthEnv(token) });
     } catch (error) {
       try {
         const remote = await git(
           input.lease.workdir,
-          ['ls-remote', 'origin', `refs/heads/${input.lease.branchName}`],
+          ['ls-remote', 'origin', `refs/heads/${targetBranch}`],
           { env: gitHubAuthEnv(token) },
         );
         const remoteSha = remote.stdout.trim().split(/\s+/)[0] ?? '';
@@ -370,7 +383,9 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       return serialized(input.projectId, async () => {
         const lease = getProjectEditorForTask(input.projectId, input.taskId);
         if (!lease) throw new Error('This task is not the Project editor');
-        if (lease.branchName === input.repositoryLink.defaultBranch) throw new Error('Olympus will not push directly to the default branch');
+        if (!input.deployToDefaultBranch && lease.branchName === input.repositoryLink.defaultBranch) {
+          throw new Error('Olympus will not push directly to the default branch');
+        }
         const status = await readStatus(input.projectId, input.taskId);
         if (status.clean) throw new Error('There are no changes to Commit & Push');
         const requestedMessage = validateCommitMessage(input.message);
@@ -395,7 +410,18 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
           commitSha = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
           changedFiles = status.changedFiles;
         }
-        await pushWithRecovery({ lease, repositoryLink: input.repositoryLink, parentSha, commitSha, tokenProvider: input.tokenProvider });
+        const targetBranch = input.deployToDefaultBranch
+          ? input.repositoryLink.defaultBranch
+          : lease.branchName;
+        await pushWithRecovery({
+          lease,
+          repositoryLink: input.repositoryLink,
+          parentSha,
+          commitSha,
+          tokenProvider: input.tokenProvider,
+          targetBranch,
+          deployToDefaultBranch: input.deployToDefaultBranch,
+        });
         return recordProjectVersion({
           projectId: input.projectId,
           taskId: input.taskId,
@@ -403,7 +429,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
           action: 'commit_push',
           commitSha,
           parentSha,
-          branchName: lease.branchName,
+          branchName: targetBranch,
           commitMessage: message,
           changedFiles,
           pushedAt: now(),

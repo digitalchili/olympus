@@ -395,16 +395,23 @@ export function ProjectDetailPage() {
 
   const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'success'>('idle');
   const [lastPushedSha, setLastPushedSha] = useState<string | null>(null);
+  const [deployToDefault, setDeployToDefault] = useState(true);
 
   const commitAndPush = async () => {
     if (!editor || !codeStatus || codeStatus.clean || !commitMessage.trim()) return;
+    const targetBranch = deployToDefault && project?.repositoryLink?.defaultBranch
+      ? project.repositoryLink.defaultBranch
+      : editor.branchName;
     const preview = codeStatus.changedFiles.slice(0, 12).join('\n');
-    if (!window.confirm(`Commit & Push these changes?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`)) return;
+    const confirmMsg = deployToDefault && project?.repositoryLink?.defaultBranch
+      ? `Commit & Deploy directly to ${targetBranch} (triggers Dokploy build)?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`
+      : `Commit & Push to ${targetBranch}?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`;
+    if (!window.confirm(confirmMsg)) return;
     setBusy(true);
     setPushStatus('pushing');
     setActionError(null);
     try {
-      const result = await commitPushProject(projectId, editor.taskId, commitMessage.trim());
+      const result = await commitPushProject(projectId, editor.taskId, commitMessage.trim(), deployToDefault);
       setVersions(result.versions);
       setCommitMessage('');
       setLastPushedSha(result.version?.commitSha ?? null);
@@ -531,13 +538,26 @@ export function ProjectDetailPage() {
                       placeholder="Describe what changed"
                       className="h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"
                     />
+                    {project?.repositoryLink?.defaultBranch && (
+                      <label className="flex items-center gap-2 pt-1 text-xs text-zinc-600 dark:text-zinc-400 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={deployToDefault}
+                          onChange={(e) => setDeployToDefault(e.target.checked)}
+                          className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800"
+                        />
+                        <span>
+                          Deploy directly to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{project.repositoryLink.defaultBranch}</span> (triggers Dokploy build)
+                        </span>
+                      </label>
+                    )}
                   </div>
                   {pushStatus === 'pushing' && (
                     <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-950/30">
                       <div className="flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-300">
                         <span className="inline-flex items-center gap-1.5 font-medium">
                           <Loader2 size={13} className="animate-spin text-zinc-900 dark:text-zinc-100" />
-                          Pushing to GitHub…
+                          {deployToDefault && project?.repositoryLink?.defaultBranch ? 'Deploying to GitHub…' : 'Pushing to GitHub…'}
                         </span>
                         <span className="text-[11px] text-zinc-400">Uploading changes</span>
                       </div>
@@ -550,7 +570,11 @@ export function ProjectDetailPage() {
                   {pushStatus === 'success' && (
                     <div className="flex items-center gap-2 rounded-lg border border-emerald-200/60 bg-emerald-50/70 p-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-950/30 dark:text-emerald-300">
                       <Check size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
-                      <span>Successfully committed and pushed to GitHub!{lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}</span>
+                      <span>
+                        {deployToDefault && project?.repositoryLink?.defaultBranch
+                          ? `Successfully committed and deployed to ${project.repositoryLink.defaultBranch}!${lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}`
+                          : `Successfully committed and pushed to GitHub!${lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}`}
+                      </span>
                     </div>
                   )}
 
@@ -563,14 +587,16 @@ export function ProjectDetailPage() {
                     >
                       {pushStatus === 'pushing' ? (
                         <>
-                          <Loader2 size={13} className="animate-spin" /> Pushing…
+                          <Loader2 size={13} className="animate-spin" /> {deployToDefault && project?.repositoryLink?.defaultBranch ? 'Deploying…' : 'Pushing…'}
                         </>
                       ) : pushStatus === 'success' ? (
                         <>
-                          <Check size={13} /> Pushed!
+                          <Check size={13} /> {deployToDefault && project?.repositoryLink?.defaultBranch ? 'Deployed!' : 'Pushed!'}
                         </>
                       ) : (
-                        'Commit & Push'
+                        deployToDefault && project?.repositoryLink?.defaultBranch
+                          ? `Commit & Deploy (${project.repositoryLink.defaultBranch})`
+                          : 'Commit & Push'
                       )}
                     </button>
                     <button
@@ -590,7 +616,11 @@ export function ProjectDetailPage() {
                       Refresh
                     </button>
                   </div>
-                  <p className="text-[11px] leading-4 text-zinc-400">Commit & Push updates only this Project’s protected working branch. It does not merge or deploy.</p>
+                  <p className="text-[11px] leading-4 text-zinc-400">
+                    {deployToDefault && project?.repositoryLink?.defaultBranch
+                      ? `Commit & Deploy pushes directly to ${project.repositoryLink.defaultBranch} to trigger your deployment webhook.`
+                      : 'Commit & Push updates only this Project’s protected working branch. It does not merge or deploy.'}
+                  </p>
                 </div>}
               </section>
               <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">

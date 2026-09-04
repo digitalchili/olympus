@@ -604,6 +604,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         repositoryLink,
         message,
         tokenProvider: tokenProvider(github),
+        deployToDefaultBranch: Boolean(req.body?.deployToDefaultBranch),
       });
       return res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) });
     } catch (error) {
