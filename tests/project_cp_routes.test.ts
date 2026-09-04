@@ -78,6 +78,9 @@ try {
   app.use('/api/projects', createProjectsRouter({
     registry,
     github,
+    adapter: {
+      generateTitle: async () => ({ title: 'feat: update README' }),
+    } as any,
     now: () => now,
     projectCp: createProjectCpService({ rootDir: managedRoot, now: () => now }),
   }));
@@ -220,3 +223,4 @@ try {
 }
 
 console.log('Project CP route tests passed');
+process.exit(0);

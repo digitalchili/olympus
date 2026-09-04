@@ -52,8 +52,6 @@ services:
 
 volumes:
   olympus_dispatch_state:
-    external: true
     name: ${OLYMPUS_DISPATCH_STATE_VOLUME:-olympus-dispatch-state}
   hermes_data:
-    external: true
-    name: ${HERMES_DATA_VOLUME:?set HERMES_DATA_VOLUME}
+    name: ${HERMES_DATA_VOLUME:-hermes-data}

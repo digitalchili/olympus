@@ -46,4 +46,10 @@ Without `--hermes-volume`, the installer proceeds only when exactly one running 
 
 The listener defaults to `127.0.0.1:6969`. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately if remote access is required.
 
+## Storage Configuration
+
+By default, Olympus stores all repositories, agent sessions, and state locally on the VPS host or local Mac/Linux filesystem.
+
+If you want to use an attached volume (e.g. Hetzner Cloud Volume, AWS EBS) or store repositories on another server using SSH (SSHFS/NFS), see [Storage Options & Configuration](docs/storage.md) for step-by-step instructions.
+
 `/api/health` is liveness. `/api/ready` includes Hermes readiness and returns 503 while draining. Before acceptance, run a test task, observe SSE, and confirm successful work moves to review.
