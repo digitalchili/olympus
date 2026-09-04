@@ -54,7 +54,7 @@ import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 import { RunWatchdogError, runWatchdogConfig, withRunWatchdog, type RunWatchdogReason } from '../run-watchdog.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
-import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
+import { shouldPromoteTerminalRun } from '../run-settlement.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import type { StreamEvent } from '../adapters/types.js';
@@ -236,11 +236,9 @@ function recordCompletedAgentRun(taskId: string, context: ContextUsage | null): 
 
 function settleRun(taskId: string, runId: string, context: ContextUsage | null): void {
   const status = getRunStatus(taskId);
-  const run = getRun(taskId);
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
-  const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
-  if (status && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
+  if (status && shouldPromoteTerminalRun(status.status)) {
     const updated = recordCompletedAgentRun(taskId, context);
     if (updated) broadcast({ type: 'task_updated', task: updated });
   } else {

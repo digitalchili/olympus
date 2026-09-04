@@ -53,6 +53,7 @@ import type {
   StudioGitHubInstallation,
   StudioGitHubRepository,
   StudioProject,
+  UpdateApplyResult,
   UpdateStatus,
 } from '@shared/types';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
@@ -213,7 +214,7 @@ export function fetchUpdateStatus(refresh = false) {
 }
 
 export function applyUpdate() {
-  return request<{ accepted: true }>('/updates/apply', { method: 'POST' }, false);
+  return request<UpdateApplyResult>('/updates/apply', { method: 'POST' }, false);
 }
 
 export function fetchStudioGitHubStatus() {

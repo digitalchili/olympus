@@ -13,7 +13,7 @@ import { apiPathWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
-import { shouldAppendRunErrorToReply } from '@shared/run-errors';
+import { RUN_STOPPED_BLOCKER } from '@shared/run-errors';
 
 export type { ContextUsage, ToolProgressEvent };
 
@@ -87,10 +87,11 @@ export function applyLiveErrorEvent(
   run.status = 'error';
   run.error = error;
   const assistant = ensureAssistant(run);
-  if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
+  const blocker = RUN_STOPPED_BLOCKER;
+  if (!assistant.content.includes(blocker)) {
     assistant.content = assistant.content
-      ? `${assistant.content}\n[Error: ${error}]`
-      : `[Error: ${error}]`;
+      ? `${assistant.content}\n${blocker}`
+      : blocker;
   }
   run.updatedAt = now;
 }
@@ -422,10 +423,14 @@ export function useChat() {
     }
 
     if (event.type === 'done') {
-      if (event.attachments) ensureAssistant(run).attachments = event.attachments.map((attachment) => ({ ...attachment }));
+      const assistant = ensureAssistant(run);
+      if (event.attachments) assistant.attachments = event.attachments.map((attachment) => ({ ...attachment }));
       if (event.sessionId) run.sessionId = event.sessionId;
       if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
-      ensureAssistant(run).completed_at = Date.now();
+      if (event.interrupted && !assistant.content.includes(RUN_STOPPED_BLOCKER)) {
+        assistant.content = assistant.content ? `${assistant.content}\n${RUN_STOPPED_BLOCKER}` : RUN_STOPPED_BLOCKER;
+      }
+      assistant.completed_at = Date.now();
       if (event.context !== undefined) {
         run.context = event.context;
         liveContextRef.current = event.context;

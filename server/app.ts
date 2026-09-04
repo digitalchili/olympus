@@ -8,7 +8,7 @@ import { skillsRouter } from './routes/skills.js';
 import { filesRouter } from './routes/files.js';
 import { searchRouter } from './routes/search.js';
 import { createInstallationRouter } from './routes/installation.js';
-import { createUpdatesRouter } from './routes/updates.js';
+import { createInstallationUpdateCoordinator, createUpdatesRouter } from './routes/updates.js';
 import { createProfilesRouter } from './routes/profiles.js';
 import { createChannelsRouter } from './routes/channels.js';
 import { createChannelHistoryRouter } from './routes/channel-history.js';
@@ -23,6 +23,8 @@ import { resolve } from 'node:path';
 import { createGitHubAppGateway } from './studio/github-app.js';
 import { createGitHubCredentialStore } from './studio/github-credentials.js';
 import { getTask } from './db/queries.js';
+import db from './db/index.js';
+import { createPendingUpdateStore } from './db/update-queue.js';
 import { listDelegationRunsForProfile, markProfileDelegationsUnknown, recordDelegationEvent } from './db/delegations.js';
 import { normalizeDelegationEvent } from './delegation-events.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
@@ -63,6 +65,10 @@ adapter.onDelegationReset((profileId) => {
 });
 const activeRequests = createActiveRequestTracker();
 const drainController = new DrainController(() => getActiveTaskRunCount() + activeRequests.count());
+const updateCoordinator = createInstallationUpdateCoordinator(
+  createPendingUpdateStore(db),
+  () => drainController.status().activeRuns,
+);
 const workerLiveness = createRuntimeLiveness({
   checkWorker: () => adapter.healthCheck(),
   onFailure: (status) => {
@@ -137,7 +143,7 @@ app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: stud
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
-app.use('/api/updates', createUpdatesRouter());
+app.use('/api/updates', createUpdatesRouter(updateCoordinator));
 app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp }));
 app.use('/api/studio', createStudioRouter({
   github: studioGitHubGateway,
@@ -157,5 +163,5 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   next(error);
 });
 
-export { adapter, drainController };
+export { adapter, drainController, updateCoordinator };
 export default app;

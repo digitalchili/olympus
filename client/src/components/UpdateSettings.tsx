@@ -10,6 +10,7 @@ import { toErrorMessage } from '../lib/format';
  * requested the update.
  */
 export type UpdateInstallState =
+  | { phase: 'queued'; fromVersion: string; toVersion: string | null }
   | { phase: 'requested'; fromVersion: string; toVersion: string | null }
   | { phase: 'restarting'; fromVersion: string; toVersion: string | null }
   | { phase: 'installed'; version: string }
@@ -115,9 +116,11 @@ export function UpdateSettingsCard({
         ) : install ? (
           <p className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300" role="status">
             <Loader2 size={14} className="animate-spin" />
-            {install.phase === 'restarting'
-              ? 'Installing — this installation is restarting…'
-              : 'Update requested. Waiting for the installation to restart…'}
+            {install.phase === 'queued'
+              ? 'Update queued. It will install automatically after active work finishes.'
+              : install.phase === 'restarting'
+                ? 'Installing — this installation is restarting…'
+                : 'Update requested. Waiting for the installation to restart…'}
           </p>
         ) : accepted ? (
           <p className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400" role="status">
@@ -260,13 +263,13 @@ export function UpdateSettings() {
     setApplying(true);
     setConfirmError(null);
     try {
-      await applyUpdate();
+      const result = await applyUpdate();
       setAccepted(true);
       setConfirming(false);
       if (status) {
         installStartedAtRef.current = Date.now();
         setInstall({
-          phase: 'requested',
+          phase: result.queued ? 'queued' : 'requested',
           fromVersion: status.currentVersion,
           toVersion: status.latestVersion,
         });
@@ -287,7 +290,7 @@ export function UpdateSettings() {
 
     const poll = async () => {
       if (cancelled) return;
-      if (Date.now() - installStartedAtRef.current > INSTALL_POLL_TIMEOUT_MS) {
+      if (install.phase !== 'queued' && Date.now() - installStartedAtRef.current > INSTALL_POLL_TIMEOUT_MS) {
         setInstall({ phase: 'timeout' });
         return;
       }

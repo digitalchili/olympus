@@ -2,7 +2,7 @@ import 'dotenv/config';
 import './logging.js';
 import './db/index.js';
 import { createServer, type Server } from 'node:http';
-import app, { adapter, drainController } from './app.js';
+import app, { adapter, drainController, updateCoordinator } from './app.js';
 import { mountFrontend, type FrontendCleanup } from './frontend.js';
 import { closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
@@ -68,6 +68,7 @@ async function main() {
     );
   }
   const boundPort = await listenWithFallback(httpServer, HOST, PORT, PORT_FALLBACK_ATTEMPTS);
+  updateCoordinator.start();
   const dispatchHost = HOST === '0.0.0.0' || HOST === '::'
     ? '127.0.0.1'
     : HOST.includes(':') && !HOST.startsWith('[') ? `[${HOST}]` : HOST;
@@ -143,6 +144,7 @@ async function shutdown(reason: ShutdownReason, exitCode = 0): Promise<void> {
     process.exit(1);
   }
   shuttingDown = true;
+  updateCoordinator.stop();
 
   drainController.begin();
   const drainTimeoutMs = Number.parseInt(process.env.OLYMPUS_DRAIN_TIMEOUT_MS || '120000', 10);

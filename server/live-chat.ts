@@ -1,7 +1,7 @@
 import type { Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import type { GoalStateSnapshot, LiveChatRun, LiveChatMessage, LiveChatRunStatus, TaskRunState, ToolProgressEvent } from '../shared/types.js';
-import { shouldAppendRunErrorToReply } from '../shared/run-errors.js';
+import { RUN_STOPPED_BLOCKER } from '../shared/run-errors.js';
 import type { StreamEvent } from './adapters/types.js';
 
 export type LiveChatEvent = StreamEvent | { type: 'snapshot'; run: LiveChatRun };
@@ -237,6 +237,9 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     mergeToolProgress(assistant.tools, event);
   } else if (event.type === 'done') {
     if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
+    if (event.interrupted && !assistant.content.includes(RUN_STOPPED_BLOCKER)) {
+      assistant.content = assistant.content ? `${assistant.content}\n${RUN_STOPPED_BLOCKER}` : RUN_STOPPED_BLOCKER;
+    }
     assistant.completed_at = Date.now();
     if (event.sessionId) run.sessionId = event.sessionId;
     if (event.context !== undefined) {
@@ -247,10 +250,11 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     const error = event.error || 'Unknown error';
     run.status = 'error';
     run.error = error;
-    if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
+    const blocker = RUN_STOPPED_BLOCKER;
+    if (!assistant.content.includes(blocker)) {
       assistant.content = assistant.content
-        ? `${assistant.content}\n[Error: ${error}]`
-        : `[Error: ${error}]`;
+        ? `${assistant.content}\n${blocker}`
+        : blocker;
     }
   }
 

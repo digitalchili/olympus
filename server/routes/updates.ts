@@ -1,9 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import { accessSync, constants, statSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { isAbsolute } from 'node:path';
 import { Router } from 'express';
 import type { UpdateStatus } from '@shared/types';
+import {
+  DurableUpdateCoordinator,
+  isVersionNewer,
+  type PendingUpdateStore,
+} from '../update-queue.js';
 import { getAppVersion } from '../version.js';
+
+export { isVersionNewer } from '../update-queue.js';
 
 const GITHUB_API = 'https://api.github.com';
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -17,24 +25,6 @@ export function parseGitHubRepositoryUrl(value: string | undefined): string | nu
   const normalized = value.trim().replace(/^git\+/, '').replace(/\.git$/, '');
   const match = normalized.match(/(?:github\.com[/:])([^/\s]+)\/([^/\s]+)$/i);
   return match ? `${match[1]}/${match[2]}` : null;
-}
-
-function parseVersion(value: string): number[] | null {
-  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
-  return match ? match.slice(1).map(Number) : null;
-}
-
-export function isVersionNewer(candidate: string, current: string): boolean {
-  const candidateParts = parseVersion(candidate);
-  const currentParts = parseVersion(current);
-  if (!candidateParts || !currentParts) return false;
-
-  for (let index = 0; index < candidateParts.length; index++) {
-    if (candidateParts[index] !== currentParts[index]) {
-      return candidateParts[index] > currentParts[index];
-    }
-  }
-  return false;
 }
 
 function getRepository(): string | null {
@@ -119,6 +109,31 @@ async function postUpdateHook(hook: UpdateHook, body: string, token: string | un
   return response.status;
 }
 
+export function createInstallationUpdateCoordinator(
+  store: PendingUpdateStore,
+  activeRuns: () => number,
+): DurableUpdateCoordinator {
+  return new DurableUpdateCoordinator({
+    store,
+    activeRuns,
+    currentVersion: () => getAppVersion().version,
+    dispatch: async (pending) => {
+      const updateHook = getUpdateHook();
+      if (!updateHook) throw new Error('No installation-local update hook is available.');
+      const token = process.env.OLYMPUS_DISPATCH_UPDATE_TOKEN?.trim();
+      return postUpdateHook(updateHook, JSON.stringify({
+        repository: pending.repository,
+        currentVersion: pending.currentVersion,
+        latestVersion: pending.latestVersion,
+        releaseUrl: pending.releaseUrl,
+      }), token);
+    },
+    onError: (error) => {
+      console.error('Queued update dispatch failed; it will be retried:', error instanceof Error ? error.message : error);
+    },
+  });
+}
+
 async function fetchStatus(force = false): Promise<UpdateStatus> {
   if (!force && cachedStatus && Date.now() - cachedAt < CACHE_TTL_MS) {
     return { ...cachedStatus, updateConfigured: Boolean(getUpdateHook()) };
@@ -169,38 +184,45 @@ async function fetchStatus(force = false): Promise<UpdateStatus> {
   return cachedStatus;
 }
 
-export function createUpdatesRouter(): Router {
+export function createUpdatesRouter(coordinator: DurableUpdateCoordinator): Router {
   const router = Router();
 
   router.get('/', async (req, res) => {
-    res.json(await fetchStatus(req.query.refresh === 'true'));
+    const pending = coordinator.pending();
+    res.json({
+      ...await fetchStatus(req.query.refresh === 'true'),
+      pendingUpdate: pending ? {
+        latestVersion: pending.latestVersion,
+        requestedAt: pending.requestedAt,
+      } : null,
+    });
   });
 
   router.post('/apply', async (_req, res) => {
-    const updateHook = getUpdateHook();
-    if (!updateHook) {
+    if (coordinator.pending()) {
+      return res.status(202).json({ accepted: true, queued: true });
+    }
+    if (!getUpdateHook()) {
       return res.status(503).json({ error: 'No installation-local update hook is available.' });
     }
     const status = await fetchStatus(true);
-    if (!status.updateAvailable) {
+    const repository = getRepository();
+    if (!status.updateAvailable || !status.latestVersion || !repository) {
       return res.status(409).json({ error: 'No newer GitHub release is available.' });
     }
 
-    try {
-      const token = process.env.OLYMPUS_DISPATCH_UPDATE_TOKEN?.trim();
-      const hookStatus = await postUpdateHook(updateHook, JSON.stringify({
-        repository: getRepository(),
-        currentVersion: status.currentVersion,
-        latestVersion: status.latestVersion,
-        releaseUrl: status.releaseUrl,
-      }), token);
-      if (hookStatus < 200 || hookStatus >= 300) {
-        return res.status(502).json({ error: `The deployment hook rejected the update (${hookStatus}).` });
-      }
-      return res.status(202).json({ accepted: true });
-    } catch {
-      return res.status(502).json({ error: 'The deployment hook could not be reached.' });
-    }
+    coordinator.enqueue({
+      id: randomUUID(),
+      repository,
+      currentVersion: status.currentVersion,
+      latestVersion: status.latestVersion,
+      releaseUrl: status.releaseUrl,
+      requestedAt: Date.now(),
+    });
+    // This POST itself is counted as one active request. Allow only that request
+    // so an otherwise-idle installation can hand off immediately to the host.
+    const dispatch = await coordinator.attemptDispatch(1);
+    return res.status(202).json({ accepted: true, queued: dispatch !== 'accepted' });
   });
 
   return router;
