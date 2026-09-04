@@ -1,6 +1,10 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { parse } from 'yaml';
 import yauzl from 'yauzl';
 
 const execFileAsync = promisify(execFile);
@@ -171,11 +175,196 @@ async function extractPdf(path: string): Promise<ExtractionResult> {
   return { chunks: chunkText(parts.join(' '), { pageNumber: 1 }), warnings: [] };
 }
 
+export interface VisionConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function resolveVisionConfig(): VisionConfig | null {
+  const envKey = process.env.OLYMPUS_VISION_API_KEY?.trim()
+    || process.env.OPENAI_API_KEY?.trim()
+    || process.env.OPENROUTER_API_KEY?.trim();
+
+  let apiKey = envKey || '';
+  let baseUrl = process.env.OPENAI_BASE_URL?.trim() || process.env.OPENAI_API_BASE?.trim() || '';
+  let model = process.env.OLYMPUS_VISION_MODEL?.trim() || process.env.OPENAI_VISION_MODEL?.trim() || '';
+
+  if (!apiKey) {
+    const hermesHome = process.env.HERMES_HOME?.trim()
+      ? resolve(process.env.HERMES_HOME.trim().replace(/^~(?=$|\/|\\)/, homedir()))
+      : join(homedir(), '.hermes');
+
+    // 1. Check hermesHome/.env
+    const envPath = join(hermesHome, '.env');
+    if (existsSync(envPath)) {
+      try {
+        const envContent = readFileSync(envPath, 'utf8');
+        const match = /^OPENAI_API_KEY\s*=\s*["']?([^"'\r\n]+)["']?/m.exec(envContent)
+          || /^OPENROUTER_API_KEY\s*=\s*["']?([^"'\r\n]+)["']?/m.exec(envContent)
+          || /^OLYMPUS_VISION_API_KEY\s*=\s*["']?([^"'\r\n]+)["']?/m.exec(envContent);
+        if (match?.[1]) apiKey = match[1].trim();
+      } catch {
+        // ignore read error
+      }
+    }
+
+    // 2. Check hermesHome/config.yaml
+    if (!apiKey) {
+      const configPath = join(hermesHome, 'config.yaml');
+      if (existsSync(configPath)) {
+        try {
+          const parsed = parse(readFileSync(configPath, 'utf8'));
+          if (isRecord(parsed)) {
+            if (typeof parsed.api_key === 'string' && parsed.api_key.trim()) {
+              apiKey = parsed.api_key.trim();
+            } else if (isRecord(parsed.model) && typeof parsed.model.api_key === 'string' && parsed.model.api_key.trim()) {
+              apiKey = parsed.model.api_key.trim();
+            } else if (isRecord(parsed.providers) && isRecord(parsed.providers.openai) && typeof parsed.providers.openai.api_key === 'string') {
+              apiKey = parsed.providers.openai.api_key.trim();
+            }
+            if (!baseUrl && isRecord(parsed.model) && typeof parsed.model.base_url === 'string') {
+              baseUrl = parsed.model.base_url.trim();
+            }
+          }
+        } catch {
+          // ignore parse error
+        }
+      }
+    }
+  }
+
+  if (!apiKey) return null;
+
+  if (!baseUrl) {
+    baseUrl = apiKey.startsWith('sk-or-')
+      ? 'https://openrouter.ai/api/v1'
+      : 'https://api.openai.com/v1';
+  }
+  baseUrl = baseUrl.replace(/\/+$/, '');
+
+  if (!model) {
+    model = apiKey.startsWith('sk-or-')
+      ? 'openai/gpt-4o-mini'
+      : 'gpt-4o-mini';
+  }
+
+  return { apiKey, baseUrl, model };
+}
+
+export async function extractImageWithVision(path: string, config: VisionConfig): Promise<string> {
+  const buffer = await readFile(path);
+  const base64 = buffer.toString('base64');
+  const ext = path.toLowerCase();
+  const mime = ext.endsWith('.png') ? 'image/png' : ext.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+
+  try {
+    const url = `${config.baseUrl}/chat/completions`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    };
+    if (config.baseUrl.includes('openrouter')) {
+      headers['HTTP-Referer'] = 'https://github.com/digitalchili/olympus';
+      headers['X-Title'] = 'Olympus Dispatch';
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'Transcribe all visible text, labels, numbers, code, and content from this image exactly as written. Preserve layout, structure, headings, and lists where applicable. Output only the extracted transcription without conversational intro or commentary.',
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:${mime};base64,${base64}`,
+                },
+              },
+            ],
+          },
+        ],
+        max_tokens: 4096,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${errText.slice(0, 150)}`);
+    }
+
+    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    return data.choices?.[0]?.message?.content?.trim() ?? '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function extractImageWithLocalOcr(path: string): Promise<string> {
+  const configured = process.env.OLYMPUS_PROJECT_REFERENCES_OCR_COMMAND?.trim();
+  const command = configured || 'tesseract';
+  const args = (!configured || configured === 'tesseract') ? [path, 'stdout'] : [path];
+  const { stdout } = await execFileAsync(command, args, {
+    timeout: 15_000,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  return stdout.trim();
+}
+
 async function extractImage(path: string): Promise<ExtractionResult> {
-  const command = process.env.OLYMPUS_PROJECT_REFERENCES_OCR_COMMAND?.trim();
-  if (!command) return { chunks: [], warnings: ['Local OCR is not configured; no OCR text was fabricated.'] };
-  const { stdout } = await execFileAsync(command, [path], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
-  return { chunks: chunkText(stdout, { pageNumber: 1 }), warnings: [] };
+  const disableVision = process.env.OLYMPUS_DISABLE_VISION_OCR === 'true'
+    || process.env.OLYMPUS_OCR_PROVIDER === 'local';
+
+  let visionError: string | null = null;
+
+  if (!disableVision) {
+    const visionConfig = resolveVisionConfig();
+    if (visionConfig) {
+      try {
+        const text = await extractImageWithVision(path, visionConfig);
+        if (text && !/^no text (found|in this image)/i.test(text)) {
+          return { chunks: chunkText(text, { pageNumber: 1 }), warnings: [] };
+        }
+      } catch (err) {
+        visionError = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+
+  // Fallback to local OCR (Tesseract or configured command)
+  try {
+    const text = await extractImageWithLocalOcr(path);
+    if (text) {
+      return { chunks: chunkText(text, { pageNumber: 1 }), warnings: [] };
+    }
+    return {
+      chunks: [],
+      warnings: ['Local OCR executed but detected no text in image.'],
+    };
+  } catch (ocrErr: unknown) {
+    const isEnoent = typeof ocrErr === 'object' && ocrErr !== null && 'code' in ocrErr && (ocrErr as { code?: string }).code === 'ENOENT';
+    const warning = visionError
+      ? `Vision OCR failed (${visionError}) and local Tesseract is not installed; image saved without text indexing.`
+      : isEnoent
+        ? 'No Vision API key configured and local Tesseract is not installed; image saved without text indexing.'
+        : `OCR extraction failed: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`;
+    return { chunks: [], warnings: [warning] };
+  }
 }
 
 export async function extractReferenceText(request: Request): Promise<ExtractionResult> {
