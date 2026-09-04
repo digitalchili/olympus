@@ -85,11 +85,11 @@ export function StorageSettings() {
       {/* Disk Usage Card */}
       <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-start justify-between gap-4 mb-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 shrink-0">
               <HardDrive size={20} />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Disk Storage</h3>
                 {disk && statusBadge}
@@ -99,10 +99,10 @@ export function StorageSettings() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setWizardOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 transition-colors shadow-sm"
+              className="inline-flex h-8 items-center gap-1.5 px-3 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 transition-colors shadow-sm whitespace-nowrap shrink-0"
             >
               <Plus size={13} />
               Connect Storage Drive
@@ -110,7 +110,7 @@ export function StorageSettings() {
             <button
               onClick={() => void loadStatus()}
               disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1.5 px-3 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
               Refresh
