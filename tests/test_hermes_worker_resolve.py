@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "workers"))
@@ -94,7 +95,7 @@ class ResolveModelProviderTest(unittest.TestCase):
         model, provider, _ = hermes_worker._resolve_model_provider("anthropic/claude-sonnet-5", cfg)
         self.assertEqual((model, provider), ("anthropic/claude-sonnet-5", "openrouter"))
 
-    def test_curated_remote_catalog_adds_only_authenticated_provider_models(self):
+    def test_curated_remote_catalog_does_not_add_model_missing_from_credential_inventory(self):
         cfg = {"model": {"default": "gpt-5.6-sol", "provider": "openai-codex"}}
         defaults = hermes_worker._defaults_from_config(cfg)
         authenticated = {
@@ -110,7 +111,6 @@ class ResolveModelProviderTest(unittest.TestCase):
             "version": 1,
             "models": [
                 {"provider": "openai-codex", "id": "gpt-6-astra", "label": "GPT-6 Astra"},
-                {"provider": "unconfigured-provider", "id": "not-selectable"},
             ],
         }
 
@@ -118,12 +118,104 @@ class ResolveModelProviderTest(unittest.TestCase):
 
         self.assertEqual(
             [item["id"] for item in merged["OpenAI Codex"]],
-            ["gpt-5.6-sol", "gpt-6-astra"],
+            ["gpt-5.6-sol"],
         )
+
+    def test_curated_remote_catalog_can_label_credential_verified_model(self):
+        cfg = {"model": {"default": "gpt-5.6-sol", "provider": "openai-codex"}}
+        defaults = hermes_worker._defaults_from_config(cfg)
+        authenticated = {
+            "OpenAI Codex": [
+                {
+                    "id": "gpt-5.6-sol",
+                    "label": "gpt-5.6-sol",
+                    "source": "catalog",
+                    "provider": "openai-codex",
+                    "isCurrentDefault": True,
+                },
+                {
+                    "id": "gpt-6-astra",
+                    "label": "gpt-6-astra",
+                    "source": "catalog",
+                    "provider": "openai-codex",
+                    "isCurrentDefault": False,
+                },
+            ],
+        }
+        manifest = {
+            "version": 1,
+            "models": [
+                {"provider": "openai-codex", "id": "gpt-6-astra", "label": "GPT-6 Astra"},
+            ],
+        }
+
+        merged = hermes_worker._merge_curated_model_catalog(authenticated, manifest, defaults)
+
         astra = merged["OpenAI Codex"][1]
         self.assertEqual(astra["label"], "GPT-6 Astra")
-        self.assertEqual(astra["source"], "curated-remote")
+        self.assertEqual(astra["source"], "catalog")
         self.assertEqual(astra["provider"], "openai-codex")
+
+    def test_requested_model_resolution_preserves_explicit_settings(self):
+        agent = SimpleNamespace(
+            model="gpt-5.5",
+            provider="openai-codex",
+            reasoning_config={"enabled": True, "effort": "high"},
+        )
+        self.assertEqual(
+            hermes_worker._requested_model_resolution(
+                agent,
+                "gpt-6-astra",
+                "openai-codex",
+                "xhigh",
+            ),
+            {
+                "model": "gpt-6-astra",
+                "provider": "openai-codex",
+                "reasoningEffort": "xhigh",
+            },
+        )
+        self.assertEqual(
+            hermes_worker._requested_model_resolution(agent, None, None, None),
+            {
+                "model": "gpt-5.5",
+                "provider": "openai-codex",
+                "reasoningEffort": "high",
+            },
+        )
+
+    def test_model_resolution_payload_preserves_request_and_reports_fallback_actual(self):
+        requested = {
+            "model": "gpt-6-astra",
+            "provider": "openai-codex",
+            "reasoningEffort": "xhigh",
+        }
+        agent = SimpleNamespace(
+            model="gpt-5.5",
+            provider="openai-codex",
+            reasoning_config={"enabled": True, "effort": "high"},
+        )
+
+        payload = hermes_worker._model_resolution_payload(
+            agent,
+            requested,
+            fallback_reason="Primary model failed; Hermes activated its configured fallback.",
+        )
+
+        self.assertEqual(payload, {
+            "requested": requested,
+            "actual": {
+                "model": "gpt-5.5",
+                "provider": "openai-codex",
+                "reasoningEffort": "high",
+            },
+            "fallbackReason": "Primary model failed; Hermes activated its configured fallback.",
+        })
+        inferred = hermes_worker._model_resolution_payload(agent, requested)
+        self.assertEqual(
+            inferred["fallbackReason"],
+            "Requested model settings were not used; Hermes resolved the run to a different configuration.",
+        )
 
     def test_unapplied_steer_is_drained_for_guaranteed_follow_up(self):
         class FakeAgent:

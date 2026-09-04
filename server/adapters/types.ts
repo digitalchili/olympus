@@ -1,5 +1,6 @@
 import type {
   AgentRunSettings,
+  AgentModelResolution,
   AdapterDelegationEvent,
   CompactResult,
   ContextUsage,
@@ -25,7 +26,7 @@ export interface AgentRunOptions {
 }
 
 export interface StreamEvent {
-  type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'done' | 'error';
+  type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'done' | 'error';
   content?: string;
   error?: string;
   code?: string;
@@ -38,6 +39,7 @@ export interface StreamEvent {
   interrupted?: boolean;
   pendingSteer?: string;
   attachments?: TaskMessage['attachments'];
+  modelResolution?: AgentModelResolution;
 }
 
 export interface AgentAdapter {

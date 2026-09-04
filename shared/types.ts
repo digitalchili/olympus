@@ -411,6 +411,7 @@ export interface TaskMessagesPage {
   messages: TaskMessage[];
   pageInfo: TaskMessagePageInfo;
   context?: ContextUsage | null;
+  latestAgentRun?: TaskAgentRun | null;
 }
 
 export interface TaskAttachment {
@@ -484,6 +485,29 @@ export interface ToolProgressEvent {
 export type TaskRunKind = 'chat' | 'goal' | 'compact';
 export type LiveChatRunStatus = 'streaming' | 'compacting' | 'done' | 'error' | 'stopped';
 
+export interface AgentRuntimeModel {
+  model: string | null;
+  provider: string | null;
+  reasoningEffort: ReasoningEffort | null;
+}
+
+export interface AgentModelResolution {
+  requested: AgentRuntimeModel;
+  actual: AgentRuntimeModel;
+  fallbackReason?: string | null;
+}
+
+export interface TaskAgentRun {
+  runId: string;
+  taskId: string;
+  kind: TaskRunKind;
+  status: LiveChatRunStatus;
+  modelResolution: AgentModelResolution | null;
+  startedAt: number;
+  updatedAt: number;
+  completedAt: number | null;
+}
+
 export interface TaskRunState {
   taskId: string;
   runId: string;
@@ -492,6 +516,7 @@ export interface TaskRunState {
   startedAt: number;
   updatedAt: number;
   goal?: GoalStateSnapshot | null;
+  modelResolution?: AgentModelResolution | null;
 }
 
 export type DelegationRunStatus =
@@ -587,6 +612,7 @@ export interface LiveChatRun {
   goal?: GoalStateSnapshot | null;
   context?: ContextUsage | null;
   error?: string;
+  modelResolution?: AgentModelResolution | null;
 }
 
 export interface ContextUsage {

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
+  AgentModelResolution,
   CollaborationInvitationScope,
   ContextUsage,
   LiveChatMessage,
@@ -45,7 +46,8 @@ type LiveEvent =
       duration?: number;
       label?: string;
     }
-  | { type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; attachments?: TaskMessage['attachments'] }
+  | { type: 'model_resolution'; modelResolution: AgentModelResolution }
+  | { type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; attachments?: TaskMessage['attachments']; modelResolution?: AgentModelResolution }
   | { type: 'error'; error?: string; code?: string };
 
 function compactSettings(settings?: AgentRunSettings): AgentRunSettings | undefined {
@@ -327,6 +329,7 @@ export function useChat() {
   const [thinkingContent, setThinkingContent] = useState('');
   const [activeTools, setActiveTools] = useState<ToolProgressEvent[]>([]);
   const [context, setContext] = useState<ContextUsage | null>(null);
+  const [modelResolution, setModelResolution] = useState<AgentModelResolution | null>(null);
   const [messagePageInfo, setMessagePageInfo] = useState<TaskMessagePageInfo>({ hasOlder: false, olderCursor: null });
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [olderMessagesError, setOlderMessagesError] = useState<string | null>(null);
@@ -337,6 +340,7 @@ export function useChat() {
   const committedMessagesRef = useRef<ChatMessage[]>([]);
   const liveRunRef = useRef<LiveChatRun | null>(null);
   const liveContextRef = useRef<ContextUsage | null>(null);
+  const persistedModelResolutionRef = useRef<AgentModelResolution | null>(null);
   const messagePageInfoRef = useRef<TaskMessagePageInfo>({ hasOlder: false, olderCursor: null });
   const olderLoadTaskRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -372,6 +376,7 @@ export function useChat() {
       setThinkingContent(streaming ? assistant?.thinking ?? '' : '');
       setActiveTools(streaming ? assistant?.tools?.map((t) => ({ ...t })) ?? [] : []);
       setContext(liveRun.context !== undefined ? liveRun.context : liveContextRef.current);
+      setModelResolution(liveRun.modelResolution ?? null);
       return;
     }
 
@@ -381,6 +386,7 @@ export function useChat() {
     setThinkingContent('');
     setActiveTools([]);
     setContext(liveContextRef.current);
+    setModelResolution(persistedModelResolutionRef.current);
   }, []);
 
   const schedulePublish = useCallback(() => {
@@ -454,6 +460,18 @@ export function useChat() {
       return;
     }
 
+    if (event.type === 'model_resolution') {
+      run.modelResolution = {
+        requested: { ...event.modelResolution.requested },
+        actual: { ...event.modelResolution.actual },
+        fallbackReason: event.modelResolution.fallbackReason ?? null,
+      };
+      persistedModelResolutionRef.current = run.modelResolution;
+      run.updatedAt = Date.now();
+      publishState();
+      return;
+    }
+
     if (event.type === 'error') {
       applyLiveErrorEvent(run, event);
       publishState();
@@ -461,6 +479,14 @@ export function useChat() {
     }
 
     if (event.type === 'done') {
+      if (event.modelResolution) {
+        run.modelResolution = {
+          requested: { ...event.modelResolution.requested },
+          actual: { ...event.modelResolution.actual },
+          fallbackReason: event.modelResolution.fallbackReason ?? null,
+        };
+        persistedModelResolutionRef.current = run.modelResolution;
+      }
       if (event.attachments) ensureAssistant(run).attachments = event.attachments.map((attachment) => ({ ...attachment }));
       if (event.sessionId) run.sessionId = event.sessionId;
       if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
@@ -506,6 +532,7 @@ export function useChat() {
     committedMessagesRef.current = [];
     liveRunRef.current = null;
     liveContextRef.current = null;
+    persistedModelResolutionRef.current = null;
     messagePageInfoRef.current = { hasOlder: false, olderCursor: null };
     olderLoadTaskRef.current = null;
     setMessages([]);
@@ -514,6 +541,7 @@ export function useChat() {
     setThinkingContent('');
     setActiveTools([]);
     setContext(null);
+    setModelResolution(null);
     setMessagePageInfo(messagePageInfoRef.current);
     setIsLoadingOlderMessages(false);
     setOlderMessagesError(null);
@@ -523,12 +551,13 @@ export function useChat() {
     clearAllState();
     taskIdRef.current = taskId;
 
-    const { messages: msgs, pageInfo, context: persistedContext } = await fetchMessages(taskId);
+    const { messages: msgs, pageInfo, context: persistedContext, latestAgentRun } = await fetchMessages(taskId);
     if (taskIdRef.current !== taskId) return msgs;
 
     committedMessagesRef.current = msgs as ChatMessage[];
     messagePageInfoRef.current = pageInfo;
     liveContextRef.current = persistedContext ?? null;
+    persistedModelResolutionRef.current = latestAgentRun?.modelResolution ?? null;
     setMessagePageInfo(pageInfo);
     publishState();
     openLiveSubscription(taskId);
@@ -707,6 +736,7 @@ export function useChat() {
     thinkingContent,
     activeTools,
     context,
+    modelResolution,
     hasOlderMessages: messagePageInfo.hasOlder,
     isLoadingOlderMessages,
     olderMessagesError,

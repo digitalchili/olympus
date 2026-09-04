@@ -57,6 +57,7 @@ import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '..
 import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
+import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTaskAgentRunResolution } from '../db/task-agent-runs.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
@@ -160,14 +161,25 @@ chatRouter.get('/:id/messages', async (req, res) => {
   }
   const liveContext = getRunContext(task.id);
   const context = liveContext !== undefined ? liveContext : contextFromTask(task);
+  const latestAgentRun = getLatestTaskAgentRun(task.id) ?? null;
   if (hasNoSession(task)) {
-    return res.json({ messages: [], pageInfo: { hasOlder: false, olderCursor: null }, context });
+    return res.json({
+      messages: [],
+      pageInfo: { hasOlder: false, olderCursor: null },
+      context,
+      ...(latestAgentRun ? { latestAgentRun } : {}),
+    });
   }
 
   try {
     const page = await adapter.getMessagePage(task.id, task.id, pageQuery);
     const messages = await publishMessageAttachments(task, page.messages);
-    res.json({ messages, pageInfo: page.pageInfo, context });
+    res.json({
+      messages,
+      pageInfo: page.pageInfo,
+      context,
+      ...(latestAgentRun ? { latestAgentRun } : {}),
+    });
   } catch (error) {
     sendAdapterError(res, error, 'Hermes session history unavailable');
   }
@@ -255,6 +267,8 @@ function recordCompletedAgentRun(taskId: string, context: ContextUsage | null): 
 function settleRun(taskId: string, runId: string, context: ContextUsage | null): void {
   const status = getRunStatus(taskId);
   const run = getRun(taskId);
+  if (run?.modelResolution) updateTaskAgentRunResolution(runId, run.modelResolution);
+  finishTaskAgentRun(runId, status?.status ?? 'error');
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
@@ -337,6 +351,10 @@ async function streamChatTurn(
       }
       if (event.type === 'error') {
         hadError = true;
+      }
+      if (event.modelResolution) {
+        const activeRunId = getRun(runTask.id)?.runId;
+        if (activeRunId) updateTaskAgentRunResolution(activeRunId, event.modelResolution);
       }
       applyEvent(runTask.id, event);
       broadcastLive(runTask.id, event);
@@ -618,6 +636,13 @@ function beginGoalRunOperation(
     try {
       const goalState = await adapter.setGoal(sessionId, content);
       const started = startGoalRun(runTask.id, sessionId, goalState);
+      createTaskAgentRun({
+        runId: started.snapshot.runId,
+        taskId: runTask.id,
+        kind: started.snapshot.kind,
+        status: started.snapshot.status,
+        startedAt: started.snapshot.startedAt,
+      });
       broadcast({ type: 'task_run_updated', run: started.state });
       broadcastLive(runTask.id, { type: 'snapshot', run: started.snapshot });
       resolveSetup(started);
@@ -863,6 +888,13 @@ chatRouter.post('/:id/messages', async (req, res) => {
   let handedOff = false;
   try {
     const { snapshot, state } = startRun(runTask.id, sessionId, content);
+    createTaskAgentRun({
+      runId: snapshot.runId,
+      taskId: runTask.id,
+      kind: snapshot.kind,
+      status: snapshot.status,
+      startedAt: snapshot.startedAt,
+    });
     broadcast({ type: 'task_run_updated', run: state });
     broadcastLive(runTask.id, { type: 'snapshot', run: snapshot });
 

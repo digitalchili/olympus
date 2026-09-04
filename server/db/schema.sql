@@ -22,6 +22,26 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
+CREATE TABLE IF NOT EXISTS task_agent_runs (
+  run_id                     TEXT PRIMARY KEY,
+  task_id                    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  kind                       TEXT NOT NULL,
+  status                     TEXT NOT NULL,
+  requested_model            TEXT,
+  requested_provider         TEXT,
+  requested_reasoning_effort TEXT,
+  actual_model               TEXT,
+  actual_provider            TEXT,
+  actual_reasoning_effort    TEXT,
+  fallback_reason            TEXT,
+  started_at                 INTEGER NOT NULL,
+  updated_at                 INTEGER NOT NULL,
+  completed_at               INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_agent_runs_task
+  ON task_agent_runs(task_id, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS task_message_queue (
   task_id                          TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   id                               TEXT NOT NULL UNIQUE,

@@ -1,5 +1,6 @@
 import type {
   AgentDefaults,
+  AgentModelResolution,
   AgentModelsResponse,
   GoalDecision,
   GoalStateSnapshot,
@@ -105,6 +106,15 @@ export type WorkerEvent =
       duration?: number;
       label?: string | null;
     }
+  | { id: string; type: 'model_resolution'; modelResolution: AgentModelResolution }
   | { id: string; type: 'delegation_event'; taskId: string; event: DelegationWorkerEvent }
-  | { id: string; type: 'done'; sessionId?: string; context?: ContextUsage | null; interrupted?: boolean; pendingSteer?: string }
+  | {
+      id: string;
+      type: 'done';
+      sessionId?: string;
+      context?: ContextUsage | null;
+      interrupted?: boolean;
+      pendingSteer?: string;
+      modelResolution?: AgentModelResolution;
+    }
   | { id: string; type: 'error'; error: string | WorkerErrorPayload };

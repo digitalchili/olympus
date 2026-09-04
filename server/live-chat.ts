@@ -23,6 +23,11 @@ function cloneRun(run: LiveChatRun): LiveChatRun {
     })),
     goal: run.goal ? { ...run.goal } : null,
     context: run.context ? { ...run.context } : null,
+    modelResolution: run.modelResolution ? {
+      requested: { ...run.modelResolution.requested },
+      actual: { ...run.modelResolution.actual },
+      fallbackReason: run.modelResolution.fallbackReason ?? null,
+    } : null,
   };
 }
 
@@ -35,6 +40,11 @@ function runState(run: LiveChatRun): TaskRunState {
     startedAt: run.startedAt,
     updatedAt: run.updatedAt,
     goal: run.goal ? { ...run.goal } : null,
+    modelResolution: run.modelResolution ? {
+      requested: { ...run.modelResolution.requested },
+      actual: { ...run.modelResolution.actual },
+      fallbackReason: run.modelResolution.fallbackReason ?? null,
+    } : null,
   };
 }
 
@@ -235,9 +245,22 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
   } else if (event.type === 'tool_progress') {
     if (!assistant.tools) assistant.tools = [];
     mergeToolProgress(assistant.tools, event);
+  } else if (event.type === 'model_resolution' && event.modelResolution) {
+    run.modelResolution = {
+      requested: { ...event.modelResolution.requested },
+      actual: { ...event.modelResolution.actual },
+      fallbackReason: event.modelResolution.fallbackReason ?? null,
+    };
   } else if (event.type === 'done') {
     if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
     assistant.completed_at = Date.now();
+    if (event.modelResolution) {
+      run.modelResolution = {
+        requested: { ...event.modelResolution.requested },
+        actual: { ...event.modelResolution.actual },
+        fallbackReason: event.modelResolution.fallbackReason ?? null,
+      };
+    }
     if (event.sessionId) run.sessionId = event.sessionId;
     if (event.context !== undefined) {
       run.context = event.context;

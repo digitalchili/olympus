@@ -28,6 +28,7 @@ import type { ChatRunMode, CollaborationInvitationScope, CollaborationRun, GoalS
 import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility';
 import { DelegationActivity } from './DelegationActivity';
 import { visibleToolProgress } from '../lib/toolProgressDisplay';
+import { RunModelResolution } from './RunModelResolution';
 
 interface TaskChatProps {
   taskId: string;
@@ -260,6 +261,7 @@ export function TaskChat({
     thinkingContent,
     activeTools,
     context,
+    modelResolution,
     hasOlderMessages,
     isLoadingOlderMessages,
     olderMessagesError,
@@ -1065,6 +1067,7 @@ export function TaskChat({
 
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
+        {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
           {persistentGrants.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-100 px-4 py-2 text-xs dark:border-zinc-700">

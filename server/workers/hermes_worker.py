@@ -1002,38 +1002,30 @@ def _merge_curated_model_catalog(
     catalog: dict[str, Any] | None,
     defaults: dict[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Expose catalog entries only for providers Hermes has authenticated."""
+    """Apply curated labels only to models verified by the active credential inventory."""
     if not catalog:
         return groups
-
-    provider_groups: dict[str, str] = {}
-    for group_name, models in groups.items():
-        for model in models:
-            provider = string_or_none(model.get("provider"))
-            if provider:
-                provider_groups.setdefault(provider, group_name)
 
     raw_models = catalog.get("models")
     if not isinstance(raw_models, list):
         return groups
     active_provider = defaults.get("provider")
-    default_model = defaults.get("model")
     for entry in raw_models:
         if not isinstance(entry, dict):
             continue
         provider = string_or_none(entry.get("provider"))
         model_id = string_or_none(entry.get("id"))
-        if not provider or not model_id or provider not in provider_groups:
+        if not provider or not model_id:
             continue
-        _add_model(
-            groups,
-            provider_groups[provider],
-            _model_option_id(provider, model_id, active_provider),
-            "curated-remote",
-            default_model,
-            label=string_or_none(entry.get("label")) or model_id,
-            provider_id=provider,
-        )
+        option_id = _model_option_id(provider, model_id, active_provider)
+        for models in groups.values():
+            model = next((
+                item for item in models
+                if item.get("provider") == provider and item.get("id") == option_id
+            ), None)
+            if model is not None:
+                model["label"] = string_or_none(entry.get("label")) or model_id
+                break
     return groups
 
 
@@ -1343,6 +1335,54 @@ def _parse_reasoning(effort: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _agent_reasoning_effort(agent: Any) -> str | None:
+    config = getattr(agent, "reasoning_config", None)
+    if not isinstance(config, dict):
+        return None
+    if config.get("enabled") is False:
+        return "none"
+    return _normalize_reasoning(config.get("effort"))
+
+
+def _requested_model_resolution(
+    agent: Any,
+    requested_model: str | None,
+    requested_provider: str | None,
+    requested_effort: str | None,
+) -> dict[str, Any]:
+    return {
+        "model": requested_model if requested_model is not None else string_or_none(getattr(agent, "model", None)),
+        "provider": requested_provider if requested_provider is not None else string_or_none(getattr(agent, "provider", None)),
+        "reasoningEffort": requested_effort if requested_effort is not None else _agent_reasoning_effort(agent),
+    }
+
+
+def _model_resolution_payload(
+    agent: Any,
+    requested: dict[str, Any],
+    *,
+    fallback_reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "requested": {
+            "model": string_or_none(requested.get("model")),
+            "provider": string_or_none(requested.get("provider")),
+            "reasoningEffort": _normalize_reasoning(requested.get("reasoningEffort")),
+        },
+        "actual": {
+            "model": string_or_none(getattr(agent, "model", None)),
+            "provider": string_or_none(getattr(agent, "provider", None)),
+            "reasoningEffort": _agent_reasoning_effort(agent),
+        },
+    }
+    reason = fallback_reason
+    if reason is None and payload["requested"] != payload["actual"]:
+        reason = "Requested model settings were not used; Hermes resolved the run to a different configuration."
+    if reason:
+        payload["fallbackReason"] = reason
+    return payload
+
+
 def _agent_max_iterations() -> int:
     try:
         value = int(os.environ.get("OLYMPUS_AGENT_MAX_ITERATIONS", "40"))
@@ -1648,6 +1688,13 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         system_message = None
 
     state = {"text": "", "thinking": ""}
+    agent_ref: dict[str, Any] = {}
+    requested_resolution: dict[str, Any] = {
+        "model": None,
+        "provider": None,
+        "reasoningEffort": None,
+    }
+    fallback_reason: str | None = None
     active_delegation_id: str | None = None
     pending_background_delegations: set[str] = set()
     child_delegation_ids: dict[str, str] = {}
@@ -1668,6 +1715,28 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             return
         state["thinking"] += chunk
         _send({"id": request_id, "type": "thinking_delta", "content": chunk})
+
+    def emit_model_resolution() -> None:
+        agent = agent_ref.get("agent")
+        if agent is None:
+            return
+        _send({
+            "id": request_id,
+            "type": "model_resolution",
+            "modelResolution": _model_resolution_payload(
+                agent,
+                requested_resolution,
+                fallback_reason=fallback_reason,
+            ),
+        })
+
+    def on_status(_category: Any, message: Any = None) -> None:
+        nonlocal fallback_reason
+        clean = str(message or "").strip()
+        if "fallback" not in clean.lower():
+            return
+        fallback_reason = "Primary model failed; Hermes activated its configured fallback."
+        emit_model_resolution()
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
         nonlocal active_delegation_id, pending_background_delegations
@@ -1754,8 +1823,19 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             "stream_delta_callback": on_text_delta,
             "reasoning_callback": on_reasoning_delta,
             "tool_progress_callback": on_tool_progress,
+            "status_callback": on_status,
         },
     )
+    agent_ref["agent"] = agent
+    requested_resolution.update(
+        _requested_model_resolution(
+            agent,
+            requested_model,
+            requested_provider,
+            requested_effort,
+        )
+    )
+    emit_model_resolution()
     _install_steer_delivery_recorder(agent, session_db, session_id)
     _register_active_agent(_task_key_for(request), request_id, agent)
     _sync_session_identity(agent, session_id)
@@ -1804,6 +1884,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                     "type": "done",
                     "sessionId": getattr(agent, "session_id", None) or session_id,
                     "interrupted": True,
+                    "modelResolution": _model_resolution_payload(
+                        agent, requested_resolution, fallback_reason=fallback_reason,
+                    ),
                 })
                 return
 
@@ -1852,6 +1935,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                         "type": "done",
                         "sessionId": getattr(agent, "session_id", None) or session_id,
                         "interrupted": True,
+                        "modelResolution": _model_resolution_payload(
+                            agent, requested_resolution, fallback_reason=fallback_reason,
+                        ),
                     })
                     return
                 for owner_index, owner_session_id in enumerate(owner_session_ids):
@@ -1923,6 +2009,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         "type": "done",
         "sessionId": getattr(agent, "session_id", None) or session_id,
         "context": context,
+        "modelResolution": _model_resolution_payload(
+            agent, requested_resolution, fallback_reason=fallback_reason,
+        ),
     }
     pending_steer = _drain_unapplied_steer(agent)
     if pending_steer:

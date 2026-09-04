@@ -546,6 +546,9 @@ export class HermesWorkerAdapter implements AgentAdapter {
             label: event.label ?? undefined,
           };
           break;
+        case 'model_resolution':
+          yield { type: 'model_resolution', modelResolution: event.modelResolution };
+          break;
         case 'error':
           yield { type: 'error', error: formatWorkerError(event.error), code: workerErrorCode(event.error) };
           break;
@@ -556,6 +559,7 @@ export class HermesWorkerAdapter implements AgentAdapter {
             context: event.context,
             interrupted: event.interrupted,
             pendingSteer: event.pendingSteer,
+            modelResolution: event.modelResolution,
           };
           break;
         case 'result':
