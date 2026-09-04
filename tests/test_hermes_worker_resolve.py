@@ -94,17 +94,26 @@ class ResolveModelProviderTest(unittest.TestCase):
         model, provider, _ = hermes_worker._resolve_model_provider("anthropic/claude-sonnet-5", cfg)
         self.assertEqual((model, provider), ("anthropic/claude-sonnet-5", "openrouter"))
 
-    def test_curated_remote_catalog_adds_only_authenticated_provider_models(self):
+    def test_curated_remote_catalog_requires_model_level_inventory_membership(self):
         cfg = {"model": {"default": "gpt-5.6-sol", "provider": "openai-codex"}}
         defaults = hermes_worker._defaults_from_config(cfg)
         authenticated = {
-            "OpenAI Codex": [{
-                "id": "gpt-5.6-sol",
-                "label": "gpt-5.6-sol",
-                "source": "catalog",
-                "provider": "openai-codex",
-                "isCurrentDefault": True,
-            }],
+            "OpenAI Codex": [
+                {
+                    "id": "gpt-5.6-sol",
+                    "label": "gpt-5.6-sol",
+                    "source": "catalog",
+                    "provider": "openai-codex",
+                    "isCurrentDefault": True,
+                },
+                {
+                    "id": "gpt-5.5",
+                    "label": "gpt-5.5",
+                    "source": "catalog",
+                    "provider": "openai-codex",
+                    "isCurrentDefault": False,
+                },
+            ],
         }
         manifest = {
             "version": 1,
@@ -118,12 +127,12 @@ class ResolveModelProviderTest(unittest.TestCase):
 
         self.assertEqual(
             [item["id"] for item in merged["OpenAI Codex"]],
-            ["gpt-5.6-sol", "gpt-6-astra"],
+            ["gpt-5.6-sol", "gpt-5.5"],
         )
-        astra = merged["OpenAI Codex"][1]
-        self.assertEqual(astra["label"], "GPT-6 Astra")
-        self.assertEqual(astra["source"], "curated-remote")
-        self.assertEqual(astra["provider"], "openai-codex")
+        self.assertNotIn(
+            "gpt-6-astra",
+            [item["id"] for item in merged["OpenAI Codex"]],
+        )
 
     def test_unapplied_steer_is_drained_for_guaranteed_follow_up(self):
         class FakeAgent:
