@@ -1007,11 +1007,19 @@ def _merge_curated_model_catalog(
         return groups
 
     provider_groups: dict[str, str] = {}
+    provider_model_ids: dict[str, set[str]] = {}
     for group_name, models in groups.items():
         for model in models:
             provider = string_or_none(model.get("provider"))
-            if provider:
-                provider_groups.setdefault(provider, group_name)
+            if not provider:
+                continue
+            provider_groups.setdefault(provider, group_name)
+            # `label` is the raw Hermes inventory id. `id` can be qualified for
+            # a non-active provider, so never use the display option alone as
+            # entitlement evidence.
+            model_id = string_or_none(model.get("label")) or string_or_none(model.get("id"))
+            if model_id:
+                provider_model_ids.setdefault(provider, set()).add(model_id)
 
     raw_models = catalog.get("models")
     if not isinstance(raw_models, list):
@@ -1023,7 +1031,12 @@ def _merge_curated_model_catalog(
             continue
         provider = string_or_none(entry.get("provider"))
         model_id = string_or_none(entry.get("id"))
-        if not provider or not model_id or provider not in provider_groups:
+        if (
+            not provider
+            or not model_id
+            or provider not in provider_groups
+            or model_id not in provider_model_ids.get(provider, set())
+        ):
             continue
         _add_model(
             groups,
