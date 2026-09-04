@@ -34,6 +34,8 @@ assert.match(detail, /revokeProjectGrant/);
 assert.match(detail, /New task/);
 assert.match(detail, /References/);
 assert.match(detail, /uploadProjectReference/);
+assert.match(detail, /uploadState/);
+assert.match(detail, /Indexing/);
 assert.match(detail, /fetchProjectReferences/);
 assert.match(detail, /searchProjectReferences/);
 assert.match(detail, /reindexProjectReference/);

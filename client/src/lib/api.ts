@@ -457,14 +457,92 @@ export function fetchProjectReferences(projectId: string) {
   );
 }
 
-export function uploadProjectReference(projectId: string, file: File, signal?: AbortSignal) {
-  const formData = new FormData();
-  formData.append('file', file, file.name);
-  return request<{ reference: ProjectReferenceListItem }>(
-    `/projects/${encodeURIComponent(projectId)}/references`,
-    { method: 'POST', body: formData, signal },
-    false,
-  );
+export interface UploadReferenceProgress {
+  loaded: number;
+  total: number;
+  percent: number;
+  phase: 'uploading' | 'indexing';
+}
+
+export function uploadProjectReference(
+  projectId: string,
+  file: File,
+  signal?: AbortSignal,
+  onProgress?: (progress: UploadReferenceProgress) => void,
+): Promise<{ reference: ProjectReferenceListItem }> {
+  if (typeof XMLHttpRequest === 'undefined' || !onProgress) {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    return request<{ reference: ProjectReferenceListItem }>(
+      `/projects/${encodeURIComponent(projectId)}/references`,
+      { method: 'POST', body: formData, signal },
+      false,
+    );
+  }
+
+  return new Promise((resolvePromise, rejectPromise) => {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+
+    const xhr = new XMLHttpRequest();
+    const url = `${BASE}/projects/${encodeURIComponent(projectId)}/references`;
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.min(99, Math.round((event.loaded / event.total) * 100));
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percent,
+          phase: percent >= 99 ? 'indexing' : 'uploading',
+        });
+      }
+    };
+
+    xhr.upload.onload = () => {
+      onProgress({
+        loaded: file.size,
+        total: file.size,
+        percent: 100,
+        phase: 'indexing',
+      });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const json = JSON.parse(xhr.responseText) as { reference: ProjectReferenceListItem };
+          resolvePromise(json);
+        } catch {
+          rejectPromise(new Error('Invalid response from server'));
+        }
+      } else {
+        try {
+          const body = JSON.parse(xhr.responseText) as Record<string, unknown>;
+          const message = typeof body.error === 'string' ? body.error : `HTTP ${xhr.status}`;
+          const code = typeof body.code === 'string' ? body.code : undefined;
+          rejectPromise(new ApiError(message, xhr.status, code));
+        } catch {
+          rejectPromise(new ApiError(`HTTP ${xhr.status}`, xhr.status));
+        }
+      }
+    };
+
+    xhr.onerror = () => {
+      rejectPromise(new ApiError('Upload network request failed', 0));
+    };
+
+    xhr.onabort = () => {
+      rejectPromise(new ApiError('Upload aborted', 0));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', () => xhr.abort());
+    }
+
+    xhr.open('POST', url);
+    xhr.send(formData);
+  });
 }
 
 export function fetchProjectReference(projectId: string, referenceId: string) {

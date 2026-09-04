@@ -76,6 +76,14 @@ export function ProjectDetailPage() {
   const [uploadingReference, setUploadingReference] = useState(false);
   const [referenceDragActive, setReferenceDragActive] = useState(false);
   const [referenceUploadStatus, setReferenceUploadStatus] = useState<string | null>(null);
+  const [uploadState, setUploadState] = useState<{
+    filename: string;
+    index: number;
+    total: number;
+    phase: 'uploading' | 'indexing';
+    percent: number;
+  } | null>(null);
+  const [reindexingId, setReindexingId] = useState<string | null>(null);
   const referenceUploadLock = useRef(false);
   const [nextManager, setNextManager] = useState('');
   const [previousManagerRole, setPreviousManagerRole] = useState<'view' | 'contribute' | 'none'>('none');
@@ -257,8 +265,33 @@ export function ProjectDetailPage() {
     try {
       for (const [index, file] of pendingFiles.entries()) {
         currentFilename = file.name;
-        setReferenceUploadStatus(`Uploading ${index + 1} of ${pendingFiles.length}: ${file.name}`);
-        const result = await uploadProjectReference(project.id, file);
+        setUploadState({
+          filename: file.name,
+          index: index + 1,
+          total: pendingFiles.length,
+          phase: 'uploading',
+          percent: 0,
+        });
+        setReferenceUploadStatus(`Uploading ${file.name} (0%)…`);
+        const result = await uploadProjectReference(
+          project.id,
+          file,
+          undefined,
+          (progress) => {
+            setUploadState({
+              filename: file.name,
+              index: index + 1,
+              total: pendingFiles.length,
+              phase: progress.phase,
+              percent: progress.percent,
+            });
+            if (progress.phase === 'indexing') {
+              setReferenceUploadStatus(`Indexing & analyzing ${file.name}…`);
+            } else {
+              setReferenceUploadStatus(`Uploading ${file.name} (${progress.percent}%)…`);
+            }
+          },
+        );
         setReferences((current) => [result.reference, ...current.filter((item) => item.id !== result.reference.id)]);
       }
       setReferenceUploadStatus(`Uploaded ${pendingFiles.length} ${pendingFiles.length === 1 ? 'reference' : 'references'}`);
@@ -268,6 +301,7 @@ export function ProjectDetailPage() {
     } finally {
       referenceUploadLock.current = false;
       setUploadingReference(false);
+      setUploadState(null);
     }
   };
 
@@ -288,6 +322,7 @@ export function ProjectDetailPage() {
   const reindexReference = async (referenceId: string) => {
     if (!project) return;
     setBusy(true);
+    setReindexingId(referenceId);
     setActionError(null);
     try {
       const result = await reindexProjectReference(project.id, referenceId);
@@ -296,6 +331,7 @@ export function ProjectDetailPage() {
       setActionError(toErrorMessage(cause, 'Could not reindex Project reference'));
     } finally {
       setBusy(false);
+      setReindexingId(null);
     }
   };
 
@@ -763,11 +799,49 @@ export function ProjectDetailPage() {
                       : 'border-zinc-300 bg-zinc-50/70 text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950/40 dark:text-zinc-300 dark:hover:border-zinc-600'
                   } ${uploadingReference ? 'cursor-wait opacity-60' : ''}`}
                 >
-                  <UploadCloud size={24} strokeWidth={1.7} aria-hidden="true" />
-                  <span className="mt-2 text-sm font-medium">
-                    {uploadingReference ? 'Uploading references…' : referenceDragActive ? 'Drop files to upload' : 'Drop files here or click to browse'}
-                  </span>
-                  <span className="mt-1 text-xs text-zinc-400">PDF, DOCX, TXT/MD, CSV/XLSX, PNG/JPEG · 25 MB per file</span>
+                  {uploadState ? (
+                    <div className="flex flex-col items-center py-1">
+                      <Loader2 size={26} className="animate-spin text-blue-600 dark:text-blue-400" />
+                      <span className="mt-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                        {uploadState.phase === 'uploading'
+                          ? `Uploading ${uploadState.filename}…`
+                          : `Indexing & analyzing ${uploadState.filename}…`}
+                      </span>
+                      <span className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                        {uploadState.phase === 'uploading'
+                          ? `${uploadState.percent}% · Transferring file (${uploadState.index} of ${uploadState.total})`
+                          : `Extracting text, OCR & search indexing (${uploadState.index} of ${uploadState.total})`}
+                      </span>
+                      {/* Visual Progress Bar */}
+                      <div className="mt-3.5 w-64 max-w-full h-2 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            uploadState.phase === 'indexing'
+                              ? 'bg-emerald-500 animate-pulse w-full'
+                              : 'bg-blue-600'
+                          }`}
+                          style={uploadState.phase === 'uploading' ? { width: `${Math.max(5, uploadState.percent)}%` } : undefined}
+                        />
+                      </div>
+                      <div className="mt-2.5 flex items-center gap-3 text-[11px]">
+                        <span className={`inline-flex items-center gap-1 ${uploadState.phase === 'uploading' ? 'font-semibold text-blue-600 dark:text-blue-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {uploadState.phase === 'indexing' ? '✔' : '●'} 1. Uploading
+                        </span>
+                        <span className="text-zinc-300 dark:text-zinc-600">→</span>
+                        <span className={`inline-flex items-center gap-1 ${uploadState.phase === 'indexing' ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'text-zinc-400'}`}>
+                          {uploadState.phase === 'indexing' ? <Loader2 size={10} className="animate-spin" /> : '○'} 2. Indexing
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <UploadCloud size={24} strokeWidth={1.7} aria-hidden="true" />
+                      <span className="mt-2 text-sm font-medium">
+                        {referenceDragActive ? 'Drop files to upload' : 'Drop files here or click to browse'}
+                      </span>
+                      <span className="mt-1 text-xs text-zinc-400">PDF, DOCX, TXT/MD, CSV/XLSX, PNG/JPEG · 25 MB per file</span>
+                    </>
+                  )}
                 </label>
                 <p aria-live="polite" className="mt-2 min-h-4 text-xs text-zinc-500">{referenceUploadStatus}</p>
               </div>
@@ -777,7 +851,7 @@ export function ProjectDetailPage() {
               </div>
               <div className="mt-3 space-y-2">
                 {references.length === 0 && <p className="text-xs text-zinc-500">No Project references uploaded yet.</p>}
-                {references.map((reference) => <div key={reference.id} className="rounded-lg border border-zinc-100 p-2 text-xs dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><a className="truncate font-medium text-zinc-700 underline-offset-2 hover:underline dark:text-zinc-200" href={projectReferenceDownloadUrl(project.id, reference.id)}>{reference.originalFilename}</a><p className="mt-0.5 text-[11px] text-zinc-400">{reference.status} · {Math.ceil(reference.sizeBytes / 1024)} KB · SHA-256 {reference.sha256.slice(0, 12)}…</p>{reference.error && <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{reference.error}</p>}</div><div className="flex shrink-0 gap-1"><button type="button" disabled={busy} onClick={() => void reindexReference(reference.id)} className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] dark:border-zinc-700">Reindex</button><button type="button" aria-label={`Delete ${reference.originalFilename}`} disabled={busy} onClick={() => void removeReference(reference.id)} className="text-zinc-400 hover:text-red-600"><Trash2 size={13} /></button></div></div></div>)}
+                {references.map((reference) => <div key={reference.id} className="rounded-lg border border-zinc-100 p-2 text-xs dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><a className="truncate font-medium text-zinc-700 underline-offset-2 hover:underline dark:text-zinc-200" href={projectReferenceDownloadUrl(project.id, reference.id)}>{reference.originalFilename}</a><p className="mt-0.5 text-[11px] text-zinc-400">{reference.status} · {Math.ceil(reference.sizeBytes / 1024)} KB · SHA-256 {reference.sha256.slice(0, 12)}…</p>{reference.error && <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{reference.error}</p>}</div><div className="flex shrink-0 gap-1"><button type="button" disabled={busy || reindexingId === reference.id} onClick={() => void reindexReference(reference.id)} className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] dark:border-zinc-700 inline-flex items-center gap-1 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50">{reindexingId === reference.id && <Loader2 size={10} className="animate-spin" />}{reindexingId === reference.id ? 'Indexing…' : 'Reindex'}</button><button type="button" aria-label={`Delete ${reference.originalFilename}`} disabled={busy} onClick={() => void removeReference(reference.id)} className="text-zinc-400 hover:text-red-600"><Trash2 size={13} /></button></div></div></div>)}
               </div>
               {referenceResults.length > 0 && <div className="mt-3 space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800"><h3 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Citations</h3>{referenceResults.map((result) => <div key={result.chunkId} className="text-xs text-zinc-500"><span className="font-medium text-zinc-700 dark:text-zinc-300">{result.citation.originalFilename}</span><span> · chunk {result.citation.chunkIndex + 1}{result.citation.pageNumber ? ` · page ${result.citation.pageNumber}` : ''}{result.citation.sheetName ? ` · ${result.citation.sheetName}` : ''}{result.citation.cellRange ? ` · ${result.citation.cellRange}` : ''}</span><p className="mt-1">{result.snippet.replace(/<\/?mark>/g, '')}</p></div>)}</div>}
             </section>
