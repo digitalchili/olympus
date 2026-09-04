@@ -18,7 +18,7 @@ export interface QueuedTaskMessage {
   updatedAt: number;
 }
 
-export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export interface AppVersion {
@@ -645,7 +645,7 @@ export interface AgentDefaults {
 export interface AgentModelOption {
   id: string;
   label: string;
-  source: 'current' | 'catalog' | 'custom' | 'alias';
+  source: 'current' | 'catalog' | 'curated-remote' | 'custom' | 'alias';
   provider?: string | null;
   isCurrentDefault?: boolean;
 }

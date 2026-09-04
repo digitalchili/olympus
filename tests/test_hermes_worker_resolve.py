@@ -94,6 +94,37 @@ class ResolveModelProviderTest(unittest.TestCase):
         model, provider, _ = hermes_worker._resolve_model_provider("anthropic/claude-sonnet-5", cfg)
         self.assertEqual((model, provider), ("anthropic/claude-sonnet-5", "openrouter"))
 
+    def test_curated_remote_catalog_adds_only_authenticated_provider_models(self):
+        cfg = {"model": {"default": "gpt-5.6-sol", "provider": "openai-codex"}}
+        defaults = hermes_worker._defaults_from_config(cfg)
+        authenticated = {
+            "OpenAI Codex": [{
+                "id": "gpt-5.6-sol",
+                "label": "gpt-5.6-sol",
+                "source": "catalog",
+                "provider": "openai-codex",
+                "isCurrentDefault": True,
+            }],
+        }
+        manifest = {
+            "version": 1,
+            "models": [
+                {"provider": "openai-codex", "id": "gpt-6-astra", "label": "GPT-6 Astra"},
+                {"provider": "unconfigured-provider", "id": "not-selectable"},
+            ],
+        }
+
+        merged = hermes_worker._merge_curated_model_catalog(authenticated, manifest, defaults)
+
+        self.assertEqual(
+            [item["id"] for item in merged["OpenAI Codex"]],
+            ["gpt-5.6-sol", "gpt-6-astra"],
+        )
+        astra = merged["OpenAI Codex"][1]
+        self.assertEqual(astra["label"], "GPT-6 Astra")
+        self.assertEqual(astra["source"], "curated-remote")
+        self.assertEqual(astra["provider"], "openai-codex")
+
     def test_unapplied_steer_is_drained_for_guaranteed_follow_up(self):
         class FakeAgent:
             def _drain_pending_steer(self):

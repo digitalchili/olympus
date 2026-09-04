@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
@@ -61,7 +62,7 @@ PENDING_INTERRUPTS: dict[str, str] = {}
 ACTIVE_TASKS_LOCK = threading.Lock()
 DEFAULT_INTERRUPT_REASON = "Stopped by user"
 
-ALLOWED_REASONING = {"none", "minimal", "low", "medium", "high", "xhigh"}
+ALLOWED_REASONING = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 KNOWN_PROVIDER_PREFIXES = {
     "anthropic",
     "openai",
@@ -126,10 +127,18 @@ _SessionDB: Any = None
 _CONFIG_CACHE: dict[str, Any] | None = None
 _CONFIG_MTIME: float = 0.0
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_CURATED_MODEL_CATALOG_URL = os.environ.get(
+    "OLYMPUS_DISPATCH_MODEL_CATALOG_URL",
+    "https://raw.githubusercontent.com/digitalchili/olympus/main/catalog/model-catalog.json",
+)
 try:
     _MODEL_LIST_CACHE_TTL_SECONDS = max(0.0, float(os.environ.get("OLYMPUS_DISPATCH_MODEL_LIST_CACHE_TTL_SECONDS", "60")))
 except ValueError:
     _MODEL_LIST_CACHE_TTL_SECONDS = 60.0
+try:
+    _CURATED_MODEL_CATALOG_TTL_SECONDS = max(60.0, float(os.environ.get("OLYMPUS_DISPATCH_MODEL_CATALOG_TTL_SECONDS", "3600")))
+except ValueError:
+    _CURATED_MODEL_CATALOG_TTL_SECONDS = 3600.0
 
 
 @dataclasses.dataclass
@@ -141,6 +150,8 @@ class _ModelListCache:
 
 _MODEL_LIST_CACHE: _ModelListCache | None = None
 _MODEL_LIST_CACHE_LOCK = threading.Lock()
+_CURATED_MODEL_CATALOG_CACHE: tuple[dict[str, Any] | None, float] | None = None
+_CURATED_MODEL_CATALOG_LOCK = threading.Lock()
 
 
 def _send(payload: dict[str, Any]) -> None:
@@ -948,12 +959,82 @@ def _provider_model_ids(provider: str) -> list[str]:
     return [str(model).strip() for model in models or [] if str(model).strip()]
 
 
+def _fetch_curated_model_catalog() -> dict[str, Any] | None:
+    """Fetch the Olympus-owned additive catalog; it never grants execution access."""
+    try:
+        request = urllib.request.Request(
+            _CURATED_MODEL_CATALOG_URL,
+            headers={"Accept": "application/json", "User-Agent": "Olympus-Dispatch/ModelCatalog"},
+        )
+        with urllib.request.urlopen(request, timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("models"), list):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _curated_model_catalog() -> dict[str, Any] | None:
+    global _CURATED_MODEL_CATALOG_CACHE
+    now = time.monotonic()
+    with _CURATED_MODEL_CATALOG_LOCK:
+        cached = _CURATED_MODEL_CATALOG_CACHE
+        if cached is not None and now < cached[1]:
+            return cached[0]
+
+    catalog = _fetch_curated_model_catalog()
+    with _CURATED_MODEL_CATALOG_LOCK:
+        _CURATED_MODEL_CATALOG_CACHE = (catalog, time.monotonic() + _CURATED_MODEL_CATALOG_TTL_SECONDS)
+    return catalog
+
+
 def _groups_have_model(groups: dict[str, list[dict[str, Any]]], model_id: str) -> bool:
     return any(
         item.get("id") == model_id
         for models in groups.values()
         for item in models
     )
+
+
+def _merge_curated_model_catalog(
+    groups: dict[str, list[dict[str, Any]]],
+    catalog: dict[str, Any] | None,
+    defaults: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    """Expose catalog entries only for providers Hermes has authenticated."""
+    if not catalog:
+        return groups
+
+    provider_groups: dict[str, str] = {}
+    for group_name, models in groups.items():
+        for model in models:
+            provider = string_or_none(model.get("provider"))
+            if provider:
+                provider_groups.setdefault(provider, group_name)
+
+    raw_models = catalog.get("models")
+    if not isinstance(raw_models, list):
+        return groups
+    active_provider = defaults.get("provider")
+    default_model = defaults.get("model")
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        provider = string_or_none(entry.get("provider"))
+        model_id = string_or_none(entry.get("id"))
+        if not provider or not model_id or provider not in provider_groups:
+            continue
+        _add_model(
+            groups,
+            provider_groups[provider],
+            _model_option_id(provider, model_id, active_provider),
+            "curated-remote",
+            default_model,
+            label=string_or_none(entry.get("label")) or model_id,
+            provider_id=provider,
+        )
+    return groups
 
 
 def _is_local_server_provider(provider: str | None) -> bool:
@@ -1066,6 +1147,8 @@ def _list_models() -> dict[str, Any]:
     if active_provider and authenticated_groups is None:
         for model_id in _provider_model_ids_with_timeout(active_provider):
             _add_model(groups, active_provider, model_id, "catalog", default_model, provider_id=active_provider)
+
+    groups = _merge_curated_model_catalog(groups, _curated_model_catalog(), defaults)
 
     aliases = cfg.get("model_aliases")
     if isinstance(aliases, dict):

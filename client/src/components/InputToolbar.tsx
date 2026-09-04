@@ -159,6 +159,7 @@ export const REASONING_LABELS: Record<ReasoningEffort, string> = {
   medium: 'Medium',
   high: 'High',
   xhigh: 'X-High',
+  max: 'Max',
 };
 
 const MODEL_PICKER_CURRENT_GROUP_ID = 'special:current';
