@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ExternalLink, FileText, GitBranch, History, Plus, RotateCcw, Save, Shield, Sparkles, Trash2, UploadCloud } from 'lucide-react';
+import { Check, ExternalLink, FileText, GitBranch, History, Loader2, Plus, RotateCcw, Save, Shield, Sparkles, Trash2, UploadCloud } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import type {
   ProjectAccessRole,
@@ -393,18 +393,26 @@ export function ProjectDetailPage() {
     }
   };
 
+  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'success'>('idle');
+  const [lastPushedSha, setLastPushedSha] = useState<string | null>(null);
+
   const commitAndPush = async () => {
     if (!editor || !codeStatus || codeStatus.clean || !commitMessage.trim()) return;
     const preview = codeStatus.changedFiles.slice(0, 12).join('\n');
     if (!window.confirm(`Commit & Push these changes?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`)) return;
     setBusy(true);
+    setPushStatus('pushing');
     setActionError(null);
     try {
       const result = await commitPushProject(projectId, editor.taskId, commitMessage.trim());
       setVersions(result.versions);
       setCommitMessage('');
+      setLastPushedSha(result.version?.commitSha ?? null);
+      setPushStatus('success');
+      setTimeout(() => setPushStatus('idle'), 6000);
       await refreshCode(editor.taskId);
     } catch (cause) {
+      setPushStatus('idle');
       setActionError(toErrorMessage(cause, 'Commit & Push failed; your changes remain available to retry'));
     } finally {
       setBusy(false);
@@ -524,7 +532,64 @@ export function ProjectDetailPage() {
                       className="h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"
                     />
                   </div>
-                  <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !codeStatus || codeStatus.clean || !commitMessage.trim()} onClick={() => void commitAndPush()} className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">Commit & Push</button><button type="button" disabled={busy || !codeStatus?.clean} onClick={() => void stopEditing()} className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium disabled:opacity-40 dark:border-zinc-700">Release editor</button><button type="button" disabled={busy} onClick={() => void refreshCode(editor.taskId)} className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium dark:border-zinc-700">Refresh</button></div>
+                  {pushStatus === 'pushing' && (
+                    <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-950/30">
+                      <div className="flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-300">
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          <Loader2 size={13} className="animate-spin text-zinc-900 dark:text-zinc-100" />
+                          Pushing to GitHub…
+                        </span>
+                        <span className="text-[11px] text-zinc-400">Uploading changes</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                        <div className="h-full bg-zinc-900 dark:bg-zinc-100 rounded-full animate-pulse w-3/4" />
+                      </div>
+                    </div>
+                  )}
+
+                  {pushStatus === 'success' && (
+                    <div className="flex items-center gap-2 rounded-lg border border-emerald-200/60 bg-emerald-50/70 p-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-950/30 dark:text-emerald-300">
+                      <Check size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      <span>Successfully committed and pushed to GitHub!{lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy || !codeStatus || codeStatus.clean || !commitMessage.trim()}
+                      onClick={() => void commitAndPush()}
+                      className="inline-flex items-center gap-1.5 h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+                    >
+                      {pushStatus === 'pushing' ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin" /> Pushing…
+                        </>
+                      ) : pushStatus === 'success' ? (
+                        <>
+                          <Check size={13} /> Pushed!
+                        </>
+                      ) : (
+                        'Commit & Push'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !codeStatus?.clean}
+                      onClick={() => void stopEditing()}
+                      className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium disabled:opacity-40 dark:border-zinc-700"
+                    >
+                      Release editor
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void refreshCode(editor.taskId)}
+                      className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium dark:border-zinc-700"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                   <p className="text-[11px] leading-4 text-zinc-400">Commit & Push updates only this Project’s protected working branch. It does not merge or deploy.</p>
                 </div>}
               </section>
