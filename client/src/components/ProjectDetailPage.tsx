@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ExternalLink, FileText, GitBranch, History, Plus, RotateCcw, Save, Shield, Trash2, UploadCloud } from 'lucide-react';
+import { Check, ExternalLink, FileText, GitBranch, History, Plus, RotateCcw, Save, Shield, Sparkles, Trash2, UploadCloud } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import type {
   ProjectAccessRole,
@@ -29,6 +29,7 @@ import {
   fetchProjectVersions,
   fetchStudioGitHubStatus,
   fetchStudioRepositories,
+  generateProjectCommitMessage,
   moveTask,
   projectReferenceDownloadUrl,
   reassignProjectManager,
@@ -376,6 +377,22 @@ export function ProjectDetailPage() {
     }
   };
 
+  const [generatingMessage, setGeneratingMessage] = useState(false);
+
+  const autoGenerateMessage = async () => {
+    if (!editor) return;
+    setGeneratingMessage(true);
+    setActionError(null);
+    try {
+      const result = await generateProjectCommitMessage(projectId, editor.taskId);
+      if (result.message) setCommitMessage(result.message);
+    } catch (cause) {
+      setActionError(toErrorMessage(cause, 'Could not generate commit message'));
+    } finally {
+      setGeneratingMessage(false);
+    }
+  };
+
   const commitAndPush = async () => {
     if (!editor || !codeStatus || codeStatus.clean || !commitMessage.trim()) return;
     const preview = codeStatus.changedFiles.slice(0, 12).join('\n');
@@ -486,7 +503,27 @@ export function ProjectDetailPage() {
                 {editor && <div className="mt-4 space-y-4">
                   <div className="rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-950/40"><p className="font-medium text-zinc-800 dark:text-zinc-200">{tasks.find((task) => task.id === editor.taskId)?.title ?? 'Assigned task'}</p><p className="mt-1 text-zinc-500">{codeStatus?.summary ?? 'Inspecting changes…'}</p></div>
                   {codeStatus && !codeStatus.clean && <><div><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Changed files</h3><ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded-lg border border-zinc-200 p-2 font-mono text-xs dark:border-zinc-700">{codeStatus.changedFiles.map((file) => <li key={file} className="truncate">{file}</li>)}</ul></div><details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700"><summary className="cursor-pointer text-xs font-medium">Review change preview</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">{codeStatus.diff || 'Binary or untracked files changed; review the file list above.'}</pre></details></>}
-                  <label className="block text-xs font-medium text-zinc-500">Checkpoint message<input value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} maxLength={200} placeholder="Describe what changed" className="mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700" /></label>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-medium text-zinc-500">Checkpoint message</label>
+                      <button
+                        type="button"
+                        disabled={busy || generatingMessage || !editor || !codeStatus || codeStatus.clean}
+                        onClick={() => void autoGenerateMessage()}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 disabled:opacity-40 dark:text-zinc-400 dark:hover:text-zinc-200"
+                      >
+                        <Sparkles size={12} className={generatingMessage ? 'animate-spin' : ''} />
+                        {generatingMessage ? 'Generating…' : 'Auto-generate'}
+                      </button>
+                    </div>
+                    <input
+                      value={commitMessage}
+                      onChange={(event) => setCommitMessage(event.target.value)}
+                      maxLength={200}
+                      placeholder="Describe what changed"
+                      className="h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"
+                    />
+                  </div>
                   <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !codeStatus || codeStatus.clean || !commitMessage.trim()} onClick={() => void commitAndPush()} className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">Commit & Push</button><button type="button" disabled={busy || !codeStatus?.clean} onClick={() => void stopEditing()} className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium disabled:opacity-40 dark:border-zinc-700">Release editor</button><button type="button" disabled={busy} onClick={() => void refreshCode(editor.taskId)} className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium dark:border-zinc-700">Refresh</button></div>
                   <p className="text-[11px] leading-4 text-zinc-400">Commit & Push updates only this Project’s protected working branch. It does not merge or deploy.</p>
                 </div>}

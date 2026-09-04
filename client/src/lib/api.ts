@@ -393,6 +393,12 @@ export function commitPushProject(projectId: string, taskId: string, message: st
   }, false);
 }
 
+export function generateProjectCommitMessage(projectId: string, taskId: string) {
+  return request<{ message: string }>(`/projects/${encodeURIComponent(projectId)}/editor/generate-commit-message`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
 export function revertProjectVersion(projectId: string, taskId: string, versionId: string) {
   return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(
     `/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/revert`,

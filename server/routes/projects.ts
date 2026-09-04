@@ -54,12 +54,15 @@ import {
 } from '../db/project-references.js';
 import { resolveProjectReferencesDir, resolveOlympusDataDir } from '../paths.js';
 
+import type { AgentAdapter } from '../adapters/types.js';
+
 interface ProjectsRouterOptions {
   registry?: LocalProfileRegistry;
   now?: () => number;
   changedBy?: string;
   github?: StudioGitHubGateway;
   projectCp?: ProjectCpService;
+  adapter?: AgentAdapter;
 }
 
 type ManagerProjection = {
@@ -536,6 +539,52 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       requireProjectEditorTask(req, registry, projectId, taskId);
       const editor = await projectCp.releaseEditor({ projectId, taskId });
       return res.json({ editor: publicEditor(editor) });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  router.post('/:id/editor/generate-commit-message', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      requireProjectEditorTask(req, registry, projectId, taskId);
+      const status = await projectCp.status({ projectId, taskId });
+      const task = getTask(taskId);
+      const profile = requestProfile(req);
+
+      let activeAdapter = options.adapter;
+      if (!activeAdapter) {
+        try {
+          const appModule = await import('../app.js');
+          activeAdapter = appModule.adapter;
+        } catch {
+          // fallback
+        }
+      }
+
+      const files = status.changedFiles.slice(0, 15).join(', ');
+      const diffSummary = (status.diff || '').slice(0, 1200);
+      const prompt = `Task: ${task?.title ?? 'Updates'}\nFiles: ${files}\nDiff summary:\n${diffSummary}`;
+
+      let message = '';
+      if (activeAdapter) {
+        try {
+          const generated = await activeAdapter.generateTitle(prompt, profile.id);
+          message = generated.title.trim();
+        } catch {
+          // fallback
+        }
+      }
+      if (!message && task?.title) {
+        message = task.title.trim();
+      }
+      if (!message) {
+        message = `Update ${status.changedFiles.length} file${status.changedFiles.length === 1 ? '' : 's'}`;
+      }
+
+      return res.json({ message });
     } catch (error) {
       return sendError(res, error);
     }

@@ -150,6 +150,11 @@ try {
   assert.deepEqual((status.body.status as Record<string, unknown>).changedFiles, ['README.md']);
   assert.equal(JSON.stringify(status.body).includes('ghs_FAKE'), false);
 
+  const generated = await call(`/api/projects/${projectId}/editor/generate-commit-message`, 'POST', { taskId: task.id });
+  assert.equal(generated.status, 200);
+  assert.equal(typeof generated.body.message, 'string');
+  assert.ok((generated.body.message as string).length > 0);
+
   const blocked = await call(`/api/projects/${projectId}/commit-push`, 'POST', { taskId: otherTask.id, message: 'Should be blocked' });
   assert.equal(blocked.status, 409);
 
