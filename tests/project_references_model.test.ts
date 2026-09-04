@@ -11,6 +11,8 @@ try {
   const { createProject, grantProjectProfileAccess } = await import('../server/db/projects.js');
   const {
     createProjectReferenceFromQuarantine,
+    createProjectReferenceFromFile,
+    syncMessageAttachmentsToProjectReferences,
     deleteProjectReference,
     getProjectReference,
     listProjectReferenceChunks,
@@ -93,6 +95,39 @@ try {
   assert.equal(getProjectReference(project.id, reference.id)?.status, 'deleted');
   assert.equal(listProjectReferences(project.id).length, 0);
   assert.equal(searchProjectReferences(project.id, 'gamma').length, 0, 'delete removes retrieval index entries');
+
+  // Test createProjectReferenceFromFile with UUID-prefixed chat upload
+  const uploadsDir = join(root, 'workspace', 'uploads', 'task-123');
+  const { mkdir: mkdirp } = await import('node:fs/promises');
+  await mkdirp(uploadsDir, { recursive: true });
+  const csvAttachment = join(uploadsDir, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890-catalog_products.csv');
+  await writeFile(csvAttachment, 'sku,title,price\nPRK-01,Prikpot Special,250\n', 'utf8');
+
+  const syncedCsv = await createProjectReferenceFromFile({
+    projectId: project.id,
+    filePath: csvAttachment,
+    now: 5_000,
+  });
+  assert.ok(syncedCsv);
+  assert.equal(syncedCsv.originalFilename, 'catalog_products.csv', 'UUID prefix is cleaned for user-friendly display');
+  assert.equal(syncedCsv.status, 'indexed');
+  assert.equal((await stat(csvAttachment)).size > 0, true, 'original task chat attachment file remains intact');
+  assert.equal(listProjectReferences(project.id).length, 1);
+
+  // Test syncMessageAttachmentsToProjectReferences from a chat message block
+  const mdAttachment = join(uploadsDir, '12345678-1234-1234-1234-123456789abc-woo_migration_guide.md');
+  await writeFile(mdAttachment, '# WooCommerce to Vendure\nComprehensive migration plan for prikpot.\n', 'utf8');
+  const pyIgnored = join(uploadsDir, 'script.py');
+  await writeFile(pyIgnored, 'print("ignore me")\n', 'utf8');
+
+  const chatMessage = `Here are the migration documents:\n\n[Attached files:\n- ${mdAttachment}\n- ${pyIgnored}\n]`;
+  const syncedRefs = await syncMessageAttachmentsToProjectReferences(project.id, chatMessage);
+  assert.equal(syncedRefs.length, 1, 'only supported document formats are synced to references');
+  assert.equal(syncedRefs[0].originalFilename, 'woo_migration_guide.md');
+
+  const searchHits = searchProjectReferences(project.id, 'Vendure');
+  assert.equal(searchHits.length, 1);
+  assert.equal(searchHits[0].citation.originalFilename, 'woo_migration_guide.md');
 
   db.close();
 } finally {

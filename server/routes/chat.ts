@@ -58,6 +58,7 @@ import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-s
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTaskAgentRunResolution } from '../db/task-agent-runs.js';
+import { syncMessageAttachmentsToProjectReferences } from '../db/project-references.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
@@ -716,7 +717,11 @@ chatRouter.put('/:id/queued-message', (req, res) => {
     createdAt: existing && existing.id === id ? existing.createdAt : now,
     updatedAt: now,
   };
-  res.json({ queuedMessage: putQueuedTaskMessage(queuedMessage) });
+  const saved = putQueuedTaskMessage(queuedMessage);
+  if (task.project_id) {
+    void syncMessageAttachmentsToProjectReferences(task.project_id, content);
+  }
+  res.json({ queuedMessage: saved });
 });
 
 chatRouter.delete('/:id/queued-message/:queuedMessageId', (req, res) => {
@@ -783,6 +788,9 @@ chatRouter.post('/:id/messages', async (req, res) => {
     confirmPersistentCollaboration: consumedQueue.confirmPersistentCollaboration,
   } : requestBody;
   content = consumedQueue?.content ?? requestContent;
+  if (task.project_id) {
+    void syncMessageAttachmentsToProjectReferences(task.project_id, content);
+  }
 
   let runSettings: ReturnType<typeof parseRunSettingsBody>;
   let mode: ChatRunMode;

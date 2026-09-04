@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -14,7 +14,8 @@ import type {
 } from '../../shared/types.js';
 import db from './index.js';
 import { getProject } from './projects.js';
-import { resolveProjectReferencesDir } from '../paths.js';
+import { expandHomePrefix, resolveProjectReferencesDir } from '../paths.js';
+import { operationalLog, redactOperationalReason } from '../observability.js';
 import { validateOfficeArchive, type ExtractionResult } from '../project-references/extraction-worker.js';
 
 export const PROJECT_REFERENCE_MAX_BYTES = 25 * 1024 * 1024;
@@ -311,6 +312,107 @@ export async function createProjectReferenceFromQuarantine(input: {
   const row = db.prepare('SELECT id FROM project_references WHERE project_id = ? AND sha256 = ?').get(input.projectId, sha256) as { id: string };
   await reindexProjectReference(input.projectId, row.id, now);
   return getProjectReference(input.projectId, row.id)!;
+}
+
+export async function createProjectReferenceFromFile(input: {
+  projectId: string;
+  filePath: string;
+  originalFilename?: string;
+  now?: number;
+}): Promise<ProjectReference | null> {
+  try {
+    if (!getProject(input.projectId)) return null;
+    const fileStats = await stat(input.filePath).catch(() => null);
+    if (!fileStats || !fileStats.isFile() || fileStats.size <= 0 || fileStats.size > PROJECT_REFERENCE_MAX_BYTES) {
+      return null;
+    }
+
+    const base = basename(input.filePath);
+    const uuidCleaned = base
+      .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, '')
+      .replace(/^\d+-[0-9a-f-]+-/, '');
+    const originalFilename = (input.originalFilename || uuidCleaned || base).trim();
+
+    const extension = extname(originalFilename).toLocaleLowerCase('en-US');
+    const allowedMimes = ALLOWED[extension];
+    if (!allowedMimes) return null;
+
+    const candidate = validateProjectReferenceCandidate({
+      originalFilename,
+      mimeType: allowedMimes[0],
+      sizeBytes: fileStats.size,
+    });
+
+    await validateProjectReferenceContent(input.filePath, candidate.extension);
+
+    const now = input.now ?? Date.now();
+    const sha256 = await sha256File(input.filePath);
+    const { originalsDir } = await ensureProjectStorage(input.projectId);
+    const storagePath = join(originalsDir, `${sha256}${candidate.extension}`);
+
+    if (!existsSync(storagePath)) {
+      await copyFile(input.filePath, storagePath);
+    }
+
+    const id = uuid();
+    const versionId = uuid();
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO project_references (
+          id, project_id, original_filename, safe_filename, mime_type, extension, size_bytes, sha256,
+          storage_path, status, error, created_at, updated_at, indexed_at, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'extracting', NULL, ?, ?, NULL, NULL)
+        ON CONFLICT(project_id, sha256) DO UPDATE SET
+          status = 'extracting', error = NULL, updated_at = excluded.updated_at, deleted_at = NULL
+      `).run(id, input.projectId, candidate.safeFilename, candidate.safeFilename, candidate.mimeType, candidate.extension, fileStats.size, sha256, storagePath, now, now);
+      const row = db.prepare('SELECT id FROM project_references WHERE project_id = ? AND sha256 = ?').get(input.projectId, sha256) as { id: string };
+      db.prepare(`
+        INSERT OR IGNORE INTO project_reference_versions (id, reference_id, sha256, storage_path, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(versionId, row.id, sha256, storagePath, now);
+    })();
+
+    const row = db.prepare('SELECT id FROM project_references WHERE project_id = ? AND sha256 = ?').get(input.projectId, sha256) as { id: string };
+    await reindexProjectReference(input.projectId, row.id, now);
+    return getProjectReference(input.projectId, row.id) ?? null;
+  } catch (error) {
+    operationalLog('project_reference_auto_sync_failed', {
+      projectId: input.projectId,
+      filePath: input.filePath,
+      reason: redactOperationalReason(error),
+    });
+    return null;
+  }
+}
+
+export function extractAttachmentPaths(content: string): string[] {
+  const paths: string[] = [];
+  const footer = /\n\n\[Attached files:\n([\s\S]*?)\]$/.exec(content);
+  if (footer) {
+    for (const line of footer[1].split('\n')) {
+      if (line.startsWith('- ')) paths.push(line.slice(2).trim());
+    }
+  }
+  for (const line of content.split(/\r?\n/)) {
+    const media = /^MEDIA:(.+)$/.exec(line.trim());
+    if (media) paths.push(media[1].trim());
+  }
+  return [...new Set(paths.filter(Boolean))];
+}
+
+export async function syncMessageAttachmentsToProjectReferences(
+  projectId: string,
+  content: string,
+): Promise<ProjectReference[]> {
+  const paths = extractAttachmentPaths(content);
+  if (paths.length === 0) return [];
+  const results: ProjectReference[] = [];
+  for (const rawPath of paths) {
+    const filePath = resolve(expandHomePrefix(rawPath));
+    const ref = await createProjectReferenceFromFile({ projectId, filePath });
+    if (ref) results.push(ref);
+  }
+  return results;
 }
 
 export function getProjectReference(projectId: string, referenceId: string): ProjectReference | undefined {
