@@ -147,18 +147,49 @@ async function fetchStatus(force = false): Promise<UpdateStatus> {
       headers: githubHeaders(),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (response.status === 404) {
+    let latestVersion: string | null = null;
+    let releaseUrl: string | null = null;
+
+    if (response.ok) {
+      const release = await response.json() as { tag_name?: unknown; html_url?: unknown };
+      latestVersion = typeof release.tag_name === 'string' ? release.tag_name.replace(/^v/, '') : null;
+      releaseUrl = typeof release.html_url === 'string' ? release.html_url : null;
+    }
+
+    if (!latestVersion || !isVersionNewer(latestVersion, currentVersion)) {
+      try {
+        const tagsResponse = await fetch(`${GITHUB_API}/repos/${repository}/tags?per_page=10`, {
+          headers: githubHeaders(),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        if (tagsResponse.ok) {
+          const tags = await tagsResponse.json() as Array<{ name?: unknown }>;
+          for (const tag of tags) {
+            const tagVersion = typeof tag.name === 'string' ? tag.name.replace(/^v/, '') : null;
+            if (tagVersion && (!latestVersion || isVersionNewer(tagVersion, latestVersion))) {
+              latestVersion = tagVersion;
+              releaseUrl = `https://github.com/${repository}/releases/tag/v${tagVersion}`;
+            }
+          }
+        }
+      } catch {
+        // Fallback to releases result
+      }
+    }
+
+    if (!latestVersion && response.status === 404) {
       cachedStatus = { ...base, error: 'No GitHub release is published yet.' };
-    } else if (!response.ok) {
+    } else if (!latestVersion && !response.ok) {
       cachedStatus = { ...base, error: `GitHub release check failed (${response.status}).` };
     } else {
-      const release = await response.json() as { tag_name?: unknown; html_url?: unknown };
-      const latestVersion = typeof release.tag_name === 'string' ? release.tag_name.replace(/^v/, '') : null;
+      const resolvedLatest = latestVersion && isVersionNewer(currentVersion, latestVersion)
+        ? currentVersion
+        : latestVersion;
       cachedStatus = {
         ...base,
-        latestVersion,
-        updateAvailable: latestVersion ? isVersionNewer(latestVersion, currentVersion) : false,
-        releaseUrl: typeof release.html_url === 'string' ? release.html_url : null,
+        latestVersion: resolvedLatest,
+        updateAvailable: resolvedLatest ? isVersionNewer(resolvedLatest, currentVersion) : false,
+        releaseUrl,
       };
     }
   } catch {
