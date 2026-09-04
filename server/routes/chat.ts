@@ -113,6 +113,24 @@ function isInterruptibleRun(status: ReturnType<typeof getRunStatus>): boolean {
   return status?.status === 'streaming' && (status.kind === 'chat' || status.kind === 'goal');
 }
 
+function normalizeQueuedMessageSettings(message: QueuedTaskMessage): QueuedTaskMessage['settings'] {
+  const settledRun = getRunStatus(message.taskId);
+  if (settledRun?.kind === 'goal' && settledRun.goal?.status === 'done' && message.settings.mode === 'goal') {
+    return { ...message.settings, mode: 'task' };
+  }
+  return message.settings;
+}
+
+function queuedMessageRequestBody(message: QueuedTaskMessage): Record<string, unknown> {
+  return {
+    content: message.content,
+    settings: normalizeQueuedMessageSettings(message),
+    invitedProfileIds: message.invitedProfileIds,
+    collaborationScope: message.collaborationScope,
+    confirmPersistentCollaboration: message.confirmPersistentCollaboration,
+  };
+}
+
 function completeTaskRun(
   taskId: string,
   runId: string,
@@ -687,24 +705,73 @@ chatRouter.delete('/:id/queued-message/:queuedMessageId', (req, res) => {
 chatRouter.post('/:id/messages', async (req, res) => {
   const task = res.locals.task as Task;
 
-  const { content } = req.body;
-  if (!content || typeof content !== 'string') {
+  const requestBody = isRecord(req.body) ? req.body : {};
+  const requestContent = requestBody.content;
+  if (!requestContent || typeof requestContent !== 'string') {
     return res.status(400).json({ error: 'content is required' });
   }
+  let content = requestContent;
+
+  const activeRun = getRunStatus(task.id);
+  if (isTaskRunActive(activeRun)) {
+    const preclaimed = res.locals.claimedQueuedTaskMessage as QueuedTaskMessage | undefined;
+    if (preclaimed) restoreQueuedTaskMessage(preclaimed);
+    delete res.locals.claimedQueuedTaskMessage;
+    return res.status(409).json({ error: 'This task already has a message in progress' });
+  }
+
+  const queuedMessageId = requestBody.queuedMessageId;
+  let consumedQueue = res.locals.claimedQueuedTaskMessage as QueuedTaskMessage | undefined;
+  delete res.locals.claimedQueuedTaskMessage;
+  const restoreConsumedQueue = () => {
+    if (!consumedQueue) return;
+    restoreQueuedTaskMessage(consumedQueue);
+    consumedQueue = undefined;
+  };
+  if (queuedMessageId !== undefined) {
+    if (typeof queuedMessageId !== 'string' || !queuedMessageId.trim()) {
+      restoreConsumedQueue();
+      return res.status(400).json({ error: 'queuedMessageId must be a non-empty string' });
+    }
+    consumedQueue ??= consumeQueuedTaskMessage(task.id, queuedMessageId);
+    if (!consumedQueue || consumedQueue.id !== queuedMessageId || consumedQueue.content !== content) {
+      restoreConsumedQueue();
+      return res.status(409).json({ error: 'Queued message changed or no longer exists' });
+    }
+  } else if (consumedQueue) {
+    restoreConsumedQueue();
+    return res.status(409).json({ error: 'Queued message changed or no longer exists' });
+  }
+
+  const queuedSettings = consumedQueue
+    && activeRun?.kind === 'goal'
+    && activeRun.goal?.status === 'done'
+    && consumedQueue.settings.mode === 'goal'
+    ? { ...consumedQueue.settings, mode: 'task' as const }
+    : consumedQueue?.settings;
+  const effectiveBody = consumedQueue ? {
+    ...requestBody,
+    content: consumedQueue.content,
+    settings: queuedSettings,
+    invitedProfileIds: consumedQueue.invitedProfileIds,
+    collaborationScope: consumedQueue.collaborationScope,
+    confirmPersistentCollaboration: consumedQueue.confirmPersistentCollaboration,
+  } : requestBody;
+  content = consumedQueue?.content ?? requestContent;
 
   let runSettings: ReturnType<typeof parseRunSettingsBody>;
   let mode: ChatRunMode;
   let invitationScope: CollaborationInvitationScope;
   let collaborationInvites: ReturnType<typeof validateCollaborationInvites>;
   try {
-    runSettings = parseRunSettingsBody(req.body);
-    mode = parseChatRunMode(req.body);
+    runSettings = parseRunSettingsBody(effectiveBody);
+    mode = parseChatRunMode(effectiveBody);
     invitationScope = parseCollaborationInvitationScope(
-      req.body?.collaborationScope,
-      req.body?.confirmPersistentCollaboration === true,
+      effectiveBody.collaborationScope,
+      effectiveBody.confirmPersistentCollaboration === true,
     );
     const ownerProfileId = task.profile_name ?? 'default';
-    const requestedInvites = validateCollaborationInvites(req.body?.invitedProfileIds, ownerProfileId);
+    const requestedInvites = validateCollaborationInvites(effectiveBody.invitedProfileIds, ownerProfileId);
     if (invitationScope === 'project') {
       if (!task.project_id) {
         throw new LocalProfileError(400, 'Project collaboration requires a Project task', 'PROJECT_REQUIRED');
@@ -730,6 +797,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       }
     }
   } catch (error) {
+    restoreConsumedQueue();
     if (error instanceof ProjectAccessError) {
       return res.status(error.status).json({ error: error.message, code: error.code });
     }
@@ -737,22 +805,6 @@ chatRouter.post('/:id/messages', async (req, res) => {
       return res.status(error.status).json({ error: error.message, code: error.code });
     }
     return res.status(400).json({ error: toErrorMessage(error, 'Invalid run settings') });
-  }
-
-  const activeRun = getRunStatus(task.id);
-  if (isTaskRunActive(activeRun)) {
-    return res.status(409).json({ error: 'This task already has a message in progress' });
-  }
-
-  const queuedMessageId = req.body?.queuedMessageId;
-  if (queuedMessageId !== undefined) {
-    if (typeof queuedMessageId !== 'string' || !queuedMessageId.trim()) {
-      return res.status(400).json({ error: 'queuedMessageId must be a non-empty string' });
-    }
-    const currentQueue = getQueuedTaskMessage(task.id);
-    if (!currentQueue || currentQueue.id !== queuedMessageId || currentQueue.content !== content) {
-      return res.status(409).json({ error: 'Queued message changed or no longer exists' });
-    }
   }
 
   let runTask = task;
@@ -775,21 +827,15 @@ chatRouter.post('/:id/messages', async (req, res) => {
 
   if (Object.keys(taskUpdates).length > 0) {
     const updated = updateTask(task.id, taskUpdates);
-    if (!updated) return res.status(404).json({ error: 'Task not found' });
+    if (!updated) {
+      restoreConsumedQueue();
+      return res.status(404).json({ error: 'Task not found' });
+    }
     runTask = updated;
     broadcast({ type: 'task_updated', task: updated });
   }
 
   const sessionId = runTask.id;
-  const consumedQueue = typeof queuedMessageId === 'string'
-    ? consumeQueuedTaskMessage(task.id, queuedMessageId)
-    : undefined;
-  if (typeof queuedMessageId === 'string' && !consumedQueue) {
-    return res.status(409).json({ error: 'Queued message changed or no longer exists' });
-  }
-  const restoreConsumedQueue = () => {
-    if (consumedQueue) restoreQueuedTaskMessage(consumedQueue);
-  };
 
   if (mode === 'goal') {
     const releaseRunWork = acquireProfileWork(taskProfileId(runTask));

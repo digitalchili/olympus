@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createQueuedMessageDispatcher } from '../server/queued-message-dispatcher.js';
+import { assertQueuedMessageDeliveryResponse, createQueuedMessageDispatcher } from '../server/queued-message-dispatcher.js';
 
 const queue = { id: 'queue-1' };
 let active = true;
@@ -30,3 +30,39 @@ currentQueue = undefined;
 dispatcher.schedule('task-1');
 await new Promise((resolve) => setTimeout(resolve, 0));
 assert.equal(deliveries, 1, 'an empty queue is a no-op');
+
+await assert.doesNotReject(() => assertQueuedMessageDeliveryResponse({
+  ok: true,
+  status: 200,
+  text: async () => '{"action":"commit_push"}',
+}));
+await assert.doesNotReject(() => assertQueuedMessageDeliveryResponse({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({ action: 'commit_push', version: { changedFiles: Array.from({ length: 100 }, (_, index) => `file-${index}.txt`) } }),
+}));
+await assert.doesNotReject(() => assertQueuedMessageDeliveryResponse({
+  ok: true,
+  status: 202,
+  text: async () => 'run accepted',
+}));
+await assert.rejects(() => assertQueuedMessageDeliveryResponse({
+  ok: true,
+  status: 200,
+  text: async () => '{"action":"not_commit_push"}',
+}), /HTTP 200: expected commit_push response/);
+await assert.rejects(() => assertQueuedMessageDeliveryResponse({
+  ok: true,
+  status: 200,
+  text: async () => 'not json',
+}), /HTTP 200: expected commit_push JSON/);
+await assert.rejects(() => assertQueuedMessageDeliveryResponse({
+  ok: true,
+  status: 204,
+  text: async () => 'unexpected success shape',
+}), /HTTP 204: unexpected success shape/);
+await assert.rejects(() => assertQueuedMessageDeliveryResponse({
+  ok: false,
+  status: 409,
+  text: async () => 'queue conflict',
+}), /HTTP 409: queue conflict/);

@@ -12,6 +12,29 @@ interface DispatcherDependencies<T> {
   onError?: (taskId: string, error: unknown) => void;
 }
 
+interface DeliveryResponse {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+}
+
+export async function assertQueuedMessageDeliveryResponse(response: DeliveryResponse): Promise<void> {
+  const body = await response.text();
+  const detail = body.slice(0, 500);
+  if (response.status === 202) return;
+  if (response.status === 200) {
+    let payload: { action?: unknown };
+    try {
+      payload = JSON.parse(body) as { action?: unknown };
+    } catch {
+      throw new Error('Queued message dispatch returned HTTP 200: expected commit_push JSON');
+    }
+    if (payload.action === 'commit_push') return;
+    throw new Error('Queued message dispatch returned HTTP 200: expected commit_push response');
+  }
+  throw new Error(`Queued message dispatch returned HTTP ${response.status}: ${detail}`);
+}
+
 export function createQueuedMessageDispatcher<T = QueuedTaskMessage>(
   dependencies: DispatcherDependencies<T>,
 ): QueuedMessageDispatcher {

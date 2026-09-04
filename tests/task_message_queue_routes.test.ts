@@ -3,21 +3,33 @@ import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { StreamEvent } from '../server/adapters/types.js';
 
 const root = await mkdtemp(join(tmpdir(), 'olympus-task-message-queue-routes-'));
 const hermesHome = join(root, 'hermes');
 const dispatchHome = join(root, 'dispatch');
+const reviewerHome = join(hermesHome, 'profiles', 'reviewer');
 await mkdir(hermesHome, { recursive: true });
+await mkdir(reviewerHome, { recursive: true });
 await writeFile(join(hermesHome, 'config.yaml'), '{}\n');
+await writeFile(join(hermesHome, 'profile.yaml'), 'displayName: Default\nactive: true\n');
+await writeFile(join(reviewerHome, 'profile.yaml'), 'displayName: Reviewer\nactive: true\n');
+await writeFile(join(reviewerHome, 'config.yaml'), '{}\n');
 process.env.HERMES_HOME = hermesHome;
 process.env.OLYMPUS_DISPATCH_HOME = dispatchHome;
 process.env.DB_PATH = join(dispatchHome, 'data', 'test.db');
 
-const [{ default: app }, queries, { default: db }] = await Promise.all([
+const [{ default: app, adapter }, queries, collaboration, { default: db }] = await Promise.all([
   import('../server/app.js'),
   import('../server/db/queries.js'),
+  import('../server/db/collaboration.js'),
   import('../server/db/index.js'),
 ]);
+const { discardRun } = await import('../server/live-chat.js');
+const originalChatStream = adapter.chatStream;
+adapter.chatStream = async function* (sessionId): AsyncIterable<StreamEvent> {
+  yield { type: 'done', sessionId, interrupted: true, context: null };
+};
 const task = queries.insertTask({ title: 'Queue route', status: 'in_progress', profile_name: 'default' });
 const server = app.listen(0, '127.0.0.1');
 await once(server, 'listening');
@@ -77,7 +89,43 @@ try {
   const removed = await fetch(`${queueBase}/${encodeURIComponent(replacement.id)}?profile=default`, { method: 'DELETE' });
   assert.equal(removed.status, 204);
   assert.deepEqual(await (await fetch(url)).json(), { queuedMessage: null });
+
+  const authoritative = {
+    ...payload,
+    id: 'queue-authoritative',
+    content: 'Authoritative queued follow-up',
+    settings: { mode: 'task', model: 'current-row-model', reasoningEffort: 'high' },
+  };
+  assert.equal((await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(authoritative),
+  })).status, 200);
+  const authoritativeSend = await fetch(`http://127.0.0.1:${address.port}/api/tasks/${task.id}/messages?profile=default`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: authoritative.content,
+      settings: { mode: 'task', model: 'stale-request-model', reasoningEffort: 'low' },
+      invitedProfileIds: ['reviewer'],
+      collaborationScope: 'task',
+      confirmPersistentCollaboration: true,
+      queuedMessageId: authoritative.id,
+    }),
+  });
+  assert.equal(authoritativeSend.status, 202, await authoritativeSend.text());
+  const deliveredTask = queries.getTask(task.id)!;
+  assert.equal(deliveredTask.agent_model, 'current-row-model', 'queued delivery settings come from the claimed DB row');
+  assert.equal(deliveredTask.reasoning_effort, 'high', 'stale request settings cannot change queued delivery options');
+  assert.deepEqual(
+    collaboration.listPersistentCollaborationGrants({ taskId: task.id, projectId: task.project_id }).map((grant) => grant.profileId),
+    [],
+    'tampered queued request collaboration fields cannot create persistent grants before claim',
+  );
+  assert.deepEqual(await (await fetch(url)).json(), { queuedMessage: null });
+  discardRun(task.id);
 } finally {
+  adapter.chatStream = originalChatStream;
   server.close();
   await once(server, 'close');
   db.close();

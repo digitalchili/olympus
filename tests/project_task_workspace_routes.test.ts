@@ -41,10 +41,12 @@ try {
   const { upsertProjectRepositoryLink } = await import('../server/db/projects.js');
   const { upsertGitHubInstallation } = await import('../server/db/studio-projects.js');
   const { insertTask, getTask } = await import('../server/db/queries.js');
+  const { deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage } = await import('../server/db/task-message-queue.js');
   const { getProjectEditor } = await import('../server/db/project-cp.js');
   const { transferProjectEditor } = await import('../server/db/project-cp.js');
   const { createProjectCpService } = await import('../server/project-cp.js');
   const { createProjectTaskWorkspaceRouter } = await import('../server/routes/project-task-workspace.js');
+  const { discardRun, startRun } = await import('../server/live-chat.js');
   const { default: db } = await import('../server/db/index.js');
 
   const project = createProject({
@@ -114,8 +116,8 @@ try {
   assert.ok(address && typeof address === 'object');
 
   type Result = { status: number; body: Record<string, unknown> };
-  const postMessage = (taskId: string, profile = 'default') => new Promise<Result>((resolve, reject) => {
-    const payload = JSON.stringify({ content: 'Read AGENTS.md' });
+  const postMessage = (taskId: string, profile = 'default', content = 'Read AGENTS.md', queuedMessageId?: string) => new Promise<Result>((resolve, reject) => {
+    const payload = JSON.stringify({ content, ...(queuedMessageId ? { queuedMessageId } : {}) });
     const req = request({
       host: '127.0.0.1', port: address.port,
       path: `/api/tasks/${taskId}/messages?profile=${encodeURIComponent(profile)}`, method: 'POST',
@@ -209,6 +211,76 @@ try {
   assert.equal(getTask(firstTask.id)?.workdir, null, 'the reviewed task loses its old workspace binding');
   assert.equal(getTask(secondTask.id)?.workdir, workdir);
   assert.equal(downstreamCalls, 2, 'the next task starts only after clean automatic handoff');
+
+  await writeFile(join(workdir, 'TASK-WINDOW-COMMIT.md'), 'Committed from task chat\n');
+  startRun(secondTask.id, secondTask.id, 'Work is still in progress');
+  const busyCommit = await postMessage(secondTask.id, 'default', 'commit and push: must wait for the active run');
+  assert.equal(busyCommit.status, 409, JSON.stringify(busyCommit.body));
+  assert.match(await git(workdir, ['status', '--porcelain']), /TASK-WINDOW-COMMIT\.md/, 'an active run prevents an in-flight commit');
+  discardRun(secondTask.id);
+
+  const queuedContent = 'commit and push: feat: queued task-window checkpoint';
+  await writeFile(join(workdir, 'QUEUED-COMMIT.md'), 'Committed from a durable queue\n');
+  putQueuedTaskMessage({
+    id: 'queue-commit-1',
+    taskId: secondTask.id,
+    content: queuedContent,
+    settings: { mode: 'task' },
+    invitedProfileIds: [],
+    collaborationScope: 'discussion',
+    confirmPersistentCollaboration: false,
+    createdAt: 40_000,
+    updatedAt: 40_000,
+  });
+  const queuedCommit = await postMessage(secondTask.id, 'default', queuedContent, 'queue-commit-1');
+  assert.equal(queuedCommit.status, 200, JSON.stringify(queuedCommit.body));
+  assert.equal(getQueuedTaskMessage(secondTask.id), undefined, 'a successful queued commit is consumed exactly once');
+  assert.equal((await git(workdir, ['status', '--porcelain'])), '');
+
+  const noChangesContent = 'commit and push: test queued restore';
+  putQueuedTaskMessage({
+    id: 'queue-no-changes',
+    taskId: secondTask.id,
+    content: noChangesContent,
+    settings: { mode: 'task' },
+    invitedProfileIds: [],
+    collaborationScope: 'discussion',
+    confirmPersistentCollaboration: false,
+    createdAt: 41_000,
+    updatedAt: 41_000,
+  });
+  const failedQueuedCommit = await postMessage(secondTask.id, 'default', noChangesContent, 'queue-no-changes');
+  assert.equal(failedQueuedCommit.status, 409, JSON.stringify(failedQueuedCommit.body));
+  assert.equal(getQueuedTaskMessage(secondTask.id)?.id, 'queue-no-changes', 'a failed queued commit is restored for retry');
+
+  await writeFile(join(workdir, 'STALE-QUEUE.md'), 'Must not be committed by a stale queue request\n');
+  putQueuedTaskMessage({
+    id: 'queue-current',
+    taskId: secondTask.id,
+    content: 'commit and push: current queue item',
+    settings: { mode: 'task' },
+    invitedProfileIds: [],
+    collaborationScope: 'discussion',
+    confirmPersistentCollaboration: false,
+    createdAt: 42_000,
+    updatedAt: 42_000,
+  });
+  const staleQueuedCommit = await postMessage(secondTask.id, 'default', 'commit and push: stale queue item', 'queue-no-changes');
+  assert.equal(staleQueuedCommit.status, 409, JSON.stringify(staleQueuedCommit.body));
+  assert.equal(getQueuedTaskMessage(secondTask.id)?.id, 'queue-current', 'a stale request cannot consume its replacement');
+  assert.match(await git(workdir, ['status', '--porcelain']), /STALE-QUEUE\.md/, 'a stale request cannot perform the commit');
+
+  assert.equal(deleteQueuedTaskMessage(secondTask.id, 'queue-current'), true);
+  const committed = await postMessage(secondTask.id, 'default', 'commit and push: feat: task-window checkpoint');
+  assert.equal(committed.status, 200, JSON.stringify(committed.body));
+  assert.equal(committed.body.action, 'commit_push');
+  assert.equal((committed.body.version as Record<string, unknown>).commitMessage, 'feat: task-window checkpoint');
+  assert.equal((committed.body.version as Record<string, unknown>).changedFiles instanceof Array, true);
+  assert.equal(downstreamCalls, 2, 'commit commands are handled before Hermes chat');
+  assert.equal((await git(workdir, ['status', '--porcelain'])), '');
+  assert.equal(getProjectEditor(project.id), null, 'a successful task-chat commit releases the Project editor');
+  assert.equal(getTask(secondTask.id)?.workdir, null, 'a successful task-chat commit clears the task workspace binding');
+  assert.equal(getTask(secondTask.id)?.status, 'in_review', 'a successful task-chat commit hands the task to review');
 
   server.close();
   db.close();

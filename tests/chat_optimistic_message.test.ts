@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   createOptimisticChatRun,
+  settleCommitPushChatResult,
   reconcileOptimisticChatSnapshot,
   rollbackOptimisticChatRun,
   shouldCreateOptimisticChatRun,
@@ -106,5 +107,44 @@ assert.equal(
   activeRun,
   'rollback never replaces an SSE-backed run that has no optimistic placeholder',
 );
+
+const committedBefore = [{ id: 'existing', role: 'assistant' as const, content: 'Task B state', created_at: 200 }];
+const staleCommitPush = settleCommitPushChatResult({
+  currentTaskId: 'task-b',
+  responseTaskId: 'task-a',
+  currentLiveRun: createOptimisticChatRun('task-b', 'Task B draft', 'chat', 201),
+  optimisticRunId: optimistic.runId,
+  committedMessages: committedBefore,
+  content: 'commit and push',
+  version: {
+    commitSha: 'abcdef1234567890',
+    branchName: 'olympus/task-a',
+    commitMessage: 'feat: task a',
+    changedFiles: ['README.md'],
+  },
+  now: 202,
+});
+assert.equal(staleCommitPush.applied, false, 'a stale commit_push response is ignored after navigation');
+assert.equal(staleCommitPush.committedMessages, committedBefore, 'old commit_push replies cannot publish into the current task transcript');
+assert.equal(staleCommitPush.liveRun?.taskId, 'task-b', 'old commit_push settlement cannot roll back the new task live run');
+
+const currentCommitPush = settleCommitPushChatResult({
+  currentTaskId: 'task-a',
+  responseTaskId: 'task-a',
+  currentLiveRun: optimistic,
+  optimisticRunId: optimistic.runId,
+  committedMessages: [],
+  content: 'commit and push',
+  version: {
+    commitSha: 'abcdef1234567890',
+    branchName: 'olympus/task-a',
+    commitMessage: 'feat: task a',
+    changedFiles: ['README.md'],
+  },
+  now: 203,
+});
+assert.equal(currentCommitPush.applied, true);
+assert.equal(currentCommitPush.liveRun, null);
+assert.deepEqual(currentCommitPush.committedMessages.map((message) => message.role), ['user', 'assistant']);
 
 console.log('Optimistic chat message tests passed');

@@ -82,7 +82,8 @@ export function deleteQueuedTaskMessage(taskId: string, id: string): boolean {
 }
 
 export function consumeQueuedTaskMessage(taskId: string, id: string): QueuedTaskMessage | undefined {
-  return fromRow(consumeStmt.get(taskId, id) as QueueRow | undefined);
+  const row = consumeStmt.get(taskId, id);
+  return fromRow(row as QueueRow | undefined);
 }
 
 export function restoreQueuedTaskMessage(message: QueuedTaskMessage): boolean {

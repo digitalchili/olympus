@@ -189,6 +189,45 @@ export function rollbackOptimisticChatRun(
   };
 }
 
+interface CommitPushVersionResult {
+  commitSha?: string;
+  branchName?: string;
+  commitMessage?: string;
+  changedFiles?: string[];
+}
+
+export function settleCommitPushChatResult(input: {
+  currentTaskId: string | null;
+  responseTaskId: string;
+  currentLiveRun: LiveChatRun | null;
+  optimisticRunId?: string;
+  committedMessages: ChatMessage[];
+  content: string;
+  version: CommitPushVersionResult;
+  now?: number;
+}): { applied: boolean; liveRun: LiveChatRun | null; committedMessages: ChatMessage[] } {
+  if (input.currentTaskId !== input.responseTaskId) {
+    return { applied: false, liveRun: input.currentLiveRun, committedMessages: input.committedMessages };
+  }
+  const now = input.now ?? Date.now();
+  const files = input.version.changedFiles?.length ?? 0;
+  return {
+    applied: true,
+    liveRun: rollbackOptimisticChatRun(input.currentLiveRun, input.optimisticRunId),
+    committedMessages: [
+      ...input.committedMessages,
+      { id: createUuid(), task_id: input.responseTaskId, role: 'user', content: input.content, created_at: now },
+      {
+        id: createUuid(),
+        task_id: input.responseTaskId,
+        role: 'assistant',
+        content: `Committed and pushed \`${input.version.commitSha?.slice(0, 7) ?? 'unknown'}\` to \`${input.version.branchName ?? 'the Project branch'}\` — ${input.version.commitMessage ?? 'checkpoint'} (${files} file${files === 1 ? '' : 's'}).`,
+        created_at: now,
+      },
+    ],
+  };
+}
+
 export function reconcileOptimisticChatSnapshot(
   existing: LiveChatRun,
   snapshot: LiveChatRun,
@@ -607,7 +646,28 @@ export function useChat() {
         );
         return { ok: false, conflict: res.status === 409, error };
       }
-      const body = await res.json().catch(() => ({})) as { runId?: string };
+      const body = await res.json().catch(() => ({})) as {
+        runId?: string;
+        action?: string;
+        version?: { commitSha?: string; branchName?: string; commitMessage?: string; changedFiles?: string[] };
+      };
+      if (body.action === 'commit_push' && body.version) {
+        const settled = settleCommitPushChatResult({
+          currentTaskId: taskIdRef.current,
+          responseTaskId: taskId,
+          currentLiveRun: liveRunRef.current,
+          optimisticRunId: optimisticRun?.runId,
+          committedMessages: committedMessagesRef.current,
+          content,
+          version: body.version,
+        });
+        if (settled.applied) {
+          liveRunRef.current = settled.liveRun;
+          committedMessagesRef.current = settled.committedMessages;
+          publishState();
+        }
+        return { ok: true };
+      }
       if (
         body.runId &&
         optimisticRun &&

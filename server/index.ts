@@ -9,7 +9,7 @@ import { closeSubscribersForRestart } from './live-chat.js';
 import { getRunStatus } from './live-chat.js';
 import { getTask } from './db/queries.js';
 import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-queue.js';
-import { configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
+import { assertQueuedMessageDeliveryResponse, configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -102,10 +102,7 @@ async function main() {
           }),
         },
       );
-      if (response.status !== 202) {
-        const detail = (await response.text()).slice(0, 500);
-        throw new Error(`Queued message dispatch returned HTTP ${response.status}: ${detail}`);
-      }
+      await assertQueuedMessageDeliveryResponse(response);
     },
     onError: (taskId, error) => {
       console.error(`Queued message dispatch failed for task ${taskId}:`, error instanceof Error ? error.message : error);
