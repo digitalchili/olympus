@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import importlib
 import inspect
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -28,6 +30,7 @@ from hermes_worker_utils import (
     string_or_none,
     truncate_with_ellipsis,
 )
+from hermes_background_work import get_background_work as _session_background_work
 from hermes_sessions import (
     load_agent_history,
     open_session,
@@ -152,6 +155,7 @@ _MODEL_LIST_CACHE: _ModelListCache | None = None
 _MODEL_LIST_CACHE_LOCK = threading.Lock()
 _CURATED_MODEL_CATALOG_CACHE: tuple[dict[str, Any] | None, float] | None = None
 _CURATED_MODEL_CATALOG_LOCK = threading.Lock()
+_DELEGATE_CHILD_REASONING_COMPAT_LOCK = threading.RLock()
 
 
 def _send(payload: dict[str, Any]) -> None:
@@ -181,6 +185,49 @@ def _nonnegative_number(value: Any, *, integer: bool = False, maximum: float | N
     return int(number) if integer else number
 
 
+def _project_subagent_completion_status(payload: dict[str, Any]) -> str:
+    raw_status = str(payload.get("status") or "").strip().lower()
+    status_map = {
+        "completed": "completed",
+        "success": "completed",
+        "failed": "failed",
+        "failure": "failed",
+        "error": "failed",
+        "interrupted": "cancelled",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+        "timeout": "timed_out",
+        "timed_out": "timed_out",
+        "stalled": "stalled",
+    }
+
+    if payload.get("failed") is True or payload.get("completed") is False:
+        return "failed"
+    if string_or_none(payload.get("error")):
+        return "failed"
+
+    exit_reason = string_or_none(payload.get("exit_reason")) or string_or_none(
+        payload.get("turn_exit_reason")
+    )
+    if exit_reason:
+        normalized_reason = exit_reason.strip().lower()
+        if normalized_reason in {"completed", "success", "stop"}:
+            return status_map.get(raw_status, "completed")
+        if normalized_reason.startswith("max_iterations"):
+            return "failed"
+        if "timeout" in normalized_reason:
+            return "timed_out"
+        if "interrupt" in normalized_reason or "cancel" in normalized_reason:
+            return "cancelled"
+        return "failed"
+
+    summary = string_or_none(payload.get("summary")) or string_or_none(payload.get("preview")) or ""
+    if raw_status in {"completed", "success", ""} and _agent_failure_message(summary):
+        return "failed"
+
+    return status_map.get(raw_status, "unknown")
+
+
 def project_delegation_event(
     event_type: str,
     tool_name: str | None,
@@ -207,14 +254,7 @@ def project_delegation_event(
     elif event_type == "subagent.text":
         status = "running"
     elif event_type == "subagent.complete":
-        status = {
-            "completed": "completed",
-            "failed": "failed",
-            "error": "failed",
-            "interrupted": "cancelled",
-            "timeout": "timed_out",
-            "stalled": "stalled",
-        }.get(str(payload.get("status") or "").lower(), "unknown")
+        status = _project_subagent_completion_status(payload)
     else:
         return None
 
@@ -546,6 +586,99 @@ def _normalize_reasoning(value: Any) -> str | None:
         return None
     normalized = value.strip().lower()
     return normalized if normalized in ALLOWED_REASONING else None
+
+
+def _delegation_reasoning_effort_is_explicit(delegation_config: dict[str, Any]) -> bool:
+    raw = delegation_config.get("reasoning_effort") if isinstance(delegation_config, dict) else None
+    return bool(raw) or raw is False
+
+
+def _is_openai_codex_gpt55_model(model: Any) -> bool:
+    value = str(model or "").strip().lower().replace("_", "-")
+    return bool(re.search(r"(?:^|[/\-])gpt-5\.5(?:$|[\-])", value))
+
+
+def _delegated_child_reasoning_override(
+    parent_agent: Any,
+    *,
+    child_model: Any,
+    child_provider: Any,
+    delegation_config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a safe inherited child reasoning config, or None to leave Hermes native behavior.
+
+    Hermes delegate_task treats an empty delegation.reasoning_effort as "inherit
+    the parent". That breaks the known openai-codex gpt-5.5 child route when a
+    stronger parent model runs at max; gpt-5.5 accepts xhigh, not max. Keep this
+    exact and per-call rather than mutating config.yaml or falling back models.
+    """
+    if _delegation_reasoning_effort_is_explicit(delegation_config):
+        return None
+    if str(child_provider or "").strip().lower() != "openai-codex":
+        return None
+    if not _is_openai_codex_gpt55_model(child_model):
+        return None
+
+    reasoning = getattr(parent_agent, "reasoning_config", None)
+    if not isinstance(reasoning, dict) or reasoning.get("enabled") is False:
+        return None
+    if _normalize_reasoning(reasoning.get("effort")) != "max":
+        return None
+
+    safe_reasoning = dict(reasoning)
+    safe_reasoning["enabled"] = True
+    safe_reasoning["effort"] = "xhigh"
+    return safe_reasoning
+
+
+def _install_delegate_child_reasoning_compat() -> None:
+    """Patch Hermes delegate child construction in this worker process only."""
+    try:
+        delegate_tool = importlib.import_module("tools.delegate_tool")
+    except Exception:
+        return
+
+    with _DELEGATE_CHILD_REASONING_COMPAT_LOCK:
+        original = getattr(delegate_tool, "_build_child_agent", None)
+        if not callable(original) or getattr(original, "_olympus_child_reasoning_compat", False):
+            return
+
+        def wrapped_build_child_agent(*args: Any, **kwargs: Any) -> Any:
+            parent_agent = kwargs.get("parent_agent")
+            if parent_agent is None and len(args) >= 8:
+                parent_agent = args[7]
+            child_model = kwargs.get("model")
+            if child_model is None and len(args) >= 5:
+                child_model = args[4]
+            child_provider = kwargs.get("override_provider") or (args[8] if len(args) > 8 else None) or getattr(parent_agent, "provider", None)
+            try:
+                delegation_config = delegate_tool._load_config()
+            except Exception:
+                delegation_config = {}
+            safe_reasoning = _delegated_child_reasoning_override(
+                parent_agent,
+                child_model=child_model,
+                child_provider=child_provider,
+                delegation_config=delegation_config,
+            )
+            if safe_reasoning is None:
+                return original(*args, **kwargs)
+
+            # A private attribute view, never a temporary mutation of the live parent.
+            class ParentReasoningView:
+                reasoning_config = safe_reasoning
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(parent_agent, name)
+
+            if "parent_agent" in kwargs:
+                kwargs = {**kwargs, "parent_agent": ParentReasoningView()}
+            else:
+                args = (*args[:7], ParentReasoningView(), *args[8:])
+            return original(*args, **kwargs)
+        setattr(wrapped_build_child_agent, "_olympus_child_reasoning_compat", True)
+        setattr(wrapped_build_child_agent, "_olympus_original", original)
+        setattr(delegate_tool, "_build_child_agent", wrapped_build_child_agent)
 
 
 def _default_reasoning(cfg: dict[str, Any]) -> str | None:
@@ -1400,6 +1533,7 @@ def _create_agent(
     callbacks: dict[str, Any] | None = None,
 ) -> Any:
     _ensure_imports()
+    _install_delegate_child_reasoning_compat()
     cfg = _load_config()
     _register_mcp_servers(cfg)
     defaults = _defaults_from_config(cfg)
@@ -2278,6 +2412,8 @@ def _handle_request(request: dict[str, Any]) -> None:
                     request.get("limit"),
                     request.get("before"),
                 ))
+        elif request_type == "session.backgroundWork.get":
+            _result(request_id, _session_background_work(request))
         elif request_type == "session.get":
             _result(request_id, project_session_metadata(request.get("sessionId")))
         elif request_type == "goal.status":

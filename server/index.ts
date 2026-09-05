@@ -8,7 +8,7 @@ import { closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
 import { getRunStatus } from './live-chat.js';
 import { getTask } from './db/queries.js';
-import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
+import { getLatestTaskAgentRun, recoverInterruptedTaskAgentRuns } from './db/task-agent-runs.js';
 import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-queue.js';
 import { assertQueuedMessageDeliveryResponse, configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
 
@@ -59,6 +59,7 @@ async function listenWithFallback(
 }
 
 async function main() {
+  recoverInterruptedTaskAgentRuns();
   closeFrontend = await mountFrontend(app, httpServer);
   try {
     await adapter.start();

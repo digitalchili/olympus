@@ -6,7 +6,7 @@ const root = mkdtempSync(join(tmpdir(), 'run-failure-'));
 process.env.DB_PATH = join(root, 'state.db');
 const { default: db } = await import('../server/db/index.js');
 const { insertTask } = await import('../server/db/queries.js');
-const { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun } = await import('../server/db/task-agent-runs.js');
+const { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, recoverInterruptedTaskAgentRuns } = await import('../server/db/task-agent-runs.js');
 try {
   const task = insertTask({ title: 'Interrupted implementation', status: 'in_progress' });
   createTaskAgentRun({runId:'failed-run',taskId:task.id,kind:'chat',status:'streaming',startedAt:100});
@@ -19,5 +19,10 @@ try {
   finishTaskAgentRun('retry-run','done',400);
   assert.equal(getLatestTaskAgentRun(task.id)?.status, 'done');
   assert.equal(getLatestTaskAgentRun(task.id)?.errorCode ?? null, null, 'new success does not inherit old error');
+  createTaskAgentRun({runId:'orphan-run',taskId:task.id,kind:'chat',status:'streaming',startedAt:500});
+  assert.equal(recoverInterruptedTaskAgentRuns(600), 1);
+  assert.equal(getLatestTaskAgentRun(task.id)?.status, 'error');
+  assert.equal(getLatestTaskAgentRun(task.id)?.errorCode, 'worker_restarted');
+  assert.equal(recoverInterruptedTaskAgentRuns(700), 0, 'restart recovery is idempotent and preserves terminal runs');
 } finally { db.close(); rmSync(root,{recursive:true,force:true}); }
 console.log('Task failure persistence tests passed');

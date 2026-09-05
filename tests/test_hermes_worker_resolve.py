@@ -9,6 +9,7 @@ instances (HTTP 401 "User not found").
 
 import os
 import sys
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -155,6 +156,77 @@ class ResolveModelProviderTest(unittest.TestCase):
         self.assertEqual(astra["label"], "GPT-6 Astra")
         self.assertEqual(astra["source"], "catalog")
         self.assertEqual(astra["provider"], "openai-codex")
+
+    def test_openai_codex_gpt55_child_inherits_xhigh_instead_of_parent_max(self):
+        parent = SimpleNamespace(
+            model="gpt-6-astra",
+            provider="openai-codex",
+            reasoning_config={"enabled": True, "effort": "max"},
+        )
+
+        self.assertEqual(
+            hermes_worker._delegated_child_reasoning_override(
+                parent,
+                child_model="gpt-5.5",
+                child_provider="openai-codex",
+                delegation_config={"model": "gpt-5.5", "reasoning_effort": ""},
+            ),
+            {"enabled": True, "effort": "xhigh"},
+        )
+        self.assertEqual(parent.reasoning_config, {"enabled": True, "effort": "max"})
+
+    def test_explicit_delegation_reasoning_is_left_to_native_parser(self):
+        parent = SimpleNamespace(
+            model="gpt-6-astra",
+            provider="openai-codex",
+            reasoning_config={"enabled": True, "effort": "max"},
+        )
+
+        self.assertIsNone(
+            hermes_worker._delegated_child_reasoning_override(
+                parent,
+                child_model="gpt-5.5",
+                child_provider="openai-codex",
+                delegation_config={"model": "gpt-5.5", "reasoning_effort": "high"},
+            )
+        )
+
+    def test_delegate_tool_patch_applies_child_reasoning_only_during_construction(self):
+        observed_reasoning = []
+        parent = SimpleNamespace(
+            model="gpt-6-astra",
+            provider="openai-codex",
+            reasoning_config={"enabled": True, "effort": "max"},
+        )
+
+        def build_child_agent(**kwargs):
+            observed_reasoning.append(dict(kwargs["parent_agent"].reasoning_config))
+            self.assertEqual(parent.reasoning_config["effort"], "max", "live parent must never be mutated, even during construction")
+            return SimpleNamespace(session_id="child-session")
+
+        fake_delegate = types.ModuleType("tools.delegate_tool")
+        setattr(fake_delegate, "_build_child_agent", build_child_agent)
+        setattr(fake_delegate, "_load_config", lambda: {"model": "gpt-5.5", "reasoning_effort": ""})
+        fake_tools = types.ModuleType("tools")
+        setattr(fake_tools, "__path__", [])
+        setattr(fake_tools, "delegate_tool", fake_delegate)
+
+        with patch.dict(sys.modules, {"tools": fake_tools, "tools.delegate_tool": fake_delegate}):
+            hermes_worker._install_delegate_child_reasoning_compat()
+            fake_delegate._build_child_agent(
+                task_index=0,
+                goal="child",
+                context=None,
+                toolsets=None,
+                model="gpt-5.5",
+                max_iterations=50,
+                task_count=1,
+                parent_agent=parent,
+                override_provider="openai-codex",
+            )
+
+        self.assertEqual(observed_reasoning, [{"enabled": True, "effort": "xhigh"}])
+        self.assertEqual(parent.reasoning_config, {"enabled": True, "effort": "max"})
 
     def test_requested_model_resolution_preserves_explicit_settings(self):
         agent = SimpleNamespace(

@@ -108,6 +108,9 @@ assert.match(
   'live SSE errors use the emitted error code for the same banner as reload',
 );
 
+assert.equal(runFailureNoticeForState({ liveRun: liveErrorRun, latestAgentRun: { ...failedPersistedRun, runId: 'newer-success', status: 'done', startedAt: 400 } }), null, 'a stale error snapshot cannot override newer persisted success');
+assert.ok(runFailureNoticeForState({ liveRun: { ...streamingLiveRun, status: 'done' }, latestAgentRun: { ...failedPersistedRun, runId: 'newer-failure', startedAt: 400 } }), 'stale live success cannot hide a newer durable failure');
+
 const rendered = renderToStaticMarkup(createElement(RunFailureBanner, { notice: iterationNotice }));
 assert.match(rendered, /Run paused/);
 assert.match(rendered, /tool-iteration/);

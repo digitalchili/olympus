@@ -31,6 +31,9 @@ try {
  const queued={id:'pending-followup',content:'Continue implementation',settings:{mode:'task'},invitedProfileIds:[],collaborationScope:'discussion',confirmPersistentCollaboration:false};
  assert.equal((await fetch(`${api}/${task.id}/queued-message?profile=default`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(queued)})).status,200);
  adapter.getBackgroundWork=async()=>({available:true,work:[{id:'proc-owned',kind:'process',status:'running'}]});
+ const legacy=insertTask({title:'Legacy interrupted task',status:'in_progress',profile_name:'default'});tasks.push(legacy.id);
+ assert.equal((await post(legacy.id,{content:'Retry older task'})).status,409,'missing durable run row must not bypass inventory');
+ assert.equal(started,0);
  let response=await post(task.id,{content:queued.content,queuedMessageId:queued.id});
  assert.equal(response.status,409,'surviving task-owned work prevents duplicate execution');
  assert.equal((await response.json()).code,'BACKGROUND_WORK_ACTIVE');assert.equal(started,0);

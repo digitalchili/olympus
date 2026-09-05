@@ -437,7 +437,7 @@ export class HermesWorkerClient {
     if (pending.kind !== 'stream') return;
 
     pending.push(event);
-    if (event.type === 'done') {
+    if (event.type === 'done' || event.type === 'error') {
       this.pending.delete(event.id);
       pending.end();
     }

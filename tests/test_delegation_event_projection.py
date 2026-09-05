@@ -91,6 +91,49 @@ class DelegationEventProjectionTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, serialized)
 
+    def test_projects_native_completed_failure_payload_as_failed(self) -> None:
+        # Mirrors tools.delegate_tool._run_single_child complete_kwargs: current
+        # native callbacks do not include exit_reason, so Olympus must not trust
+        # status='completed' when the streamed summary is a provider failure.
+        event = project_delegation_event(
+            "subagent.complete",
+            None,
+            {
+                "subagent_id": "child-1",
+                "task_index": 0,
+                "task_count": 1,
+                "status": "completed",
+                "summary": "Non-retryable client error: Error code: 400 - unsupported reasoning.effort max",
+                "api_calls": 0,
+            },
+            parent_session_id="task-1",
+            delegation_id="deleg-1",
+        )
+
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event["status"], "failed")
+
+    def test_projects_incomplete_completion_metadata_as_failed(self) -> None:
+        event = project_delegation_event(
+            "subagent.complete",
+            None,
+            {
+                "subagent_id": "child-1",
+                "task_index": 0,
+                "task_count": 1,
+                "status": "completed",
+                "exit_reason": "max_iterations",
+                "api_calls": 2,
+            },
+            parent_session_id="task-1",
+            delegation_id="deleg-1",
+        )
+
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event["status"], "failed")
+
     def test_maps_lifecycle_states_and_rejects_missing_identity(self) -> None:
         base = {
             "subagent_id": "child-1",

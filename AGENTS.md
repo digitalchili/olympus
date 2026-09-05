@@ -69,9 +69,9 @@ All persistent state lives under `OLYMPUS_DISPATCH_HOME` (default: `~/.olympus-d
 |----------|--------|-----------|
 | Agent communication | Python subprocess + JSONL | Imports Hermes AIAgent directly — no HTTP gateway overhead, structured streaming events, per-task model/reasoning control |
 | Task execution | Autonomous agent session | Each task IS a Hermes session. The agent decides execution strategy (self, child session, Hermes cron job/scheduled task). Our backend doesn't manage child sessions. |
-| Review transition | Reviewable terminal agent runs move to review | After a chat or goal run succeeds—or terminates after producing visible assistant/tool output—the server records the response metadata and moves an `in_progress` task to `in_review` in the same update. Failures with no reviewable output stay retryable. |
+| Review transition | Reviewable terminal agent runs move to review | Only a successful chat or goal run moves an `in_progress` task to `in_review`. Failed, stopped, incomplete and timed-out runs remain unfinished even after useful output; their safe blocker persists and queued follow-ups pause. |
 | Source of truth | Hermes SessionDB for chat history; Olympus Dispatch SQLite for task metadata and queued follow-ups; in-memory LiveChatRun for active streams | Hermes owns all transcripts and replay. Olympus Dispatch has no transcript table, but persists the single queued follow-up for each task so browser reloads cannot lose it. `tasks.id` is the Hermes root session ID. During active streaming, `live-chat.ts` holds an in-memory `LiveChatRun`. After streaming ends and the run TTL expires, chat history is projected from Hermes SessionDB on demand. |
-| Status ownership | Reviewable terminal runs auto-move to `in_review`; human moves everything else via drag-drop | Clean separation: the system queues agent work with visible output for review, and humans control final completion. |
+| Status ownership | Successful terminal runs auto-move to `in_review`; human moves everything else via drag-drop | Failed runs do not imply completion; humans control final completion. |
 
 ## Key Patterns
 
@@ -158,7 +158,7 @@ Chat stream completes (done event in consumeChatRun)
 
 The Python worker communicates via JSONL (one JSON object per line) over stdin/stdout.
 
-**Request types**: `health`, `chat`, `session.messages.get`, `session.get`, `goal.status`, `goal.set`, `goal.pause`, `goal.resume`, `goal.clear`, `goal.evaluate`, `settings.get`, `settings.set`, `models.list`, `title.generate`, `session.compress`, `scheduledTasks.list`, `scheduledTasks.get`, `scheduledTasks.create`, `scheduledTasks.update`, `scheduledTasks.pause`, `scheduledTasks.resume`, `scheduledTasks.run`, `scheduledTasks.remove`, `scheduledTasks.tick`
+**Request types**: `health`, `chat`, `session.backgroundWork.get`, `session.messages.get`, `session.get`, `goal.status`, `goal.set`, `goal.pause`, `goal.resume`, `goal.clear`, `goal.evaluate`, `settings.get`, `settings.set`, `models.list`, `title.generate`, `session.compress`, `scheduledTasks.list`, `scheduledTasks.get`, `scheduledTasks.create`, `scheduledTasks.update`, `scheduledTasks.pause`, `scheduledTasks.resume`, `scheduledTasks.run`, `scheduledTasks.remove`, `scheduledTasks.tick`
 
 **Stream events** (emitted during `chat` requests):
 

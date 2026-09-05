@@ -102,6 +102,12 @@ export function finishTaskAgentRun(runId: string, status: LiveChatRunStatus, com
     ? safeRunErrorCode(errorCode) : status === 'stopped' ? 'run_stopped' : null });
 }
 
+/** Startup only, before accepting requests under Olympus's single-writer contract. */
+export function recoverInterruptedTaskAgentRuns(now = Date.now()): number {
+  return db.prepare(`UPDATE task_agent_runs SET status = 'error', error_code = 'worker_restarted',
+    completed_at = ?, updated_at = ? WHERE status IN ('streaming', 'compacting')`).run(now, now).changes;
+}
+
 export function getLatestTaskAgentRun(taskId: string): TaskAgentRun | undefined {
   return project(latestRun.get(taskId) as AgentRunRow | undefined);
 }

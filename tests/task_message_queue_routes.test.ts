@@ -27,6 +27,7 @@ const [{ default: app, adapter }, queries, collaboration, { default: db }] = awa
 ]);
 const { discardRun } = await import('../server/live-chat.js');
 const originalChatStream = adapter.chatStream;
+adapter.getBackgroundWork = async () => ({ available: true, work: [] });
 adapter.chatStream = async function* (sessionId): AsyncIterable<StreamEvent> {
   yield { type: 'done', sessionId, interrupted: true, context: null };
 };

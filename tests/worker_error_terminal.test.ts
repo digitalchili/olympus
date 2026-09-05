@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { HermesWorkerClient } from '../server/adapters/hermes-worker.js';
+const worker = new HermesWorkerClient('/unused-hermes-home');
+const internal = worker as unknown as { pending: Map<string, unknown>; handleLine(line: string): void };
+let pushed = 0, ended = 0;
+internal.pending.set('run', { kind: 'stream', push() { pushed++; }, end() { ended++; }, fail() { throw new Error('structured failure should be pushed'); } });
+internal.handleLine(JSON.stringify({ id: 'run', type: 'error', error: { code: 'worker_error', message: 'Provider rejected request' } }));
+assert.equal(pushed, 1);
+assert.equal(ended, 1, 'error-only worker streams settle immediately without waiting for watchdog');
+assert.equal(internal.pending.has('run'), false);
+internal.handleLine(JSON.stringify({ id: 'run', type: 'done', sessionId: 'session' }));
+assert.equal(ended, 1, 'trailing done cannot resettle an error');
+console.log('Worker error terminal tests passed');

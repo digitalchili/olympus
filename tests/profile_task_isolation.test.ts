@@ -234,6 +234,7 @@ try {
     let markAgentRunStarted!: () => void;
     const agentRunStarted = new Promise<void>((resolve) => { markAgentRunStarted = resolve; });
     const originalChatStream = adapter.chatStream;
+    adapter.getBackgroundWork = async () => ({ available: true, work: [] });
     adapter.chatStream = async function* (): AsyncIterable<StreamEvent> {
       markAgentRunStarted();
       await agentRunBlocked;

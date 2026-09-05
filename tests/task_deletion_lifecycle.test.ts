@@ -78,6 +78,7 @@ try {
   const base = `http://127.0.0.1:${address.port}`;
 
   const originalChatStream = adapter.chatStream;
+  adapter.getBackgroundWork = async () => ({ available: true, work: [] });
   const originalInterruptChat = adapter.interruptChat;
   const originalSetGoal = adapter.setGoal;
   const originalEvaluateGoal = adapter.evaluateGoal;
@@ -210,10 +211,7 @@ try {
     const firstConcurrentGoalSetupStarted = new Promise<void>((resolve) => {
       markFirstConcurrentGoalSetupStarted = resolve;
     });
-    let markSecondConcurrentGoalSetupStarted!: () => void;
-    const secondConcurrentGoalSetupStarted = new Promise<void>((resolve) => {
-      markSecondConcurrentGoalSetupStarted = resolve;
-    });
+
     let concurrentGoalSetupCount = 0;
     const concurrentGoalStreamsSawTask: boolean[] = [];
     let markLatestConcurrentGoalStreamSettled!: () => void;
@@ -227,7 +225,6 @@ try {
         releaseConcurrentGoalSetups[setupIndex] = resolve;
       });
       if (setupIndex === 0) markFirstConcurrentGoalSetupStarted();
-      else markSecondConcurrentGoalSetupStarted();
       await blocked;
       return {
         goal: `concurrent goal ${setupIndex + 1}`,
@@ -254,7 +251,9 @@ try {
       `${base}/api/tasks/${concurrentGoalTask.id}/messages?profile=writer`,
       jsonRequest('POST', { content: 'start concurrent goal two', mode: 'goal' }),
     );
-    await secondConcurrentGoalSetupStarted;
+    const secondConcurrentGoalResponse = await secondConcurrentGoalResponsePromise;
+    assert.equal(secondConcurrentGoalResponse.status, 409, 'duplicate goal startup is refused before another worker starts');
+    assert.equal(concurrentGoalSetupCount, 1);
 
     let concurrentGoalDeletionSettled = false;
     const concurrentGoalDeletePromise = fetch(
@@ -265,13 +264,7 @@ try {
       return response;
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(concurrentGoalDeletionSettled, false, 'deletion must wait while both goal setups are blocked');
-
-    releaseConcurrentGoalSetups[1]();
-    const secondConcurrentGoalResponse = await secondConcurrentGoalResponsePromise;
-    assert.equal(secondConcurrentGoalResponse.status, 202);
-    await latestConcurrentGoalStreamSettled;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(concurrentGoalDeletionSettled, false, 'deletion must wait while the accepted goal setup is blocked');
     const deletionWaitedForOlderGoalSetup = !concurrentGoalDeletionSettled;
     const taskSurvivedLatestGoalSetup = queries.getTask(concurrentGoalTask.id) !== undefined;
 
@@ -285,13 +278,13 @@ try {
     assert.equal(
       deletionWaitedForOlderGoalSetup,
       true,
-      'deletion must not complete after only the latest concurrent goal setup settles',
+      'deletion must not complete while the accepted goal setup is blocked',
     );
     assert.equal(taskSurvivedLatestGoalSetup, true, 'task row must survive until every concurrent goal setup settles');
     assert.deepEqual(
       concurrentGoalStreamsSawTask,
-      [true, true],
-      'neither concurrent goal may resume after deletion and fall back to the default profile',
+      [true],
+      'the accepted goal must not resume after deletion and fall back to the default profile',
     );
     assert.equal(queries.getTask(concurrentGoalTask.id), undefined);
 

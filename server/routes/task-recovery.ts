@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import type { AgentAdapter } from '../adapters/types.js';
 import { getTask } from '../db/queries.js';
-import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
 import { getRunStatus } from '../live-chat.js';
 import { requireTaskForProfile } from '../profile-context.js';
 import type { Task } from '../../shared/types.js';
@@ -22,7 +21,6 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
     const release = () => starting.delete(task.id);
     res.once('finish', release);
     res.once('close', release);
-    if (!getLatestTaskAgentRun(task.id) && task.last_agent_response_at === null) return next();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const inventory = await Promise.race([

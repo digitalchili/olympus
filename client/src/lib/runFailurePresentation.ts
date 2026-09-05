@@ -71,7 +71,12 @@ export function runFailureNoticeForState(input: {
   liveRun: LiveChatRun | null;
   latestAgentRun: TaskAgentRun | null;
 }): RunFailureNotice | null {
-  return deriveRunFailureNotice(input.liveRun ?? input.latestAgentRun);
+  const { liveRun, latestAgentRun } = input;
+  // History hydration and SSE can arrive out of order across run identities.
+  const latest = liveRun && latestAgentRun && latestAgentRun.startedAt > liveRun.startedAt
+    ? latestAgentRun
+    : liveRun ?? latestAgentRun;
+  return deriveRunFailureNotice(latest);
 }
 
 export function shouldAutoSendQueuedMessage(input: {
