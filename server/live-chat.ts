@@ -272,6 +272,11 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     run.status = 'error';
     run.error = error;
     run.errorCode = safeRunErrorCode(event.code);
+    if (assistant.tools) {
+      assistant.tools = assistant.tools.map((tool) => tool.status === 'running'
+        ? { ...tool, status: 'error' }
+        : tool);
+    }
     if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
       assistant.content = assistant.content
         ? `${assistant.content}\n[Error: ${error}]`

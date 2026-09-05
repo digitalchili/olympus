@@ -49,6 +49,13 @@ export type WorkerRequest =
       taskId?: string;
       taskTitle?: string | null;
       workdir?: string | null;
+      runBudget?: {
+        maxRuntimeMs: number;
+        hardDeadlineAtMs: number;
+        finalizeBeforeMs: number;
+        childDrainBeforeMs: number;
+        maxDelegatedChildren: number;
+      };
     }
   | {
       id: string;

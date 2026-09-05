@@ -2,6 +2,7 @@ const INTERNAL_RUN_STOP_CODES = new Set([
   'iteration_limit',
   'run_idle_timeout',
   'run_runtime_timeout',
+  'deadline_finalized',
 ]);
 
 const PERSISTED_RUN_ERROR_CODES = new Set([

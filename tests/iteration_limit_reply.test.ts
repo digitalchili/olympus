@@ -36,6 +36,7 @@ const clientRun: LiveChatRun = {
     role: 'assistant',
     content: 'Here is the live partial result.',
     created_at: 100,
+    tools: [{ tool: 'delegate_task', status: 'running' }],
   }],
 };
 applyLiveErrorEvent(clientRun, {
@@ -45,6 +46,7 @@ applyLiveErrorEvent(clientRun, {
 }, 200);
 assert.equal(clientRun.status, 'error');
 assert.match(clientRun.error ?? '', /iteration_limit/);
+assert.equal(clientRun.messages.at(-1)?.tools?.at(-1)?.status, 'error');
 assert.equal(
   clientRun.messages.at(-1)?.content,
   'Here is the live partial result.',

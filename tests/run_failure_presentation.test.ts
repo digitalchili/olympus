@@ -30,6 +30,15 @@ assert.match(runtimeNotice.title, /run cap/i);
 assert.match(runtimeNotice.detail, /unfinished/i);
 assert.match(runtimeNotice.detail, /partial transcript/i);
 
+const deadlineNotice = deriveRunFailureNotice({
+  ...failedPersistedRun,
+  runId: 'run-deadline-finalized',
+  errorCode: 'deadline_finalized',
+});
+assert.ok(deadlineNotice);
+assert.match(deadlineNotice.title, /deadline reached/i);
+assert.match(deadlineNotice.detail, /checkpoint/i);
+
 const idleNotice = deriveRunFailureNotice({
   ...failedPersistedRun,
   runId: 'run-idle',

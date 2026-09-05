@@ -52,7 +52,14 @@ import { LocalProfileError } from '../local-profiles.js';
 import { acquireProfileWork } from '../profile-deletion.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
-import { RunWatchdogError, runWatchdogConfig, withRunWatchdog, type RunWatchdogReason } from '../run-watchdog.js';
+import {
+  RunWatchdogError,
+  createRunBudget,
+  remainingRunWatchdogConfig,
+  withRunWatchdog,
+  type AgentRunBudget,
+  type RunWatchdogReason,
+} from '../run-watchdog.js';
 import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
@@ -303,6 +310,7 @@ async function streamChatTurn(
     captureResponseText?: boolean;
     supplementalSystemMessage?: string;
     hideInternalEvents?: boolean;
+    runBudget?: AgentRunBudget;
   },
 ): Promise<StreamChatTurnResult> {
   let sawDone = false;
@@ -311,14 +319,19 @@ async function streamChatTurn(
   let hadError = false;
   let interrupted = false;
   let pendingSteer: string | undefined;
+  const runBudget = options.runBudget ?? createRunBudget();
+  const finalizationMinutes = Math.max(1, Math.round(runBudget.finalizeBeforeMs / 60_000));
+  const budgetMinutes = Math.max(1, Math.round(runBudget.maxRuntimeMs / 60_000));
+  const deadlineMessage = `\n\n<run_budget>\n  <absolute_minutes>${budgetMinutes}</absolute_minutes>\n  <hard_deadline_epoch_ms>${runBudget.hardDeadlineAtMs}</hard_deadline_epoch_ms>\n  <finalization_reserve_minutes>${finalizationMinutes}</finalization_reserve_minutes>\n  <max_delegated_children>${runBudget.maxDelegatedChildren}</max_delegated_children>\n  <rule>Finish implementation early enough to preserve the finalization reserve. Use delegation sparingly—normally one implementer and one independent reviewer—and never exceed the stated cumulative child cap. Before the reserve begins, stop opening new work, save durable checkpoints, reconcile existing child results, run the most important remaining verification, and send the user a truthful final status. Do not start replacement reviewers near the deadline.</rule>\n</run_budget>`;
 
   try {
     const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
-      systemMessage: taskSystemMessage(runTask, options.supplementalSystemMessage),
+      systemMessage: taskSystemMessage(runTask, `${options.supplementalSystemMessage ?? ''}${deadlineMessage}`),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
+      runBudget,
     }), {
-      ...runWatchdogConfig(),
+      ...remainingRunWatchdogConfig(runBudget),
       onTimeout: async (reason: RunWatchdogReason) => {
         const message = reason === 'idle'
           ? 'Stopped automatically because the run stopped producing activity.'
@@ -387,8 +400,9 @@ async function streamChatTurn(
 async function consumeChatRun(runTask: Task, sessionId: string, content: string, runId: string): Promise<void> {
   let turnContent = content;
   let finalContext: ContextUsage | null | undefined;
+  const runBudget = createRunBudget();
   while (true) {
-    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true });
+    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true, runBudget });
     if (result.context !== undefined) finalContext = result.context;
     if (!result.pendingSteer || result.hadError || result.interrupted) break;
     turnContent = result.pendingSteer;
@@ -420,6 +434,7 @@ async function collectCollaborationPhase(
   phase: CollaborationContributionPhase,
   active: ActiveCollaboration,
   taskContext: string,
+  runBudget: AgentRunBudget,
 ): Promise<void> {
   const proposals = visiblePhaseResults(collaboration, 'proposal');
   const contributions = collaboration.contributions.filter((item) => item.phase === phase && item.status === 'running');
@@ -431,7 +446,7 @@ async function collectCollaborationPhase(
       message: taskContext + (phase === 'proposal'
         ? `Current collaboration question:\n${collaboration.question}`
         : reviewContributorMessage(collaboration.question, contribution.profile_id, proposals)),
-      options: { systemMessage: contributorSystemMessage(runTask.workdir, phase) },
+      options: { systemMessage: contributorSystemMessage(runTask.workdir, phase), runBudget },
     })),
     async (invocation) => withProfileWork(invocation.profileId, () => adapter.chatForProfile(
       invocation.profileId,
@@ -442,8 +457,10 @@ async function collectCollaborationPhase(
     (result) => {
       if (active.cancelled) return;
       const text = result.text?.trim();
-      completeCollaborationContribution(result.id, text
-        ? { status: 'completed', content: text }
+      completeCollaborationContribution(result.id, text && result.error
+        ? { status: 'error', content: text, error: result.error }
+        : text
+          ? { status: 'completed', content: text }
         : { status: 'error', error: result.error ?? 'Contributor returned no visible recommendation' });
     },
   );
@@ -457,6 +474,7 @@ async function consumeCollaborationRun(
   active: ActiveCollaboration,
 ): Promise<void> {
   let finalContext: ContextUsage | null | undefined;
+  const runBudget = createRunBudget();
   try {
     let collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run was not persisted');
@@ -468,7 +486,7 @@ async function consumeCollaborationRun(
       // still proceed from the current question without inventing other context.
     }
 
-    await collectCollaborationPhase(runTask, collaboration, 'proposal', active, taskContext);
+    await collectCollaborationPhase(runTask, collaboration, 'proposal', active, taskContext, runBudget);
     if (active.cancelled) return;
     collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run disappeared');
@@ -482,7 +500,7 @@ async function consumeCollaborationRun(
       collaboration = startCollaborationPhase(collaborationRunId, 'review');
       if (!collaboration) throw new Error('Could not start collaboration review phase');
       active.phase = 'review';
-      await collectCollaborationPhase(runTask, collaboration, 'review', active, taskContext);
+      await collectCollaborationPhase(runTask, collaboration, 'review', active, taskContext, runBudget);
       if (active.cancelled) return;
     }
 
@@ -504,6 +522,7 @@ async function consumeCollaborationRun(
       completeOnDone: true,
       supplementalSystemMessage: supplemental,
       hideInternalEvents: true,
+      runBudget,
     });
     if (chair.context !== undefined) finalContext = chair.context;
     if (active.cancelled || chair.interrupted || getRunStatus(runTask.id)?.status === 'stopped') {
@@ -547,6 +566,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
   let turnContent: string | null = initialContent;
   let turnAlreadyVisible = false;
   let turnCount = 0;
+  const runBudget = createRunBudget();
 
   try {
     while (turnContent) {
@@ -563,6 +583,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
       const turn = await streamChatTurn(runTask, sessionId, turnContent, {
         completeOnDone: false,
         captureResponseText: true,
+        runBudget,
       });
       if (turn.context !== undefined) finalContext = turn.context;
       const currentRun = getRunStatus(runTask.id);

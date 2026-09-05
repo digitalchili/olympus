@@ -91,8 +91,13 @@ export async function collectContributors(
       const response = await invoke(invocation);
       result = { ...invocation, text: response.text.trim() };
     } catch (error) {
+      const partialText = error instanceof Error && 'partialText' in error
+        && typeof error.partialText === 'string'
+        ? error.partialText.trim()
+        : '';
       result = {
         ...invocation,
+        ...(partialText ? { text: partialText } : {}),
         error: error instanceof Error ? error.message : 'Contributor failed',
       };
     }

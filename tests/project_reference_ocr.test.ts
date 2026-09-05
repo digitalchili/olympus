@@ -100,7 +100,9 @@ try {
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.OLYMPUS_VISION_API_KEY;
-  delete process.env.OLYMPUS_DISABLE_VISION_OCR;
+  // HERMES_HOME may contain usable provider auth on developer/CI hosts, so
+  // disable Vision explicitly to keep this "neither available" case deterministic.
+  process.env.OLYMPUS_DISABLE_VISION_OCR = 'true';
   process.env.OLYMPUS_PROJECT_REFERENCES_OCR_COMMAND = 'non_existent_binary_xyz_123';
 
   const noOcrResult = await extractReferenceText({

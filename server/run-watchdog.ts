@@ -7,6 +7,18 @@ export interface RunWatchdogOptions {
   onTimeout: (reason: RunWatchdogReason) => Promise<void> | void;
 }
 
+export interface RunWatchdogConfig {
+  maxRuntimeMs: number;
+  idleTimeoutMs: number;
+  finalizeBeforeMs: number;
+  childDrainBeforeMs: number;
+  maxDelegatedChildren: number;
+}
+
+export interface AgentRunBudget extends RunWatchdogConfig {
+  hardDeadlineAtMs: number;
+}
+
 export class RunWatchdogError extends Error {
   readonly reason: RunWatchdogReason;
   readonly code: 'run_idle_timeout' | 'run_runtime_timeout';
@@ -47,10 +59,46 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function runWatchdogConfig(environment: NodeJS.ProcessEnv = process.env): Pick<RunWatchdogOptions, 'maxRuntimeMs' | 'idleTimeoutMs'> {
+function positiveBelow(value: string | undefined, fallback: number, upperExclusive: number): number {
+  const parsed = positiveInteger(value, fallback);
+  if (parsed < upperExclusive) return parsed;
+  return Math.max(1, Math.floor(upperExclusive / 2));
+}
+
+export function runWatchdogConfig(environment: NodeJS.ProcessEnv = process.env): RunWatchdogConfig {
+  const maxRuntimeMs = positiveInteger(environment.OLYMPUS_CHAT_MAX_RUN_MS, 60 * 60_000);
+  const finalizeBeforeMs = positiveBelow(
+    environment.OLYMPUS_CHAT_FINALIZE_BEFORE_MS,
+    5 * 60_000,
+    maxRuntimeMs,
+  );
   return {
-    maxRuntimeMs: positiveInteger(environment.OLYMPUS_CHAT_MAX_RUN_MS, 30 * 60_000),
+    maxRuntimeMs,
     idleTimeoutMs: positiveInteger(environment.OLYMPUS_CHAT_IDLE_TIMEOUT_MS, 5 * 60_000),
+    finalizeBeforeMs,
+    childDrainBeforeMs: positiveBelow(
+      environment.OLYMPUS_CHAT_CHILD_DRAIN_BEFORE_MS,
+      2 * 60_000,
+      finalizeBeforeMs,
+    ),
+    maxDelegatedChildren: positiveInteger(environment.OLYMPUS_CHAT_MAX_DELEGATED_CHILDREN, 4),
+  };
+}
+
+export function createRunBudget(
+  config: RunWatchdogConfig = runWatchdogConfig(),
+  nowMs = Date.now(),
+): AgentRunBudget {
+  return { ...config, hardDeadlineAtMs: nowMs + config.maxRuntimeMs };
+}
+
+export function remainingRunWatchdogConfig(
+  budget: AgentRunBudget,
+  nowMs = Date.now(),
+): RunWatchdogConfig {
+  return {
+    ...budget,
+    maxRuntimeMs: Math.max(1, budget.hardDeadlineAtMs - nowMs),
   };
 }
 

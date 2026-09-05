@@ -82,6 +82,13 @@ try {
   assert.equal(results[0].text, 'recommendation');
   assert.equal(results[1].error, 'unavailable');
 
+  const partialError = Object.assign(new Error('deadline checkpoint'), { partialText: 'useful partial advice' });
+  const partialResults = await collectContributors([
+    { id: 'partial', profileId: 'writer', sessionId: 's3', message: 'q', options: {} },
+  ], async () => { throw partialError; });
+  assert.equal(partialResults[0].text, 'useful partial advice');
+  assert.equal(partialResults[0].error, 'deadline checkpoint');
+
   const context = chairCollaborationContext([
     { profileId: 'writer', label: 'Writer', phase: 'proposal', content: 'Use option A', error: null },
     { profileId: 'researcher', label: 'Researcher', phase: 'proposal', content: null, error: 'Timed out' },

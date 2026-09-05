@@ -41,6 +41,13 @@ function runFailureText(status: RunFailureNotice['status'], code: string | null)
     };
   }
 
+  if (code === 'deadline_finalized') {
+    return {
+      title: 'Run paused: deadline reached',
+      detail: 'Hermes saved a final checkpoint before the hard deadline. Review completed, verified, and remaining work before continuing.',
+    };
+  }
+
   if (code === 'run_idle_timeout') {
     return {
       title: 'Run paused: idle timeout',

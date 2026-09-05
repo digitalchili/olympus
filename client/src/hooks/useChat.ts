@@ -92,6 +92,11 @@ export function applyLiveErrorEvent(
   run.error = error;
   (run as LiveChatRun & { errorCode?: string | null }).errorCode = event.code ?? null;
   const assistant = ensureAssistant(run);
+  if (assistant.tools) {
+    assistant.tools = assistant.tools.map((tool) => tool.status === 'running'
+      ? { ...tool, status: 'error' }
+      : tool);
+  }
   if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
     assistant.content = assistant.content
       ? `${assistant.content}\n[Error: ${error}]`

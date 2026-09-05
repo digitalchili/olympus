@@ -48,6 +48,7 @@ export function buildChatWorkerRequest(
     taskId: options?.task?.id,
     taskTitle: options?.task?.title ?? null,
     workdir: options?.task?.workdir ?? null,
+    runBudget: options?.runBudget,
   };
 }
 
@@ -519,6 +520,7 @@ export class HermesWorkerAdapter implements AgentAdapter {
     if (error) {
       const err = new Error(error);
       if (errorCode) Object.assign(err, { code: errorCode });
+      if (text.trim()) Object.assign(err, { partialText: text.trim() });
       throw err;
     }
     return { text, sessionId: resolvedSessionId };

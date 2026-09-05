@@ -28,6 +28,13 @@ export interface AgentRunOptions {
     title?: string | null;
     workdir?: string | null;
   };
+  runBudget?: {
+    maxRuntimeMs: number;
+    hardDeadlineAtMs: number;
+    finalizeBeforeMs: number;
+    childDrainBeforeMs: number;
+    maxDelegatedChildren: number;
+  };
 }
 
 export interface StreamEvent {

@@ -9,6 +9,13 @@ const request = buildChatWorkerRequest('session-1', 'Edit the project', {
     title: 'Editor task',
     workdir: '/srv/olympus/project-checkouts/project-1',
   },
+  runBudget: {
+    maxRuntimeMs: 3_600_000,
+    hardDeadlineAtMs: 9_999_999,
+    finalizeBeforeMs: 300_000,
+    childDrainBeforeMs: 120_000,
+    maxDelegatedChildren: 4,
+  },
 });
 
 assert.deepEqual(request, {
@@ -20,6 +27,13 @@ assert.deepEqual(request, {
   taskId: 'task-1',
   taskTitle: 'Editor task',
   workdir: '/srv/olympus/project-checkouts/project-1',
+  runBudget: {
+    maxRuntimeMs: 3_600_000,
+    hardDeadlineAtMs: 9_999_999,
+    finalizeBeforeMs: 300_000,
+    childDrainBeforeMs: 120_000,
+    maxDelegatedChildren: 4,
+  },
 });
 
 console.log('Hermes worker task workspace protocol tests passed');

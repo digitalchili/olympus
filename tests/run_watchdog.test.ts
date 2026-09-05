@@ -1,5 +1,56 @@
 import assert from 'node:assert/strict';
-import { RunWatchdogError, withRunWatchdog } from '../server/run-watchdog.js';
+import {
+  RunWatchdogError,
+  createRunBudget,
+  remainingRunWatchdogConfig,
+  runWatchdogConfig,
+  withRunWatchdog,
+} from '../server/run-watchdog.js';
+
+{
+  const config = runWatchdogConfig({});
+  assert.equal(config.maxRuntimeMs, 60 * 60_000, 'task runs get a one-hour absolute ceiling');
+  assert.equal(config.idleTimeoutMs, 5 * 60_000);
+  assert.equal(config.finalizeBeforeMs, 5 * 60_000, 'the last five minutes are reserved for checkpoint/finalization');
+  assert.equal(config.childDrainBeforeMs, 2 * 60_000, 'children are drained before the hard deadline');
+  assert.equal(config.maxDelegatedChildren, 4, 'one task cannot fan out to ten reviewers');
+}
+
+{
+  const config = runWatchdogConfig({
+    OLYMPUS_CHAT_MAX_RUN_MS: '120000',
+    OLYMPUS_CHAT_FINALIZE_BEFORE_MS: '30000',
+    OLYMPUS_CHAT_CHILD_DRAIN_BEFORE_MS: '10000',
+    OLYMPUS_CHAT_MAX_DELEGATED_CHILDREN: '2',
+  });
+  assert.deepEqual(config, {
+    maxRuntimeMs: 120_000,
+    idleTimeoutMs: 5 * 60_000,
+    finalizeBeforeMs: 30_000,
+    childDrainBeforeMs: 10_000,
+    maxDelegatedChildren: 2,
+  });
+}
+
+{
+  const config = runWatchdogConfig({
+    OLYMPUS_CHAT_MAX_RUN_MS: '1000',
+    OLYMPUS_CHAT_FINALIZE_BEFORE_MS: '1000',
+    OLYMPUS_CHAT_CHILD_DRAIN_BEFORE_MS: '2000',
+    OLYMPUS_CHAT_MAX_DELEGATED_CHILDREN: '0',
+  });
+  assert.ok(config.finalizeBeforeMs < config.maxRuntimeMs);
+  assert.ok(config.childDrainBeforeMs < config.finalizeBeforeMs);
+  assert.equal(config.maxDelegatedChildren, 4);
+}
+
+{
+  const config = runWatchdogConfig({ OLYMPUS_CHAT_MAX_RUN_MS: '120000' });
+  const budget = createRunBudget(config, 1_000);
+  assert.equal(budget.hardDeadlineAtMs, 121_000);
+  assert.equal(remainingRunWatchdogConfig(budget, 61_000).maxRuntimeMs, 60_000);
+  assert.equal(remainingRunWatchdogConfig(budget, 122_000).maxRuntimeMs, 1);
+}
 
 async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
   const values: T[] = [];
