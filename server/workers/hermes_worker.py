@@ -2074,6 +2074,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     requested_provider = string_or_none(settings.get("provider"))
     requested_effort = _normalize_reasoning(settings.get("reasoningEffort"))
     run_budget = _run_budget(request)
+    interaction_deadline = time.monotonic() + run_budget.max_runtime_seconds
 
     session_id = string_or_none(request.get("sessionId")) or request_id
     message = request.get("message")
@@ -2239,6 +2240,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             "status_callback": on_status,
             "clarify_callback": partial(
                 INTERACTIONS.clarify, task_id, request_id,
+                deadline_monotonic=interaction_deadline,
                 interrupt=lambda reason: _try_interrupt_agent(agent_ref["agent"], reason) if agent_ref.get("agent") else None,
             ),
         },
@@ -2291,6 +2293,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             thinking_before = len(state["thinking"])
             approval_callback = partial(
                 INTERACTIONS.approve, task_id, request_id,
+                deadline_monotonic=interaction_deadline,
                 interrupt=lambda reason: _try_interrupt_agent(agent, reason),
             )
             with native_approval_context(approval_callback, session_id):

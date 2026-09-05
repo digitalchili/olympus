@@ -229,4 +229,18 @@ async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
     onTimeout: () => { throw new Error('human wait is not model runtime'); },
   })), ['question', 'answer', 'done'], 'bounded human waits pause both runtime and idle limits');
 }
+{
+  let stopped = false;
+  async function* waitsPastDeadline() {
+    yield 'question';
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    yield 'late approval';
+  }
+  await assert.rejects(() => collect(withRunWatchdog(waitsPastDeadline(), {
+    maxRuntimeMs: 1000, idleTimeoutMs: 1000, hardDeadlineAtMs: Date.now() + 30,
+    pauseUntil: () => Date.now() + 1000,
+    onTimeout: () => { stopped = true; },
+  })), (error: unknown) => error instanceof RunWatchdogError && error.reason === 'runtime');
+  assert.equal(stopped, true, 'human waits never extend the absolute run deadline');
+}
 console.log('run watchdog tests passed');

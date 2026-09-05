@@ -6,6 +6,7 @@ export interface RunWatchdogOptions {
   onTimeoutGraceMs?: number;
   onTimeout: (reason: RunWatchdogReason) => Promise<void> | void;
   pauseUntil?: () => number | null | undefined;
+  hardDeadlineAtMs?: number;
 }
 
 export interface RunWatchdogConfig {
@@ -123,13 +124,15 @@ export async function* withRunWatchdog<T>(
       }
       const currentPausedMs = pausedMs + (pausedAt === null ? 0 : now - pausedAt);
       const elapsed = now - startedAt - currentPausedMs;
-      if (elapsed >= options.maxRuntimeMs) {
+      const hardRemaining = options.hardDeadlineAtMs === undefined ? Infinity : options.hardDeadlineAtMs - now;
+      if (elapsed >= options.maxRuntimeMs || hardRemaining <= 0) {
         await stopTimedOutRun('runtime', options);
       }
       const runtimeRemaining = options.maxRuntimeMs - elapsed;
       // Human time is not provider runtime; still stop at the finite input deadline.
-      const waitMs = pauseRemaining > 0 ? pauseRemaining : Math.min(options.idleTimeoutMs, runtimeRemaining);
-      const reason: RunWatchdogReason = pauseRemaining > 0 ? 'idle' : runtimeRemaining <= options.idleTimeoutMs ? 'runtime' : 'idle';
+      const activeWaitMs = pauseRemaining > 0 ? pauseRemaining : Math.min(options.idleTimeoutMs, runtimeRemaining);
+      const waitMs = Math.min(activeWaitMs, hardRemaining);
+      const reason: RunWatchdogReason = hardRemaining <= activeWaitMs ? 'runtime' : pauseRemaining > 0 ? 'idle' : runtimeRemaining <= options.idleTimeoutMs ? 'runtime' : 'idle';
       let timer: ReturnType<typeof setTimeout> | undefined;
 
       type NextOutcome = { kind: 'next'; next: IteratorResult<T> };
@@ -149,6 +152,9 @@ export async function* withRunWatchdog<T>(
       if (outcome.kind === 'timeout') {
         await stopTimedOutRun(outcome.reason, options);
         continue;
+      }
+      if (options.hardDeadlineAtMs !== undefined && Date.now() >= options.hardDeadlineAtMs) {
+        await stopTimedOutRun('runtime', options);
       }
       if (outcome.next.done) return;
       const afterNow = Date.now();

@@ -86,13 +86,20 @@ class InteractionBroker:
             result.append({"id": qid, "question": self._display(text), "choices": options, "multiSelect": multi})
         return result
 
-    def _wait(self, task_id: str, run_id: str, payload: dict, *, interrupt: Callable, timeout_seconds: float) -> dict:
+    def _wait(self, task_id: str, run_id: str, payload: dict, *, interrupt: Callable, timeout_seconds: float, deadline_monotonic: float | None = None) -> dict:
         _text(task_id, 256)
         _text(run_id, 256)
         timeout_seconds = min(1800, max(0.001, timeout_seconds))
+        if deadline_monotonic is not None:
+            timeout_seconds = min(timeout_seconds, deadline_monotonic - time.monotonic())
+            if timeout_seconds <= 0:
+                raise InteractionError("Run deadline expired; input cannot authorize further work", "interaction_stale")
         identity = uuid.uuid4().hex
         payload = {**payload, "id": identity, "workerRunId": run_id, "expiresAt": int((time.time() + timeout_seconds) * 1000)}
-        pending = _Pending(task_id, run_id, payload, time.monotonic() + timeout_seconds)
+        deadline = time.monotonic() + timeout_seconds
+        if deadline_monotonic is not None:
+            deadline = min(deadline, deadline_monotonic)
+        pending = _Pending(task_id, run_id, payload, deadline)
         with self._lock:
             if sum(item.run_id == run_id for item in self._pending.values()) >= 32:
                 raise InteractionError("Too many pending questions", "interaction_unavailable")
@@ -101,8 +108,9 @@ class InteractionBroker:
             self._send({"id": run_id, "type": "interaction_requested", "interaction": copy.deepcopy(payload)})
             pending.event.wait(timeout_seconds)
             with self._lock:
-                if pending.status == "pending":
+                if pending.status == "pending" or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
                     pending.status = "expired"
+                    pending.response = None
                 status = pending.status
                 response = copy.deepcopy(pending.response)
             self._send({"id": run_id, "type": "interaction_settled", "interactionId": identity, "status": status})
@@ -117,12 +125,12 @@ class InteractionBroker:
                 self._pending.pop(identity, None)
 
     def clarify(self, task_id: str, run_id: str, question: str = "", choices=None, multi_select: bool = False,
-                *, questions=None, interrupt: Callable, timeout_seconds: float = 1800):
+                *, questions=None, interrupt: Callable, timeout_seconds: float = 1800, deadline_monotonic: float | None = None):
         try:
             normalized = self._questions(question, choices, multi_select, questions)
             title = self._display(question[:1000]) if question else "Your decision is needed"
             response = self._wait(task_id, run_id, {"kind": "clarification", "title": title, "questions": normalized},
-                                  interrupt=interrupt, timeout_seconds=timeout_seconds)
+                                  interrupt=interrupt, timeout_seconds=timeout_seconds, deadline_monotonic=deadline_monotonic)
         except InteractionError:
             interrupt("Clarification was not answered; stopped without making assumptions")
             raise
@@ -133,13 +141,13 @@ class InteractionBroker:
         return answer
 
     def approve(self, task_id: str, run_id: str, command: str, description: str, *, interrupt: Callable,
-                timeout_seconds: float = 1800, **_native_options) -> str:
+                timeout_seconds: float = 1800, deadline_monotonic: float | None = None, **_native_options) -> str:
         try:
             response = self._wait(task_id, run_id, {
                 "kind": "approval", "title": "Approval required", "questions": [],
                 "command": self._display(_text(command, 50000)),
                 "reason": self._display(_text(description, 10000)),
-            }, interrupt=interrupt, timeout_seconds=timeout_seconds)
+            }, interrupt=interrupt, timeout_seconds=timeout_seconds, deadline_monotonic=deadline_monotonic)
             return response["decision"]
         except Exception:
             interrupt("Approval unavailable or expired; action denied")

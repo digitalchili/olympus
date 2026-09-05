@@ -1,6 +1,7 @@
 """Worker-side interaction invariants; no provider, live profile or command execution."""
 import sys
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -104,6 +105,32 @@ class InteractionTests(unittest.TestCase):
         self.assertTrue(self.interrupted)
         self.assertEqual(self.events[-1]["status"], "expired")
         with self.assertRaises(InteractionError): self.answer(event, {"answers": {"q1": "late"}})
+
+    def test_hard_run_deadline_caps_clarification_wait(self):
+        deadline = time.monotonic() + 0.05
+        future, event = self.begin(question="Wait?", timeout_seconds=10, deadline_monotonic=deadline)
+        self.assertLessEqual(event["expiresAt"], int((time.time() + 0.06) * 1000))
+        with self.assertRaises(InteractionError): future.result(2)
+        self.assertTrue(self.interrupted)
+        with self.assertRaises(InteractionError): self.answer(event, {"answers": {"q1": "late"}})
+
+    def test_hard_run_deadline_caps_approval_wait(self):
+        future = self.pool.submit(self.broker.approve, "task-1", "turn-1", "target", "reason",
+                                  interrupt=self.interrupted.append, timeout_seconds=10,
+                                  deadline_monotonic=time.monotonic() + 0.05)
+        self.assertTrue(self.ready.wait(2))
+        event = self.events[0]["interaction"]
+        self.assertLessEqual(event["expiresAt"], int((time.time() + 0.06) * 1000))
+        with self.assertRaises(InteractionError): future.result(2)
+        self.assertTrue(self.interrupted)
+        with self.assertRaises(InteractionError): self.answer(event, {"decision": "once"})
+
+    def test_already_expired_run_never_emits_an_approval(self):
+        with self.assertRaises(InteractionError):
+            self.broker.approve("task-1", "turn-1", "target", "reason", interrupt=self.interrupted.append,
+                                deadline_monotonic=time.monotonic() - 1)
+        self.assertEqual(self.events, [])
+        self.assertTrue(self.interrupted)
 
     def test_stop_cancels_exact_run_and_unblocks_waiters(self):
         future, event = self.begin(question="Wait?")

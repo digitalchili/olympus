@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -52,10 +53,11 @@ class NativeInteractionTests(unittest.TestCase):
         self.resolve({"answers": {form["questions"][0]["id"]: "Core", form["questions"][1]["id"]: ["Tests", "Review"]}})
         result = json.loads(future.result(5))
         self.assertEqual([row["user_response"] for row in result["responses"]], ["Core", ["Tests", "Review"]])
+        self.assertEqual([row["id"] for row in result["responses"]], ["scope", "checks"])
         self.assertFalse(self.interruptions)
 
-    def run_gate(self):
-        callback = partial(self.broker.approve, "task", "turn", interrupt=self.interruptions.append)
+    def run_gate(self, deadline_monotonic=None):
+        callback = partial(self.broker.approve, "task", "turn", interrupt=self.interruptions.append, deadline_monotonic=deadline_monotonic)
         with native_approval_context(callback, "native-test-session"):
             self.assertIs(terminal_tool._get_approval_callback(), callback)
             self.assertTrue(approval._is_interactive_cli())
@@ -78,6 +80,16 @@ class NativeInteractionTests(unittest.TestCase):
         self.resolve({"decision": "deny"})
         self.assertFalse(again.result(5)["approved"])
         self.assertIsNone(terminal_tool._get_approval_callback(), "Parent thread must not inherit another turn's callback")
+
+    def test_real_gate_denies_when_hard_deadline_expires(self):
+        # Allow native gate/redaction initialization before exercising pending expiry.
+        future = self.pool.submit(self.run_gate, time.monotonic() + 2.0)
+        self.assertTrue(self.ready.wait(5))
+        self.assertFalse(future.result(5)["approved"])
+        self.assertTrue(self.interruptions)
+        interaction = self.events[0]["interaction"]
+        with self.assertRaises(interactions.InteractionError):
+            self.broker.respond({"taskId": "task", "workerRunId": "turn", "interactionId": interaction["id"], "response": {"decision": "once"}})
 
     def test_native_toolset_restrictions_do_not_disable_supported_terminal(self):
         self.assertEqual(interactions.interaction_disabled_toolsets(), ["computer_use"])
