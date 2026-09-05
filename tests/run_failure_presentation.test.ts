@@ -7,6 +7,7 @@ import {
   deriveRunFailureNotice,
   queuedMessageWaitingLabel,
   runFailureNoticeForState,
+  currentLiveRun,
   shouldAutoSendQueuedMessage,
 } from '../client/src/lib/runFailurePresentation.js';
 import { RunFailureBanner } from '../client/src/components/RunFailureBanner.js';
@@ -110,6 +111,14 @@ assert.match(
 
 assert.equal(runFailureNoticeForState({ liveRun: liveErrorRun, latestAgentRun: { ...failedPersistedRun, runId: 'newer-success', status: 'done', startedAt: 400 } }), null, 'a stale error snapshot cannot override newer persisted success');
 assert.ok(runFailureNoticeForState({ liveRun: { ...streamingLiveRun, status: 'done' }, latestAgentRun: { ...failedPersistedRun, runId: 'newer-failure', startedAt: 400 } }), 'stale live success cannot hide a newer durable failure');
+
+const staleLiveRun = { ...streamingLiveRun, startedAt: 50 };
+assert.equal(currentLiveRun(staleLiveRun, failedPersistedRun), null, 'newer history excludes stale streaming state and messages, not only its banner');
+assert.equal(currentLiveRun(staleLiveRun, { ...failedPersistedRun, status: 'done' }), null);
+assert.equal(currentLiveRun(streamingLiveRun, failedPersistedRun), streamingLiveRun, 'new runs remain busy');
+assert.equal(currentLiveRun(streamingLiveRun, null), streamingLiveRun);
+assert.equal(currentLiveRun(null, failedPersistedRun), null);
+assert.equal(canManuallySendQueuedMessage({taskBusyForQueue: currentLiveRun(staleLiveRun, failedPersistedRun)?.status === 'streaming', configPending: false, queuedIsSending: false}), true);
 
 const rendered = renderToStaticMarkup(createElement(RunFailureBanner, { notice: iterationNotice }));
 assert.match(rendered, /Run paused/);

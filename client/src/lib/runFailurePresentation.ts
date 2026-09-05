@@ -67,15 +67,19 @@ export function deriveRunFailureNotice(run: RunFailureSource | null | undefined)
   return { status: run.status, code, ...runFailureText(run.status, code) };
 }
 
+export function currentLiveRun(liveRun: LiveChatRun | null, latestAgentRun: TaskAgentRun | null): LiveChatRun | null {
+  return liveRun && latestAgentRun && latestAgentRun.startedAt > liveRun.startedAt
+    ? null
+    : liveRun;
+}
+
 export function runFailureNoticeForState(input: {
   liveRun: LiveChatRun | null;
   latestAgentRun: TaskAgentRun | null;
 }): RunFailureNotice | null {
   const { liveRun, latestAgentRun } = input;
   // History hydration and SSE can arrive out of order across run identities.
-  const latest = liveRun && latestAgentRun && latestAgentRun.startedAt > liveRun.startedAt
-    ? latestAgentRun
-    : liveRun ?? latestAgentRun;
+  const latest = currentLiveRun(liveRun, latestAgentRun) ?? latestAgentRun;
   return deriveRunFailureNotice(latest);
 }
 

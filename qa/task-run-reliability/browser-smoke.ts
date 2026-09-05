@@ -30,11 +30,33 @@ const dist=resolve('dist/server/client/dist');app.use(express.static(dist));app.
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');const port=(server.address() as {port:number}).port;
 const browser=await chromium.launch({headless:true,args:['--no-sandbox'],executablePath:process.env.OLYMPUS_CHROMIUM_PATH || undefined});
 const page=await browser.newPage({viewport:{width:1400,height:1000}});const errors:string[]=[];page.on('pageerror',(e:Error)=>errors.push(e.message));
+page.setDefaultTimeout(8000);
+// Deliver an explicitly stale SSE snapshot after newer failed history hydration.
+// Use the real hook/composer; only the transport response is a fixture.
+await page.addInitScript(() => {
+  const NativeSource = window.EventSource;
+  (window as any).__staleDelivered = 0;
+  window.EventSource = class extends NativeSource {
+    constructor(url: string | URL, options?: EventSourceInit) {
+      super(url, options);
+      this.addEventListener('message', () => { (window as any).__staleDelivered++; });
+    }
+  };
+});
+await page.route(`**/api/tasks/${failed.id}/live?*`, async (route: any) => {
+  const run = { taskId: failed.id, runId: 'stale-previous-run', kind: 'chat', sessionId: failed.id,
+    status: 'streaming', startedAt: 50, updatedAt: 60,
+    messages: [{ id: 'stale-only-message', role: 'assistant', content: 'STALE STREAM MUST NOT REAPPEAR', created_at: 60 }] };
+  await route.fulfill({status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify({type: 'snapshot',run})}\n\n`});
+});
 try{
  await page.goto(`http://127.0.0.1:${port}/tasks/${failed.id}?profile=default`);
  await page.getByText('Run paused: run cap reached',{exact:true}).waitFor();
  await page.getByText('Preserved partial implementation checkpoint',{exact:true}).waitFor();
  await page.getByText('Paused after unfinished run',{exact:true}).waitFor();
+ await page.waitForFunction(() => (window as any).__staleDelivered > 0);
+ assert.equal(await page.getByText('STALE STREAM MUST NOT REAPPEAR',{exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Send now',exact:true}).isEnabled(),true,'stale streaming state cannot disable deliberate retry');
  assert.equal(starts,0,'hydration does not automatically replay failed task');
  await page.reload();await page.getByText('Run paused: run cap reached',{exact:true}).waitFor();
  assert.equal(starts,0,'reload does not replay the queue');

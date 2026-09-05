@@ -16,7 +16,7 @@ import { toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
 import { shouldAppendRunErrorToReply } from '@shared/run-errors';
-import { runFailureNoticeForState, type RunFailureNotice } from '../lib/runFailurePresentation';
+import { currentLiveRun, runFailureNoticeForState, type RunFailureNotice } from '../lib/runFailurePresentation';
 
 export type { ContextUsage, ToolProgressEvent };
 
@@ -367,7 +367,7 @@ export function useChat() {
 
   const publishState = useCallback(() => {
     const committed = committedMessagesRef.current;
-    const liveRun = liveRunRef.current;
+    const liveRun = currentLiveRun(liveRunRef.current, persistedLatestAgentRunRef.current);
 
     if (liveRun) {
       const isMessageRun = liveRun.kind === 'chat' || liveRun.kind === 'goal';
@@ -407,8 +407,9 @@ export function useChat() {
   const applySnapshot = useCallback((run: LiveChatRun) => {
     if (taskIdRef.current && taskIdRef.current !== run.taskId) return;
     taskIdRef.current = run.taskId;
+    if (!currentLiveRun(run, persistedLatestAgentRunRef.current)) return;
 
-    const existingLiveRun = liveRunRef.current;
+    const existingLiveRun = currentLiveRun(liveRunRef.current, persistedLatestAgentRunRef.current);
     if (
       existingLiveRun &&
       hasOptimisticChatMessages(existingLiveRun) &&
@@ -441,7 +442,7 @@ export function useChat() {
       return;
     }
 
-    const run = liveRunRef.current;
+    const run = currentLiveRun(liveRunRef.current, persistedLatestAgentRunRef.current);
     if (!run) return;
 
     if (event.type === 'text_delta' && event.content) {
