@@ -25,6 +25,7 @@ import {
 import { ProfileInviteControls } from './ProfileInviteControls';
 import { useProfile } from '../contexts/ProfileContext';
 import type { ChatRunMode, CollaborationInvitationScope, CollaborationRun, GoalStateSnapshot, PersistentCollaborationGrant, QueuedTaskMessage } from '@shared/types';
+import { TaskInteractionPanel } from './TaskInteractionPanel';
 import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility';
 import { DelegationActivity } from './DelegationActivity';
 import { visibleToolProgress } from '../lib/toolProgressDisplay';
@@ -250,6 +251,7 @@ function GoalRunStatus({ goal }: { goal: GoalStateSnapshot | null | undefined })
   );
 }
 
+
 export function TaskChat({
   taskId,
   projectId,
@@ -300,6 +302,7 @@ export function TaskChat({
   const [interruptInFlight, setInterruptInFlight] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const {
     pendingFiles,
     dragOver,
@@ -311,11 +314,12 @@ export function TaskChat({
     addFiles,
     removeFile,
     retryFile,
+    restoreTextFile,
     clearFiles,
     submitWithAttachments,
     dragHandlers,
     handlePaste,
-  } = useFileAttachments(taskId);
+  } = useFileAttachments(taskId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
   const startupRef = useRef({ taskId, initialMessage, initialSettings, initialInvitedProfileIds });
   if (startupRef.current.taskId !== taskId) {
     startupRef.current = { taskId, initialMessage, initialSettings, initialInvitedProfileIds };
@@ -329,7 +333,6 @@ export function TaskChat({
   const configPending = waitingForTaskSettings || (!defaults && isLoading);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const latestUserMessageRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const didInitialScrollRef = useRef(false);
   // Long threads are dominated by markdown rendering, so paint the newest messages
   // first and fill in the rest once the user can already read the conversation.
@@ -1089,6 +1092,7 @@ export function TaskChat({
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         <RunFailureBanner notice={runFailureNotice} />
+        <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
           {persistentGrants.length > 0 && (
@@ -1167,7 +1171,7 @@ export function TaskChat({
             onSelect={selectMentionProfile}
             onRemove={() => {}}
           />
-          <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} />
+          <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} onRestoreText={restoreTextFile} />
           {uploadError && <UploadErrorBar error={uploadError} onDismiss={() => setUploadError(null)} />}
           {interruptError && <UploadErrorBar error={interruptError} onDismiss={() => setInterruptError(null)} />}
           {queuedMessage && (

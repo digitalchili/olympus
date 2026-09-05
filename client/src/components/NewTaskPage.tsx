@@ -53,6 +53,7 @@ export function NewTaskPage() {
   const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
   const [highlightedProfileIndex, setHighlightedProfileIndex] = useState(0);
   const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig();
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const uploadBucketRef = useRef<string | null>(null);
   if (uploadBucketRef.current === null) uploadBucketRef.current = `draft-${createUuid()}`;
   const uploadBucketId = uploadBucketRef.current;
@@ -67,11 +68,11 @@ export function NewTaskPage() {
     addFiles,
     removeFile,
     retryFile,
+    restoreTextFile,
     submitWithAttachments,
     dragHandlers,
     handlePaste,
-  } = useFileAttachments(uploadBucketId);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  } = useFileAttachments(uploadBucketId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -265,7 +266,7 @@ export function NewTaskPage() {
             onSelect={selectMentionProfile}
             onRemove={() => {}}
           />
-          <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} />
+          <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} onRestoreText={restoreTextFile} />
           {uploadError && <UploadErrorBar error={uploadError} onDismiss={() => setUploadError(null)} />}
           <div className="flex items-end justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">

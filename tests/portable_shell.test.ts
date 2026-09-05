@@ -19,7 +19,9 @@ function run(command: string, args: string[], options: Record<string, unknown>) 
 const secret = 'fixture-maintenance-secret';
 let received = '';
 const server = createServer((req, res) => { received = req.headers.authorization ?? ''; res.end('{"activeRuns":0}'); });
-const socket = join(tmpdir(), `olympus-auth-${process.pid}.sock`);
+// Relative paths keep Unix-socket addresses below the OS path limit even
+// in deeply nested isolated worktrees. The shell uses this same cwd.
+const socket = `.tmp-olympus-portable-auth-${process.pid}.sock`;
 const listening = await new Promise<boolean>((resolve, reject) => {
   server.once('error', (error: NodeJS.ErrnoException) => error.code === 'EPERM' ? resolve(false) : reject(error));
   server.listen(socket, () => resolve(true));

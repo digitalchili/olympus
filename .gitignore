@@ -20,3 +20,5 @@ debug.md
 backups/
 deploy/nginx/conf.d/active.conf
 .tmp-olympus-portable-*/
+# Disposable native browser integration state and artifacts
+.tmp-native-qa-*/

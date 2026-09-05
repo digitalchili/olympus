@@ -42,6 +42,30 @@ CREATE TABLE IF NOT EXISTS task_agent_runs (
 CREATE INDEX IF NOT EXISTS idx_task_agent_runs_task
   ON task_agent_runs(task_id, started_at DESC);
 
+
+CREATE TABLE IF NOT EXISTS task_interactions (
+  id                  TEXT PRIMARY KEY,
+  task_id             TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  profile_name        TEXT NOT NULL,
+  olympus_run_id      TEXT NOT NULL,
+  worker_run_id       TEXT NOT NULL,
+  kind                TEXT NOT NULL CHECK(kind IN ('clarification', 'approval')),
+  status              TEXT NOT NULL CHECK(status IN ('waiting', 'claimed', 'answered', 'denied', 'expired', 'cancelled', 'delivery_unknown')),
+  title               TEXT NOT NULL,
+  payload_json        TEXT NOT NULL,
+  response_json       TEXT,
+  delivery_error      TEXT,
+  requested_at        INTEGER NOT NULL,
+  expires_at          INTEGER NOT NULL,
+  delivery_claimed_at INTEGER,
+  settled_at          INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_interactions_task
+  ON task_interactions(task_id, profile_name, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_interactions_waiting
+  ON task_interactions(status, expires_at);
+
 CREATE TABLE IF NOT EXISTS task_message_queue (
   task_id                          TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   id                               TEXT NOT NULL UNIQUE,

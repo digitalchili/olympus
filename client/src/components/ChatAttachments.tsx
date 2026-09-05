@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Download, FileText, Image as ImageIcon, Loader2, Paperclip, RotateCcw, X } from 'lucide-react';
+import { Download, Eye, FileText, Image as ImageIcon, Loader2, Paperclip, RotateCcw, X } from 'lucide-react';
 import { fileDownloadUrl, filePreviewUrl } from '../lib/api';
 import { BASE } from '../lib/api';
 import { apiPathWithProfile } from '../lib/profileQuery';
@@ -11,45 +11,76 @@ export function AttachmentTray({
   files,
   onRemove,
   onRetry,
+  onRestoreText,
 }: {
   files: PendingFile[];
   onRemove: (id: string) => void;
   onRetry?: (id: string) => void;
+  onRestoreText?: (id: string) => void;
 }) {
   if (files.length === 0) return null;
 
   return (
     <div className="flex flex-wrap gap-2 px-4 py-2">
       {files.map((f) => {
+        const isImage = f.file.type.startsWith('image/');
+        const lineCountText = f.textAttachment
+          ? `${f.textAttachment.lineCount} ${f.textAttachment.lineCount === 1 ? 'line' : 'lines'}`
+          : null;
         const statusText = f.status === 'uploading'
           ? 'Uploading'
           : f.status === 'error'
             ? 'Upload failed'
             : formatBytes(f.file.size);
+        const detailText = lineCountText
+          ? `${lineCountText} · ${formatBytes(f.textAttachment?.size ?? f.file.size)}${f.status === 'uploaded' ? '' : ` · ${statusText}`}`
+          : statusText;
 
         return (
           <div
             key={f.id}
-            className={`group flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs ${
+            className={`group max-w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs ${f.textAttachment ? 'grid w-80 grid-cols-[auto_minmax(0,1fr)]' : 'flex'} ${
               f.status === 'error'
                 ? 'border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/20'
                 : 'border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900'
             }`}
           >
-            {f.previewUrl ? (
+            {isImage && f.previewUrl ? (
               <img src={f.previewUrl} alt={f.file.name} className="h-8 w-8 rounded object-cover" />
             ) : (
               <FileText size={14} className="shrink-0 text-zinc-400" />
             )}
             <div className="min-w-0">
-              <span className="block max-w-[120px] truncate font-medium text-zinc-700 dark:text-zinc-300">
-                {f.file.name}
+              <span className="block max-w-[220px] truncate font-medium text-zinc-700 dark:text-zinc-300">
+                {f.textAttachment?.preview ?? f.file.name}
               </span>
               <span className={f.status === 'error' ? 'text-red-500' : 'text-zinc-400 dark:text-zinc-500'}>
-                {statusText}
+                {detailText}
               </span>
             </div>
+            <div className={f.textAttachment ? 'col-span-2 flex items-center justify-end gap-1' : 'flex items-center gap-1'}>
             {f.status === 'uploading' && <Loader2 size={12} className="shrink-0 animate-spin text-zinc-400" />}
+            {f.textAttachment && f.previewUrl && (
+              <a
+                href={f.previewUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Preview pasted text"
+                title="Preview pasted text"
+                className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+              >
+                <Eye size={12} />
+              </a>
+            )}
+            {f.textAttachment && onRestoreText && (
+              <button
+                type="button"
+                onClick={() => onRestoreText(f.id)}
+                className="min-h-10 shrink-0 rounded-md px-2 text-xs font-medium text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+              >
+                Keep inline
+              </button>
+            )}
             {f.status === 'error' && onRetry && (
               <button
                 type="button"
@@ -65,10 +96,12 @@ export function AttachmentTray({
               type="button"
               onClick={() => onRemove(f.id)}
               aria-label={`Remove ${f.file.name}`}
-              className="shrink-0 rounded-md p-0.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+              title={`Remove ${f.file.name}`}
+              className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
             >
               <X size={12} />
             </button>
+            </div>
           </div>
         );
       })}
@@ -78,6 +111,7 @@ export function AttachmentTray({
 
 const IMAGE_EXTENSION = /\.(avif|gif|jpe?g|png|svg|webp)$/i;
 const PDF_EXTENSION = /\.pdf$/i;
+const TEXT_EXTENSION = /\.(txt|md|markdown|log|csv|json|ya?ml)$/i;
 
 function attachmentName(path: string): string {
   const name = path.split('/').pop() || 'Attachment';
@@ -106,9 +140,27 @@ export function MessageAttachmentCards({
         const { path, name } = attachment;
         const isImage = IMAGE_EXTENSION.test(name);
         const isPdf = PDF_EXTENSION.test(name);
+        const isText = TEXT_EXTENSION.test(name);
         const downloadUrl = taskId
           ? `${BASE}${apiPathWithProfile(`/tasks/${encodeURIComponent(taskId)}/artifacts/download?path=${encodeURIComponent(path)}`)}`
           : fileDownloadUrl(path);
+        if (isText) {
+          return (
+            <a
+              key={path}
+              href={downloadUrl}
+              download={name}
+              title={`Download ${name}`}
+              className="group inline-flex max-w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-left text-xs shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
+            >
+              <FileText size={14} className="shrink-0 text-zinc-400 dark:text-zinc-500" />
+              <span className="min-w-0 max-w-64 truncate font-medium text-zinc-700 dark:text-zinc-200">{name}</span>
+              <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-zinc-400 dark:text-zinc-500">
+                <Download size={10} /> Text
+              </span>
+            </a>
+          );
+        }
         return (
           <a
             key={path}

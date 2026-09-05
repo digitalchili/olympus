@@ -66,6 +66,8 @@ import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTaskAgentRunResolution } from '../db/task-agent-runs.js';
 import { syncMessageAttachmentsToProjectReferences } from '../db/project-references.js';
+import { recordInteraction, markInteractionSettled, closeRunInteractions, hasUnansweredInteractions } from '../db/interactions.js';
+import { normalizeNativeInteraction } from '../interactions.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
@@ -282,7 +284,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
-  if (status && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
+  if (status && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
     const updated = recordCompletedAgentRun(taskId, context);
     if (updated) broadcast({ type: 'task_updated', task: updated });
   } else {
@@ -323,6 +325,8 @@ async function streamChatTurn(
   const finalizationMinutes = Math.max(1, Math.round(runBudget.finalizeBeforeMs / 60_000));
   const budgetMinutes = Math.max(1, Math.round(runBudget.maxRuntimeMs / 60_000));
   const deadlineMessage = `\n\n<run_budget>\n  <absolute_minutes>${budgetMinutes}</absolute_minutes>\n  <hard_deadline_epoch_ms>${runBudget.hardDeadlineAtMs}</hard_deadline_epoch_ms>\n  <finalization_reserve_minutes>${finalizationMinutes}</finalization_reserve_minutes>\n  <max_delegated_children>${runBudget.maxDelegatedChildren}</max_delegated_children>\n  <rule>Finish implementation early enough to preserve the finalization reserve. Use delegation sparingly—normally one implementer and one independent reviewer—and never exceed the stated cumulative child cap. Before the reserve begins, stop opening new work, save durable checkpoints, reconcile existing child results, run the most important remaining verification, and send the user a truthful final status. Do not start replacement reviewers near the deadline.</rule>\n</run_budget>`;
+  const interactionRunId = getRunStatus(runTask.id)?.runId;
+  const humanWaits = new Map<string, number>();
 
   try {
     const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
@@ -332,6 +336,7 @@ async function streamChatTurn(
       runBudget,
     }), {
       ...remainingRunWatchdogConfig(runBudget),
+      pauseUntil: () => humanWaits.size ? Math.max(...humanWaits.values()) : null,
       onTimeout: async (reason: RunWatchdogReason) => {
         const message = reason === 'idle'
           ? 'Stopped automatically because the run stopped producing activity.'
@@ -350,6 +355,29 @@ async function streamChatTurn(
         const assistant = [...(run?.messages ?? [])].reverse().find((message) => message.role === 'assistant');
         const attachments = assistant ? await publishTaskAttachments(runTask, assistant.content) : [];
         if (attachments.length > 0) event = { ...rawEvent, attachments };
+      }
+      if (event.type === 'interaction_requested') {
+        const activeRun = getRunStatus(runTask.id);
+        const interaction = normalizeNativeInteraction(event.interaction, event.interaction?.workerRunId ?? '');
+        if (interaction && activeRun && activeRun.runId === interactionRunId) {
+          recordInteraction({
+            taskId: runTask.id,
+            profileName: taskProfileId(runTask),
+            olympusRunId: activeRun.runId,
+            interaction,
+          });
+          humanWaits.set(interaction.id, interaction.expiresAt);
+          broadcastLive(runTask.id, event);
+        }
+        continue;
+      }
+      if (event.type === 'interaction_settled') {
+        if (event.interactionId && event.interactionStatus && humanWaits.has(event.interactionId)) {
+          markInteractionSettled(event.interactionId, event.interactionStatus);
+          humanWaits.delete(event.interactionId);
+        }
+        broadcastLive(runTask.id, event);
+        continue;
       }
       if (options.captureResponseText && event.type === 'text_delta' && event.content) {
         responseText += event.content;
@@ -386,6 +414,7 @@ async function streamChatTurn(
     broadcastLive(runTask.id, event);
   }
 
+  if (interactionRunId) closeRunInteractions(runTask.id, interactionRunId);
   const finalRun = getRunStatus(runTask.id);
   if (!sawDone && !hadError && finalRun?.status === 'streaming') {
     hadError = true;

@@ -166,6 +166,13 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return await (await this.adapterForSession(sessionId)).steerChat(sessionId, message);
   }
 
+
+  async respondInteraction(request: Parameters<NonNullable<AgentAdapter['respondInteraction']>>[0]) {
+    const worker = await this.adapterForTaskId(request.taskId);
+    if (!worker.respondInteraction) throw Object.assign(new Error('This agent adapter does not support interactive questions'), { code: 'interaction_unavailable' });
+    return await worker.respondInteraction(request);
+  }
+
   async healthCheck(): Promise<boolean> {
     return await this.defaultAdapter.healthCheck();
   }
