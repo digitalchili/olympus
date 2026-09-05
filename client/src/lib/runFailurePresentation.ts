@@ -44,7 +44,7 @@ function runFailureText(status: RunFailureNotice['status'], code: string | null)
   if (code === 'deadline_finalized') {
     return {
       title: 'Run paused: deadline reached',
-      detail: 'Hermes saved a final checkpoint before the hard deadline. Review completed, verified, and remaining work before continuing.',
+      detail: 'The run reached its deadline reserve. Review the available transcript and recovery status; file checkpoint creation has not been verified.',
     };
   }
 
@@ -75,7 +75,7 @@ export function deriveRunFailureNotice(run: RunFailureSource | null | undefined)
 }
 
 export function currentLiveRun(liveRun: LiveChatRun | null, latestAgentRun: TaskAgentRun | null): LiveChatRun | null {
-  return liveRun && latestAgentRun && latestAgentRun.startedAt > liveRun.startedAt
+  return liveRun && latestAgentRun && (latestAgentRun.startedAt > liveRun.startedAt || (latestAgentRun.runId === liveRun.runId && ['done', 'error', 'stopped'].includes(latestAgentRun.status)))
     ? null
     : liveRun;
 }

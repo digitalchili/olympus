@@ -145,3 +145,11 @@ export async function optimisticMoveTask(
     upsertTask(task);
   }
 }
+
+/** History may settle after the live snapshot and the board event are lost. */
+export function reconcilePersistedTaskRun(run: TaskRunState | null): void {
+  if (!run || isActiveRun(run)) return;
+  const state = useStore.getState();
+  const current = state.taskRuns.get(run.taskId);
+  if (current && (current.runId === run.runId || current.startedAt < run.startedAt)) state.setTaskRun(run);
+}

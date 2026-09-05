@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+Object.defineProperty(globalThis, 'localStorage', { value: { getItem: () => null, setItem: () => {} }, configurable: true });
+const { useStore, reconcilePersistedTaskRun } = await import('../client/src/lib/store.js');
+const run = { taskId: 'task', runId: 'one', kind: 'chat' as const, status: 'streaming' as const, startedAt: 100, updatedAt: 100 };
+useStore.getState().setTaskRun(run);
+reconcilePersistedTaskRun({ ...run, status: 'error', updatedAt: 200 });
+assert.equal(useStore.getState().taskRuns.has('task'), false, 'terminal history clears stale board/composer streaming state');
+useStore.getState().setTaskRun({ ...run, runId: 'two', startedAt: 300, updatedAt: 300 });
+reconcilePersistedTaskRun({ ...run, status: 'error', updatedAt: 200 });
+assert.equal(useStore.getState().taskRuns.get('task')?.runId, 'two', 'old history cannot clear a newer run');
+console.log('Reconnect run store tests passed');

@@ -15,3 +15,7 @@ __pycache__
 .pytest_cache
 .DS_Store
 screenshots
+# Local agent/review/browser artifacts
+.superpowers
+.playwright-cli
+output

@@ -5,3 +5,5 @@ Use Node.js 22.22–25 (Node 22 LTS recommended) and run `npm ci`, `npm test`, a
 Runtime changes should be developed vertically: add one failing behavior test, confirm its expected failure, implement the smallest change, and rerun before the next behavior. Keep schema changes additive. The database uses WAL, an explicit 5-second busy timeout, and an immediate transaction around startup migration.
 
 The direct Hermes Python worker is the feature-complete default. Do not replace it with a gateway-only implementation unless goals, compaction, steering, settings, sessions, and scheduled tasks have parity.
+
+Coding verification and recovery contracts are described in [coding-harness.md](coding-harness.md). The Docker Hermes runtime is pinned to v2026.8.31; native contract tests must pass against a disposable checkout of its recorded source revision before changing that pin.

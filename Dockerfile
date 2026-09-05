@@ -1,8 +1,18 @@
 # syntax=docker/dockerfile:1.7
-# Keep the Node and Python/Hermes runtimes aligned with the central Somboon VPS.
-ARG HERMES_IMAGE=nousresearch/hermes-agent:v2026.7.30@sha256:b869e64d6496d4763d5e4fb675b5f504cb23b0e35ec9b790481a56118602b10f
+# Native recovery contracts are tested against Hermes v2026.8.31.
+ARG HERMES_IMAGE=nousresearch/hermes-agent:v2026.8.31@sha256:64923faeae267792bf9bf87fe3b4c4869e35004e360c7df01730ad801b74d524
 
-FROM ${HERMES_IMAGE} AS dependencies
+# Hermes now ships Node 26; Olympus supports Node 22.22–25. Keep the tested
+# Node/npm toolchain identical in dependency, build and runtime stages.
+FROM node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 AS node-runtime
+FROM ${HERMES_IMAGE} AS olympus-base
+USER root
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+FROM olympus-base AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -11,13 +21,13 @@ FROM dependencies AS build
 COPY . ./
 RUN npm run build
 
-FROM ${HERMES_IMAGE} AS production-dependencies
+FROM olympus-base AS production-dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM ${HERMES_IMAGE} AS runtime
-ARG VERSION=0.3.0
+FROM olympus-base AS runtime
+ARG VERSION=0.6.0
 ARG REVISION=unknown
 WORKDIR /opt/olympus-dispatch
 # HOST=0.0.0.0 is required inside the container network namespace; exposure to the

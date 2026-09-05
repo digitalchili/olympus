@@ -1,3 +1,4 @@
+import { CodingEvidencePanel } from './CodingEvidencePanel';
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo, Fragment } from 'react';
 import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText, FilePenLine, Globe, Code, Wrench, X, Target, Square } from 'lucide-react';
 import { InputToolbar, ContextRing } from './InputToolbar';
@@ -10,7 +11,7 @@ import { useFileAttachments } from '../hooks/useFileAttachments';
 import { handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
 import { ApiError, compactTask, deleteQueuedTaskMessage, fetchCollaborationGrants, fetchHermesProfiles, fetchQueuedTaskMessage, interruptTask, putQueuedTaskMessage, revokeCollaborationGrant, steerTask, type AgentRunSettings, type HermesProfile } from '../lib/api';
 import { deliverQueuedSteer } from '../lib/steerDelivery';
-import { useStore } from '../lib/store';
+import { useStore, reconcilePersistedTaskRun } from '../lib/store';
 import { GOAL_MODE_PLACEHOLDER, goalTurnLabel, splitAttachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import { messageTimestampTitle } from '../lib/messageTimestamps';
@@ -274,9 +275,10 @@ export function TaskChat({
     isLoadingOlderMessages,
     olderMessagesError,
     sendMessage,
+    connectionState,
     loadMessages,
     loadOlderMessages,
-  } = useChat();
+  } = useChat(reconcilePersistedTaskRun);
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const delegationRuns = useStore((s) => s.delegationRuns.get(taskId));
   const [input, setInput] = useState('');
@@ -361,8 +363,8 @@ export function TaskChat({
     }
   }, [refreshPersistentGrants, setUploadError, taskId]);
   const lastGoalStatusRef = useRef<GoalStateSnapshot['status'] | null>(null);
-  const runIsStreaming = (taskRun?.kind === 'chat' || taskRun?.kind === 'goal') && taskRun.status === 'streaming';
-  const isGoalStreaming = taskRun?.kind === 'goal' && taskRun.status === 'streaming';
+  const runIsStreaming = !runFailureNotice && (taskRun?.kind === 'chat' || taskRun?.kind === 'goal') && taskRun.status === 'streaming';
+  const isGoalStreaming = !runFailureNotice && taskRun?.kind === 'goal' && taskRun.status === 'streaming';
   const isStreaming = liveIsStreaming || runIsStreaming;
   const isCompacting = taskRun?.kind === 'compact' && taskRun.status === 'compacting';
   const compactionBlocker = isCompacting || compactInFlight;
@@ -1091,7 +1093,9 @@ export function TaskChat({
 
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
+        {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         <RunFailureBanner notice={runFailureNotice} />
+        <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>

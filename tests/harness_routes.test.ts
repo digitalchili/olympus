@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const root = await mkdtemp(join(tmpdir(), 'harness-routes-'));
+process.env.HERMES_HOME = join(root,'hermes'); process.env.OLYMPUS_DISPATCH_HOME = join(root,'state'); process.env.DB_PATH = join(root,'db');
+await mkdir(process.env.HERMES_HOME,{recursive:true}); await writeFile(join(process.env.HERMES_HOME,'config.yaml'),'{}\n');
+const { default:app, adapter } = await import('../server/app.js');
+const { default:db } = await import('../server/db/index.js');
+const { insertTask, getTask } = await import('../server/db/queries.js');
+const { getLatestTaskAgentRun } = await import('../server/db/task-agent-runs.js');
+const { getRecovery, reconcileRecoveries } = await import('../server/run-recovery.js');
+const { discardRun } = await import('../server/live-chat.js');
+const server=app.listen(0,'127.0.0.1'); await once(server,'listening');
+const api=`http://127.0.0.1:${(server.address() as {port:number}).port}/api/tasks`;
+const post=(id:string,body:unknown,path='messages')=>fetch(`${api}/${id}/${path}?profile=default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+const wait=async(id:string)=>{for(let i=0;i<200 && getLatestTaskAgentRun(id)?.status==='streaming';i++)await new Promise(r=>setTimeout(r,5));};
+const ids:string[]=[];
+try {
+ const cwd=join(root,'repo'); await mkdir(join(cwd,'.olympus'),{recursive:true});
+ const git=(...args:string[])=>promisify(execFile)('git',args,{cwd});
+ await git('init'); await git('config','user.email','test@example.invalid');await git('config','user.name','Test');
+ await writeFile(join(cwd,'source'),'before');await git('add','.');await git('commit','-m','initial');
+ await writeFile(join(cwd,'.olympus/verification.json'),JSON.stringify({commands:[[process.execPath,'-e','process.exit(1)']]}));
+ const task=insertTask({title:'Code evidence',status:'in_progress',workdir:cwd,profile_name:'default'});ids.push(task.id);
+ adapter.getBackgroundWork=async()=>({available:true,work:[],continuation:{status:'pending'}});
+ adapter.chatStream=async function*(sessionId){await writeFile(join(cwd,'source'),'after');yield {type:'text_delta',content:'Changed code'};yield {type:'done',sessionId};};
+ assert.equal((await post(task.id,{content:'Fix code'})).status,202);await wait(task.id);
+ assert.equal(getTask(task.id)?.status,'in_progress','failed verification prevents automatic review');
+ assert.equal((await (await fetch(`${api}/${task.id}/verification`)).json()).evidence.status,'failed');
+ await writeFile(join(cwd,'.olympus/verification.json'),JSON.stringify({commands:[[process.execPath,'-e','console.log("pass")']]}));
+ assert.equal((await post(task.id,{},'verification')).status,200);assert.equal(getTask(task.id)?.status,'in_review');
+ const recovering=insertTask({title:'Automatic continuation',status:'in_progress',profile_name:'default'});ids.push(recovering.id);
+ const flags:Array<boolean|undefined>=[];
+ adapter.chatStream=async function*(sessionId,_content,options){flags.push(options?.recoveryContinuation);yield {type:'error',code:'run_idle_timeout',error:'Idle'};yield {type:'done',sessionId};};
+ assert.equal((await post(recovering.id,{content:'Work'})).status,202);await wait(recovering.id);
+ assert.equal(getRecovery(recovering.id)?.state,'pending');
+ await reconcileRecoveries(adapter,async(id,runId)=>{assert.equal((await post(id,{content:'Resume saved work',recoveryOfRunId:runId})).status,202);});await wait(recovering.id);
+ assert.equal(flags[1],true,'scheduler passes explicit recovery mode');
+ assert.equal((await post(recovering.id,{content:'New human instructions'})).status,202);await wait(recovering.id);
+ assert.equal(flags[2],false,'human instructions reset previous automatic attempts');
+ await post(recovering.id,{},'recovery/stop');
+ const goal=insertTask({title:'Recover original goal',status:'in_progress',profile_name:'default'});ids.push(goal.id);
+ let setGoals=0; let evaluated=0; const goalFlags:Array<boolean|undefined>=[];
+ adapter.setGoal=async()=>{setGoals++;return {goal:'Original objective',status:'active',turnsUsed:0,maxTurns:20};};
+ adapter.getGoalStatus=async()=>({goal:'Original objective',status:'active',turnsUsed:1,maxTurns:20});
+ adapter.evaluateGoal=async()=>({status:++evaluated===1?'active':'done',shouldContinue:evaluated===1,verdict:evaluated===1?'continue':'done',reason:'evaluated',message:'',continuationPrompt:'Finish original objective'});
+ adapter.chatStream=async function*(sessionId,_content,options){goalFlags.push(options?.recoveryContinuation);if(goalFlags.length===1)yield {type:'error',code:'recovery_pending',error:'Saved partial turn'};else yield {type:'text_delta',content:'Continuation'};yield {type:'done',sessionId};};
+ assert.equal((await post(goal.id,{content:'Original objective',settings:{mode:'goal'}})).status,202);await wait(goal.id);
+ await reconcileRecoveries(adapter,async(id,runId)=>{assert.equal((await post(id,{content:'Resume saved work',recoveryOfRunId:runId,settings:{mode:'task'}})).status,202);});await wait(goal.id);
+ assert.equal(setGoals,1,'automatic recovery preserves original goal');
+ assert.equal(evaluated,2,'recovered goals still require goal evaluation');
+ assert.deepEqual(goalFlags,[false,true,false],'only first resumed turn claims saved continuation');
+ assert.equal(getLatestTaskAgentRun(goal.id)?.kind,'goal');
+ db.prepare("UPDATE task_recovery SET attempts=1, deadline_at=1 WHERE task_id=?").run(goal.id);
+ assert.equal((await post(goal.id,{content:'A fresh human goal',settings:{mode:'goal'}})).status,202,'fresh human goals receive a fresh deadline');await wait(goal.id);
+ assert.equal(setGoals,2);
+ assert.equal(getLatestTaskAgentRun(goal.id)?.status,'done');
+ const {default:express}=await import('express');
+ const {createTaskRecoveryRouter}=await import('../server/routes/task-recovery.js');
+ const {chatRouter}=await import('../server/routes/chat.js');
+ const {cancelRecovery}=await import('../server/run-recovery.js');
+ const paused=insertTask({title:'Pause during project preparation',status:'in_progress',profile_name:'default'});ids.push(paused.id);
+ adapter.chatStream=async function*(sessionId){yield {type:'error',code:'recovery_pending',error:'Pending'};yield {type:'done',sessionId};};
+ assert.equal((await post(paused.id,{content:'Work'})).status,202);await wait(paused.id);
+ const delayed=express();delayed.use(express.json());delayed.use('/api/tasks',createTaskRecoveryRouter(adapter));
+ delayed.use((_req,_res,next)=>{cancelRecovery(paused.id);next();});delayed.use('/api/tasks',chatRouter);
+ const delayedServer=delayed.listen(0,'127.0.0.1');await once(delayedServer,'listening');
+ try {
+   const before=getLatestTaskAgentRun(paused.id)?.runId;
+   await reconcileRecoveries(adapter,async(id,runId)=>{
+     const response=await fetch(`http://127.0.0.1:${(delayedServer.address() as {port:number}).port}/api/tasks/${id}/messages?profile=default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:'Resume',recoveryOfRunId:runId})});
+     assert.equal(response.status,409,'pause after preflight prevents worker startup');
+   });
+   assert.equal(getLatestTaskAgentRun(paused.id)?.runId,before);
+ } finally {delayedServer.close();await once(delayedServer,'close');}
+
+
+ assert.equal(getRecovery(recovering.id)?.state,'blocked');
+} finally {for(const id of ids)discardRun(id);server.close();await once(server,'close');db.close();await rm(root,{recursive:true,force:true});}
+console.log('Harness route tests passed');

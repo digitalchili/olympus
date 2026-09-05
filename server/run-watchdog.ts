@@ -104,6 +104,36 @@ export function remainingRunWatchdogConfig(
   };
 }
 
+/** Non-streaming phases must consume the same absolute budget as tool execution. */
+export async function withinRunDeadline<T>(work: () => Promise<T>, budget: AgentRunBudget, isStopped?: () => boolean): Promise<T> {
+  const remaining = budget.hardDeadlineAtMs - Date.now();
+  if (remaining <= 0) throw new RunWatchdogError('runtime', budget.maxRuntimeMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopTimer: ReturnType<typeof setInterval> | undefined;
+  try {
+    const result = await Promise.race([
+      Promise.resolve().then(() => {
+        if (isStopped?.()) throw new Error('Run stopped by user');
+        return work();
+      }),
+      new Promise<never>((_, reject) => {
+        if (isStopped) stopTimer = setInterval(() => {
+          if (isStopped()) reject(new Error('Run stopped by user'));
+        }, 50);
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new RunWatchdogError('runtime', budget.maxRuntimeMs)), remaining);
+      }),
+    ]);
+    if (isStopped?.()) throw new Error('Run stopped by user');
+    if (Date.now() >= budget.hardDeadlineAtMs) throw new RunWatchdogError('runtime', budget.maxRuntimeMs);
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (stopTimer) clearInterval(stopTimer);
+  }
+}
+
 export async function* withRunWatchdog<T>(
   stream: AsyncIterable<T>,
   options: RunWatchdogOptions,

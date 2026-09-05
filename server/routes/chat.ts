@@ -1,3 +1,5 @@
+import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed } from '../coding-verification.js';
+import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
 import {
@@ -55,6 +57,7 @@ import { ProjectAccessError, requireProfileProjectAccess } from '../project-acce
 import {
   RunWatchdogError,
   createRunBudget,
+  withinRunDeadline,
   remainingRunWatchdogConfig,
   withRunWatchdog,
   type AgentRunBudget,
@@ -281,10 +284,11 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   const run = getRun(taskId);
   if (run?.modelResolution) updateTaskAgentRunResolution(runId, run.modelResolution);
   finishTaskAgentRun(runId, status?.status ?? 'error', Date.now(), run?.errorCode);
+  recoveryOutcome(taskId, runId, status?.status ?? 'error', run?.errorCode);
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
-  if (status && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
+  if (status && codingReviewAllowed(taskId, runId) && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
     const updated = recordCompletedAgentRun(taskId, context);
     if (updated) broadcast({ type: 'task_updated', task: updated });
   } else {
@@ -303,6 +307,13 @@ function taskSystemMessage(task: Task, supplemental = ''): string {
   return `${base}${supplemental}`;
 }
 
+function taskRunBudget(taskId: string): AgentRunBudget {
+  const budget = createRunBudget();
+  const recovery = getRecovery(taskId);
+  if (recovery && recovery.attempts > 0) budget.hardDeadlineAtMs = Math.min(budget.hardDeadlineAtMs, recovery.deadline_at);
+  return budget;
+}
+
 async function streamChatTurn(
   runTask: Task,
   sessionId: string,
@@ -313,6 +324,7 @@ async function streamChatTurn(
     supplementalSystemMessage?: string;
     hideInternalEvents?: boolean;
     runBudget?: AgentRunBudget;
+    recoveryContinuation?: boolean;
   },
 ): Promise<StreamChatTurnResult> {
   let sawDone = false;
@@ -321,7 +333,7 @@ async function streamChatTurn(
   let hadError = false;
   let interrupted = false;
   let pendingSteer: string | undefined;
-  const runBudget = options.runBudget ?? createRunBudget();
+  const runBudget = options.runBudget ?? taskRunBudget(runTask.id);
   const finalizationMinutes = Math.max(1, Math.round(runBudget.finalizeBeforeMs / 60_000));
   const budgetMinutes = Math.max(1, Math.round(runBudget.maxRuntimeMs / 60_000));
   const deadlineMessage = `\n\n<run_budget>\n  <absolute_minutes>${budgetMinutes}</absolute_minutes>\n  <hard_deadline_epoch_ms>${runBudget.hardDeadlineAtMs}</hard_deadline_epoch_ms>\n  <finalization_reserve_minutes>${finalizationMinutes}</finalization_reserve_minutes>\n  <max_delegated_children>${runBudget.maxDelegatedChildren}</max_delegated_children>\n  <rule>Finish implementation early enough to preserve the finalization reserve. Use delegation sparingly—normally one implementer and one independent reviewer—and never exceed the stated cumulative child cap. Before the reserve begins, stop opening new work, save durable checkpoints, reconcile existing child results, run the most important remaining verification, and send the user a truthful final status. Do not start replacement reviewers near the deadline.</rule>\n</run_budget>`;
@@ -329,11 +341,13 @@ async function streamChatTurn(
   const humanWaits = new Map<string, number>();
 
   try {
+    if (interactionRunId) await withinRunDeadline(() => captureCodingBaseline(runTask, interactionRunId), runBudget);
     const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
       systemMessage: taskSystemMessage(runTask, `${options.supplementalSystemMessage ?? ''}${deadlineMessage}`),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
       runBudget,
+      recoveryContinuation: options.recoveryContinuation === true,
     }), {
       ...remainingRunWatchdogConfig(runBudget),
       pauseUntil: () => humanWaits.size ? Math.max(...humanWaits.values()) : null,
@@ -347,8 +361,18 @@ async function streamChatTurn(
 
     for await (const rawEvent of stream) {
       let event = rawEvent;
+      if (event.type === 'checkpoint') {
+        if (interactionRunId) saveRecoveryCheckpoint(runTask.id, interactionRunId, event.checkpoint);
+        continue;
+      }
       if (options.hideInternalEvents && isPrivateCollaborationEvent(event.type)) {
         continue;
+      }
+      if (rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
+        const passed = await withinRunDeadline(() => verifyCodingRun(runTask, interactionRunId, Math.min(5 * 60_000, runBudget.hardDeadlineAtMs - Date.now())), runBudget);
+        if (!passed) {
+          appendSystemMessage(runTask.id, 'Code verification did not pass. Review the saved checks and remaining work.');
+        }
       }
       if (rawEvent.type === 'done') {
         const run = getRun(runTask.id);
@@ -408,13 +432,16 @@ async function streamChatTurn(
     const event: StreamEvent = {
       type: 'error',
       error: toErrorMessage(error, 'Hermes chat stream failed'),
-      code: error instanceof RunWatchdogError ? error.code : undefined,
+      code: error instanceof RunWatchdogError ? error.code : (error as { code?: string }).code,
     };
     applyEvent(runTask.id, event);
     broadcastLive(runTask.id, event);
   }
 
-  if (interactionRunId) closeRunInteractions(runTask.id, interactionRunId);
+  if (interactionRunId) {
+    if (hasUnansweredInteractions(runTask.id, interactionRunId)) cancelRecovery(runTask.id, 'Unanswered interaction requires user action');
+    closeRunInteractions(runTask.id, interactionRunId);
+  }
   const finalRun = getRunStatus(runTask.id);
   if (!sawDone && !hadError && finalRun?.status === 'streaming') {
     hadError = true;
@@ -429,9 +456,11 @@ async function streamChatTurn(
 async function consumeChatRun(runTask: Task, sessionId: string, content: string, runId: string): Promise<void> {
   let turnContent = content;
   let finalContext: ContextUsage | null | undefined;
-  const runBudget = createRunBudget();
+  const runBudget = taskRunBudget(runTask.id);
+  let recoveryContinuation = (getRecovery(runTask.id)?.attempts ?? 0) > 0;
   while (true) {
-    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true, runBudget });
+    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true, runBudget, recoveryContinuation });
+    recoveryContinuation = false;
     if (result.context !== undefined) finalContext = result.context;
     if (!result.pendingSteer || result.hadError || result.interrupted) break;
     turnContent = result.pendingSteer;
@@ -503,7 +532,7 @@ async function consumeCollaborationRun(
   active: ActiveCollaboration,
 ): Promise<void> {
   let finalContext: ContextUsage | null | undefined;
-  const runBudget = createRunBudget();
+  const runBudget = taskRunBudget(runTask.id);
   try {
     let collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run was not persisted');
@@ -588,20 +617,19 @@ async function consumeCollaborationRun(
   }
 }
 
-async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: string, runId: string): Promise<void> {
+async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: string, runId: string, runBudget = taskRunBudget(runTask.id)): Promise<void> {
   let finalContext: ContextUsage | null | undefined;
   let hadError = false;
   let wasInterrupted = false;
   let turnContent: string | null = initialContent;
   let turnAlreadyVisible = false;
   let turnCount = 0;
-  const runBudget = createRunBudget();
+  let goalCompleted = false;
 
   try {
     while (turnContent) {
       if (++turnCount > OLYMPUS_GOAL_MAX_TURNS) {
-        appendSystemMessage(runTask.id, 'Goal turn limit reached');
-        break;
+        throw Object.assign(new Error('Goal turn limit reached before completion'), { code: 'goal_incomplete' });
       }
       if (!turnAlreadyVisible) {
         appendUserMessage(runTask.id, turnContent);
@@ -613,6 +641,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
         completeOnDone: false,
         captureResponseText: true,
         runBudget,
+        recoveryContinuation: turnCount === 1 && (getRecovery(runTask.id)?.attempts ?? 0) > 0,
       });
       if (turn.context !== undefined) finalContext = turn.context;
       const currentRun = getRunStatus(runTask.id);
@@ -630,7 +659,9 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
         continue;
       }
 
-      const decision = await adapter.evaluateGoal(sessionId, turn.responseText);
+      const decision = await withinRunDeadline(() => adapter.evaluateGoal(sessionId, turn.responseText), runBudget, () => getRunStatus(runTask.id)?.status === 'stopped');
+      if (getRunStatus(runTask.id)?.status === 'stopped') { wasInterrupted = true; break; }
+      goalCompleted = decision.verdict === 'done' && decision.status === 'done';
       let shouldBroadcastSnapshot = false;
       if (decision.state) {
         const goalRun = updateRunGoal(runTask.id, decision.state);
@@ -647,11 +678,17 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
 
       turnContent = decision.continuationPrompt?.trim() ? decision.continuationPrompt : null;
     }
+    if (goalCompleted && !hadError && !wasInterrupted) await withinRunDeadline(() => verifyCodingRun(runTask, runId, Math.min(5 * 60_000, runBudget.hardDeadlineAtMs - Date.now())), runBudget);
+    if (!goalCompleted && !hadError && !wasInterrupted) throw Object.assign(new Error('Goal remains unfinished'), { code: 'goal_incomplete' });
   } catch (error) {
-    hadError = true;
-    const event: StreamEvent = { type: 'error', error: toErrorMessage(error, 'Hermes goal loop failed') };
-    applyEvent(runTask.id, event);
-    broadcastLive(runTask.id, event);
+    if (getRunStatus(runTask.id)?.status === 'stopped') {
+      wasInterrupted = true;
+    } else {
+      hadError = true;
+      const event: StreamEvent = { type: 'error', code: error instanceof RunWatchdogError ? error.code : (error as { code?: string }).code ?? 'goal_incomplete', error: toErrorMessage(error, 'Hermes goal loop failed') };
+      applyEvent(runTask.id, event);
+      broadcastLive(runTask.id, event);
+    }
   } finally {
     if (!hadError && getRunStatus(runTask.id)?.status === 'streaming') {
       updateRunStatus(runTask.id, wasInterrupted ? 'stopped' : 'done', { context: finalContext ?? null });
@@ -668,6 +705,7 @@ function beginGoalRunOperation(
   runTask: Task,
   sessionId: string,
   content: string,
+  automatic = false,
 ): {
   setup: Promise<ReturnType<typeof startGoalRun>>;
   work: Promise<void>;
@@ -678,10 +716,10 @@ function beginGoalRunOperation(
     resolveSetup = resolve;
     rejectSetup = reject;
   });
+  const runBudget = automatic ? taskRunBudget(runTask.id) : createRunBudget();
   const work = (async () => {
+    const started = startGoalRun(runTask.id, sessionId, null);
     try {
-      const goalState = await adapter.setGoal(sessionId, content);
-      const started = startGoalRun(runTask.id, sessionId, goalState);
       createTaskAgentRun({
         runId: started.snapshot.runId,
         taskId: runTask.id,
@@ -689,11 +727,21 @@ function beginGoalRunOperation(
         status: started.snapshot.status,
         startedAt: started.snapshot.startedAt,
       });
+      beginRecovery(runTask.id, started.snapshot.runId, started.snapshot.startedAt, automatic);
       broadcast({ type: 'task_run_updated', run: started.state });
       broadcastLive(runTask.id, { type: 'snapshot', run: started.snapshot });
+      const goalState = await withinRunDeadline(() => automatic ? adapter.getGoalStatus(sessionId) : adapter.setGoal(sessionId, content), runBudget, () => getRunStatus(runTask.id)?.status === 'stopped');
+      if (getRunStatus(runTask.id)?.status === 'stopped') throw new Error('Goal setup stopped by user');
+      if (!goalState || (automatic && goalState.status !== 'active')) throw Object.assign(new Error('Saved goal is unavailable or no longer active; automatic recovery stopped'), { code: 'recovery_blocked' });
+      updateRunGoal(runTask.id, goalState);
       resolveSetup(started);
-      await consumeGoalRun(runTask, sessionId, content, started.snapshot.runId);
+      await consumeGoalRun(runTask, sessionId, content, started.snapshot.runId, runBudget);
     } catch (error) {
+      if (getRunStatus(runTask.id)?.status !== 'stopped') {
+        applyEvent(runTask.id, { type: 'error', code: error instanceof RunWatchdogError ? error.code : (error as { code?: string }).code, error: toErrorMessage(error, 'Goal setup failed') });
+      }
+      broadcastRunSnapshot(runTask.id);
+      settleRun(runTask.id, started.snapshot.runId, null);
       rejectSetup(error);
       throw error;
     }
@@ -843,7 +891,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
   let collaborationInvites: ReturnType<typeof validateCollaborationInvites>;
   try {
     runSettings = parseRunSettingsBody(effectiveBody);
-    mode = parseChatRunMode(effectiveBody);
+    mode = res.locals.recoveryContinuation === true ? (res.locals.recoveryKind === 'goal' ? 'goal' : 'task') : parseChatRunMode(effectiveBody);
     invitationScope = parseCollaborationInvitationScope(
       effectiveBody.collaborationScope,
       effectiveBody.confirmPersistentCollaboration === true,
@@ -885,6 +933,16 @@ chatRouter.post('/:id/messages', async (req, res) => {
     return res.status(400).json({ error: toErrorMessage(error, 'Invalid run settings') });
   }
 
+  // Project preparation can await I/O after the first preflight. Pause must win
+  // until this synchronous startup section creates the replacement run.
+  if (res.locals.recoveryContinuation === true) {
+    const recovery = getRecovery(task.id);
+    if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || recovery.deadline_at <= Date.now() || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id) {
+      restoreConsumedQueue();
+      return res.status(409).json({ error: 'Recovery was paused or changed; nothing new was started.' });
+    }
+  }
+
   let runTask = task;
   const taskUpdates: Partial<Pick<Task, 'status' | 'agent_model' | 'agent_provider' | 'reasoning_effort'>> = {};
   if (runSettings.hasFields) {
@@ -919,7 +977,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     const releaseRunWork = acquireProfileWork(taskProfileId(runTask));
     let handedOff = false;
     try {
-      const operation = beginGoalRunOperation(runTask, sessionId, content);
+      const operation = beginGoalRunOperation(runTask, sessionId, content, res.locals.recoveryContinuation === true);
       releaseProfileWorkWhenSettled(runTask.id, operation.work, releaseRunWork);
       handedOff = true;
 
@@ -949,6 +1007,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       startedAt: snapshot.startedAt,
     });
     broadcast({ type: 'task_run_updated', run: state });
+    beginRecovery(runTask.id, snapshot.runId, snapshot.startedAt, res.locals.recoveryContinuation === true);
     broadcastLive(runTask.id, { type: 'snapshot', run: snapshot });
 
     const hasCollaboration = collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited;
@@ -1001,6 +1060,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
 
 chatRouter.post('/:id/interrupt', async (req, res) => {
   const task = res.locals.task as Task;
+  cancelRecovery(task.id);
 
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim()
     ? req.body.reason.trim()
@@ -1040,9 +1100,11 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
 
   try {
     const interrupted = await adapter.interruptChat(task.id, reason);
-    if (!interrupted) {
+    if (!interrupted && getRunStatus(task.id)?.kind !== 'goal') {
       return res.status(409).json({ error: 'Hermes had no active agent to stop for this task' });
     }
+    updateRunStatus(task.id, 'stopped');
+    broadcastRunSnapshot(task.id);
     res.json({ interrupted: true });
   } catch (error) {
     sendAdapterError(res, error, 'Could not stop Hermes run');

@@ -21,4 +21,8 @@ adapterInternal.client.stream = async function* () {
 const mapped = [];
 for await (const event of adapter.chatStream('session', 'message')) mapped.push(event);
 assert.deepEqual(mapped, [{ type: 'error', error: '[deadline_finalized] Checkpoint preserved', code: 'deadline_finalized' }]);
+let crashCode: string | undefined;
+internal.pending.set('crashing', { kind: 'stream', fail(error: Error & { code?: string }) { crashCode = error.code; } });
+(worker as unknown as { handleExit(error: Error): void }).handleExit(new Error('simulated exit'));
+assert.equal(crashCode, 'worker_restarted', 'worker exit must preserve recovery classification');
 console.log('Worker error terminal tests passed');

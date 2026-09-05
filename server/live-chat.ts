@@ -253,7 +253,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
       fallbackReason: event.modelResolution.fallbackReason ?? null,
     };
   } else if (event.type === 'done') {
-    if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
+    if (run.status !== 'error' && run.status !== 'stopped') run.status = event.interrupted ? 'stopped' : 'done';
     assistant.completed_at = Date.now();
     if (event.modelResolution) {
       run.modelResolution = {
@@ -268,6 +268,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     }
     if (event.attachments) assistant.attachments = event.attachments.map((attachment) => ({ ...attachment }));
   } else if (event.type === 'error') {
+    if (run.status === 'stopped') return;
     const error = event.error || 'Unknown error';
     run.status = 'error';
     run.error = error;

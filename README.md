@@ -4,6 +4,10 @@
 
 Olympus never discovers, synchronizes with, or falls back to another host or Hermes installation.
 
+## v0.6.0 coding harness
+
+Coding tasks now retain Git and check evidence before entering review. Durable child-result reconciliation and bounded continuation recover safely saved work after missed notifications or restarts. See [coding and recovery](docs/coding-harness.md) for setup, runtime compatibility and limits.
+
 ## Install with Hermes Agent
 
 Paste this into a Hermes conversation:

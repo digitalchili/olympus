@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const root = await mkdtemp(join(tmpdir(), 'automatic-recovery-'));
+process.env.DB_PATH = join(root, 'state.db'); process.env.OLYMPUS_DISPATCH_HOME = root;
+const { default: db } = await import('../server/db/index.js');
+const { insertTask } = await import('../server/db/queries.js');
+const { beginRecovery, recoveryOutcome, getRecovery, reconcileRecoveries, cancelRecovery, recoverRecoveryRecords } = await import('../server/run-recovery.js');
+const { createTaskAgentRun, finishTaskAgentRun } = await import('../server/db/task-agent-runs.js');
+try {
+ const task = insertTask({ title: 'Recover', status: 'in_progress' });
+ let sequence = 100;
+ const fail = (id: string, automatic = false) => { createTaskAgentRun({ taskId: task.id, runId: id, kind: 'chat', status: 'streaming', startedAt: sequence++ }); beginRecovery(task.id, id, 100, automatic); finishTaskAgentRun(id, 'error', 101, 'run_idle_timeout'); recoveryOutcome(task.id, id, 'error', 'run_idle_timeout'); };
+ fail('one');
+ let starts = 0;
+ const idle = { getBackgroundWork: async () => ({ available: true, work: [], continuation: { status: 'pending' as const } }) };
+ await reconcileRecoveries({ getBackgroundWork: async () => ({ available: true, work: [{ id: 'child', kind: 'delegation' as const, status: 'running' }] }) }, async () => { starts++; }, 200);
+ assert.equal(starts, 0, 'active child must not duplicate execution');
+ await reconcileRecoveries(idle, async () => { starts++; fail('two', true); }, 201);
+ assert.equal(starts, 1);
+ await reconcileRecoveries(idle, async () => { starts++; fail('three', true); }, 202);
+ await reconcileRecoveries(idle, async () => { starts++; }, 203);
+ assert.equal(starts, 2, 'only two recovery attempts');
+ assert.equal(getRecovery(task.id)?.state, 'exhausted');
+ fail('manual'); cancelRecovery(task.id);
+ await reconcileRecoveries(idle, async () => { starts++; }, 204);
+ assert.equal(starts, 2, 'explicit stop cannot auto resume');
+ fail('claimed-before-restart');
+ db.prepare("UPDATE task_recovery SET state='dispatching', attempts=1 WHERE task_id=?").run(task.id);
+ recoverRecoveryRecords();
+ assert.equal(getRecovery(task.id)?.state, 'pending', 'restart must restore a claimed continuation before replacement startup');
+ assert.equal(getRecovery(task.id)?.attempts, 1);
+ fail('later');
+ await reconcileRecoveries(idle, async () => { starts++; }, 100 + 2 * 60 * 60_000 + 1);
+ assert.equal(starts, 2, 'recovery time window is finite');
+} finally { db.close(); await rm(root, { recursive: true, force: true }); }
+console.log('Automatic recovery tests passed');

@@ -18,10 +18,12 @@ export type { AgentRunSettings, ContextUsage };
 
 export interface TaskBackgroundWork {
   available: boolean;
-  work: Array<{ id: string; kind: 'process' | 'delegation'; status: string }>;
+  continuation?: { status: 'pending' | 'blocked' | 'none'; reason?: string };
+  work: Array<{ id: string; kind: 'process' | 'delegation' | 'operation'; status: string }>;
 }
 
 export interface AgentRunOptions {
+  recoveryContinuation?: boolean;
   systemMessage?: string;
   settings?: AgentRunSettings;
   task?: {
@@ -39,7 +41,8 @@ export interface AgentRunOptions {
 }
 
 export interface StreamEvent {
-  type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
+  type: 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
+  checkpoint?: unknown;
   content?: string;
   error?: string;
   code?: string;

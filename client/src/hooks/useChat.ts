@@ -87,6 +87,7 @@ export function applyLiveErrorEvent(
   event: Extract<LiveEvent, { type: 'error' }>,
   now = Date.now(),
 ): void {
+  if (run.status === 'stopped') return;
   const error = event.error || 'Unknown error';
   run.status = 'error';
   run.error = error;
@@ -330,7 +331,7 @@ export function prependOlderMessages(current: ChatMessage[], older: ChatMessage[
   return [...uniqueOlder, ...current];
 }
 
-export function useChat() {
+export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [stopped, setStopped] = useState(false);
@@ -345,6 +346,8 @@ export function useChat() {
 
   const postAbortRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connectionState, setConnectionState] = useState<'connected' | 'reconnecting'>('connected');
   const taskIdRef = useRef<string | null>(null);
   const committedMessagesRef = useRef<ChatMessage[]>([]);
   const liveRunRef = useRef<LiveChatRun | null>(null);
@@ -356,6 +359,8 @@ export function useChat() {
   const rafRef = useRef<number | null>(null);
 
   const closeLiveSource = useCallback(() => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
     sourceRef.current?.close();
     sourceRef.current = null;
   }, []);
@@ -502,7 +507,7 @@ export function useChat() {
       }
       if (event.attachments) ensureAssistant(run).attachments = event.attachments.map((attachment) => ({ ...attachment }));
       if (event.sessionId) run.sessionId = event.sessionId;
-      if (run.status !== 'error') run.status = event.interrupted ? 'stopped' : 'done';
+      if (run.status !== 'error' && run.status !== 'stopped') run.status = event.interrupted ? 'stopped' : 'done';
       ensureAssistant(run).completed_at = Date.now();
       if (event.context !== undefined) {
         run.context = event.context;
@@ -535,9 +540,37 @@ export function useChat() {
         console.warn('Failed to parse live chat event:', message.data, err);
       }
     };
-    source.onerror = () => {};
+    const refreshOnReconnect = () => {
+      if (sourceRef.current !== source || source.readyState !== EventSource.OPEN) return;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      // Snapshot TTL/restarts can leave the server with no live snapshot to send.
+      // Refresh durable history on every reconnect, without losing a newer run.
+      void fetchMessages(taskId).then(({ messages, pageInfo, context, latestAgentRun }) => {
+        if (sourceRef.current !== source || taskIdRef.current !== taskId) return;
+        setConnectionState('connected');
+        const live = liveRunRef.current;
+        if (live && latestAgentRun && latestAgentRun.runId !== live.runId && latestAgentRun.startedAt < live.startedAt) return;
+        committedMessagesRef.current = messages as ChatMessage[];
+        messagePageInfoRef.current = pageInfo;
+        persistedLatestAgentRunRef.current = latestAgentRun ?? null;
+        onHistoryRun?.(latestAgentRun ?? null);
+        persistedModelResolutionRef.current = latestAgentRun?.modelResolution ?? null;
+        liveContextRef.current = context ?? null;
+        liveRunRef.current = currentLiveRun(live, latestAgentRun ?? null);
+        publishState();
+      }).catch(() => {
+        if (sourceRef.current === source) {
+          setConnectionState('reconnecting');
+          reconnectTimerRef.current = setTimeout(refreshOnReconnect, 2_000);
+        }
+      });
+    };
+    source.onopen = refreshOnReconnect;
+    source.onerror = () => {
+      if (sourceRef.current === source) setConnectionState('reconnecting');
+    };
     sourceRef.current = source;
-  }, [applyLiveEvent, closeLiveSource]);
+  }, [applyLiveEvent, closeLiveSource, publishState, onHistoryRun]);
 
   const clearAllState = useCallback(() => {
     teardown();
@@ -574,11 +607,12 @@ export function useChat() {
     liveContextRef.current = persistedContext ?? null;
     persistedModelResolutionRef.current = latestAgentRun?.modelResolution ?? null;
     persistedLatestAgentRunRef.current = latestAgentRun ?? null;
+    onHistoryRun?.(latestAgentRun ?? null);
     setMessagePageInfo(pageInfo);
     publishState();
     openLiveSubscription(taskId);
     return msgs;
-  }, [clearAllState, openLiveSubscription, publishState]);
+  }, [clearAllState, openLiveSubscription, publishState, onHistoryRun]);
 
   const loadOlderMessages = useCallback(async (taskId: string) => {
     const cursor = messagePageInfoRef.current.olderCursor;
@@ -758,6 +792,7 @@ export function useChat() {
     isLoadingOlderMessages,
     olderMessagesError,
     sendMessage,
+    connectionState,
     loadMessages,
     loadOlderMessages,
     reset: clearAllState,

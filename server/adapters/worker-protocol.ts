@@ -44,6 +44,7 @@ export type WorkerRequest =
   | {
       id: string;
       type: 'chat';
+      recoveryContinuation?: boolean;
       sessionId: string;
       message: string;
       systemMessage?: string;
@@ -107,6 +108,7 @@ export type WorkerResult =
     };
 
 export type WorkerEvent =
+  | { id: string; type: 'checkpoint'; checkpoint: unknown }
   | { id: string; type: 'result'; data: WorkerResult }
   | { id: string; type: 'text_delta'; content?: string }
   | { id: string; type: 'thinking_delta'; content?: string }

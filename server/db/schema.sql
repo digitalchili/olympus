@@ -403,3 +403,22 @@ CREATE TABLE IF NOT EXISTS project_reference_chunks (
 
 CREATE VIRTUAL TABLE IF NOT EXISTS project_reference_chunks_fts
   USING fts5(chunk_id UNINDEXED, project_id UNINDEXED, reference_id UNINDEXED, text);
+
+CREATE TABLE IF NOT EXISTS task_recovery (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  deadline_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL,
+  reason TEXT,
+  checkpoint_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS coding_evidence (
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (task_id, run_id)
+);

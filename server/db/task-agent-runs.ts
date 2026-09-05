@@ -42,7 +42,7 @@ const finishRun = db.prepare(`
   WHERE run_id = @runId AND NOT (status IN ('error', 'stopped') AND @status = 'done')
 `);
 const latestRun = db.prepare(`
-  SELECT * FROM task_agent_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1
+  SELECT * FROM task_agent_runs WHERE task_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1
 `);
 
 function project(row: AgentRunRow | undefined): TaskAgentRun | undefined {

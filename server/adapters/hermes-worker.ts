@@ -49,6 +49,7 @@ export function buildChatWorkerRequest(
     taskTitle: options?.task?.title ?? null,
     workdir: options?.task?.workdir ?? null,
     runBudget: options?.runBudget,
+    ...(options?.recoveryContinuation ? { recoveryContinuation: true } : {}),
   };
 }
 
@@ -453,7 +454,7 @@ export class HermesWorkerClient {
     this.child = null;
     this.ready = false;
 
-    this.failPending(new Error(`Hermes worker crashed: ${error.message}`));
+    this.failPending(Object.assign(new Error(`Hermes worker crashed: ${error.message}`), { code: 'worker_restarted' }));
     if (wasRunning) {
       for (const listener of this.delegationResetListeners) listener();
     }
@@ -533,6 +534,9 @@ export class HermesWorkerAdapter implements AgentAdapter {
   ): AsyncIterable<StreamEvent> {
     for await (const event of this.client.stream(buildChatWorkerRequest(sessionId, message, options))) {
       switch (event.type) {
+        case 'checkpoint':
+          yield { type: 'checkpoint', checkpoint: event.checkpoint };
+          break;
         case 'text_delta':
           yield { type: 'text_delta', content: event.content ?? '' };
           break;

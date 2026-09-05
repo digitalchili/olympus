@@ -1,3 +1,4 @@
+import { reconcileRecoveries, recoverRecoveryRecords } from './run-recovery.js';
 import 'dotenv/config';
 import './logging.js';
 import './db/index.js';
@@ -60,6 +61,7 @@ async function listenWithFallback(
 
 async function main() {
   recoverInterruptedTaskAgentRuns();
+  recoverRecoveryRecords();
   closeFrontend = await mountFrontend(app, httpServer);
   try {
     await adapter.start();
@@ -111,6 +113,24 @@ async function main() {
       console.error(`Queued message dispatch failed for task ${taskId}:`, error instanceof Error ? error.message : error);
     },
   });
+  const recover = () => {
+    if (shuttingDown || !drainController.status().ready) return;
+    void reconcileRecoveries(adapter, async (taskId, runId) => {
+      const task = getTask(taskId);
+      if (!task) return;
+      const profileId = task.handling_profile_id ?? task.profile_name ?? 'default';
+      const response = await fetch(`http://${dispatchHost}:${boundPort}/api/tasks/${encodeURIComponent(taskId)}/messages?profile=${encodeURIComponent(profileId)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({ recoveryOfRunId: runId, content: 'Resume only the saved unfinished work. Reconcile completed background results first. Do not repeat completed actions. Report a truthful final status.', settings: { mode: 'task' } }),
+      });
+      if (response.status !== 202) throw new Error('Recovery startup was not accepted');
+      await response.body?.cancel();
+    });
+  };
+  const recoveryTimer = setInterval(recover, 10_000);
+  recoveryTimer.unref();
+  recover();
   configureQueuedMessageDispatcher(queuedMessageDispatcher);
   for (const message of listQueuedTaskMessages()) queuedMessageDispatcher.schedule(message.taskId);
 

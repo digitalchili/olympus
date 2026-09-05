@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { applyLiveErrorEvent } from '../client/src/hooks/useChat.js';
-import { applyEvent, getRun, startRun } from '../server/live-chat.js';
+import { applyEvent, getRun, startRun, updateRunStatus } from '../server/live-chat.js';
 import type { LiveChatRun } from '../shared/types.js';
 
 const taskId = 'iteration-limit-reply-test';
@@ -97,4 +97,10 @@ assert.equal(
   'genuine provider errors must remain visible in reply prose',
 );
 
+updateRunStatus(taskId, 'stopped');
+applyEvent(taskId, { type: 'error', error: 'late provider rejection' });
+assert.equal(getRun(taskId)?.status, 'stopped', 'late provider errors cannot undo explicit stop');
+providerClientRun.status = 'stopped';
+applyLiveErrorEvent(providerClientRun, { type: 'error', error: 'late provider rejection' });
+assert.equal(providerClientRun.status, 'stopped');
 console.log('Iteration-limit reply projection tests passed');

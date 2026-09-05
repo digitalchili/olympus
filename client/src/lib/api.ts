@@ -951,3 +951,12 @@ function fileRelativePath(file: File): string {
   const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
   return relativePath && relativePath.length > 0 ? relativePath : file.name;
 }
+
+export const fetchCodingEvidence = (taskId: string) => request<{ evidence: import('@shared/coding-evidence').CodingEvidence | null }>(`/tasks/${encodeURIComponent(taskId)}/verification`);
+export const runCodingVerification = (taskId: string) => request<{ evidence: import('@shared/coding-evidence').CodingEvidence | null }>(`/tasks/${encodeURIComponent(taskId)}/verification`, { method: 'POST' });
+export interface TaskRecoveryStatus {
+  state: string; attempts: number; deadlineAt: number; reason: string | null;
+  checkpoint: { saved?: boolean } | null;
+}
+export const fetchTaskRecovery = (taskId: string) => request<{ recovery: TaskRecoveryStatus | null }>(`/tasks/${encodeURIComponent(taskId)}/recovery`);
+export const pauseTaskRecovery = (taskId: string) => request(`/tasks/${encodeURIComponent(taskId)}/recovery/stop`, { method: 'POST' });

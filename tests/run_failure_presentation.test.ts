@@ -159,3 +159,10 @@ assert.equal(queuedMessageWaitingLabel({ pausedByRunFailure: true, compactionBlo
 assert.equal(queuedMessageWaitingLabel({ pausedByRunFailure: false, compactionBlocker: true }), 'Sends after compaction');
 
 console.log('Run failure presentation tests passed');
+
+assert.equal(currentLiveRun(
+  { runId: 'same', startedAt: 100, updatedAt: 110, status: 'streaming' } as any,
+  { runId: 'same', startedAt: 100, updatedAt: 120, status: 'error', errorCode: 'worker_restarted' } as any,
+), null, 'persisted terminal state retires a stale snapshot of the same run');
+
+assert.equal(currentLiveRun({ runId: 'same', startedAt: 100, updatedAt: 500, status: 'streaming' } as any, { runId: 'same', startedAt: 100, updatedAt: 120, status: 'error' } as any), null, 'server terminal history wins over client receive timestamps');
