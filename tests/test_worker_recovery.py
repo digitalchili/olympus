@@ -46,7 +46,7 @@ class RecoveryTests(unittest.TestCase):
             raise AssertionError('Missing notification never reconciled native state')
         return None
 
-    def run_chat(self, synthesis=None, notification=True, dispatch=True, **request_extra):
+    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, **request_extra):
         outer = self
         class Agent:
             session_id = 'task-1'
@@ -62,6 +62,9 @@ class RecoveryTests(unittest.TestCase):
                     raise AssertionError('Previous user message replayed or unbounded synthesis')
                 return synthesis or {'final_response': 'Synthesized', 'completed': True}
         agent = Agent()
+        finalization = threading.Event()
+        if finalized:
+            finalization.set()
         def create(**kwargs):
             agent.tool_progress_callback = kwargs['callbacks']['tool_progress_callback']
             return agent
@@ -70,7 +73,7 @@ class RecoveryTests(unittest.TestCase):
                 'open_session': lambda *_: (object(), 'task-1'),
                 'load_agent_history': lambda *_: [], '_create_agent': create,
                 'native_approval_context': lambda *_: nullcontext(),
-                '_start_deadline_controls': lambda *_: types.SimpleNamespace(cancel=lambda: None, finalization_started=threading.Event()),
+                '_start_deadline_controls': lambda *_: types.SimpleNamespace(cancel=lambda: None, finalization_started=finalization),
                 'take_owned_delegation_notification': self.notification if not notification else lambda *_a, **_k: self.event,
                 '_send': self.sent.append,
             }.items():
@@ -258,6 +261,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(len(self.completed), 1)
         self.assertNotIn('Saved child result', self.messages[0][1] or '')
+
+
+    def test_completed_deadline_finalization_without_child_is_durably_recoverable(self):
+        self.run_chat(dispatch=False, finalized=True)
+        restarted = ContinuationJournal('task-1')
+        self.assertEqual(restarted.status()['status'], 'pending')
+        receipt = next(event['checkpoint'] for event in self.sent if event['type'] == 'checkpoint')
+        self.assertEqual(receipt['continuation']['status'], 'pending')
+        self.assertEqual(receipt['pendingDelegationIds'], [])
+        self.messages.clear()
+        self.run_chat(dispatch=False, recoveryContinuation=True)
+        self.assertEqual(len(self.messages), 1)
+        self.assertIn('saved session history', self.messages[0][1])
+        self.assertEqual(restarted.status(), {'status': 'none'})
+
+    def test_failed_auto_continuation_of_finalized_turn_is_not_replayed(self):
+        self.run_chat(dispatch=False, finalized=True)
+        self.messages.clear()
+        with self.assertRaises(worker.WorkerError):
+            self.run_chat({'completed': False, 'final_response': 'Partial'}, dispatch=False, recoveryContinuation=True)
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(ContinuationJournal('task-1').status()['status'], 'blocked')
 
 
 if __name__ == '__main__':

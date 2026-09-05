@@ -2095,6 +2095,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     except Exception as exc:
         journal.block("Native child recovery inventory is unavailable.")
         raise WorkerError("Native child recovery inventory is unavailable.", code="recovery_blocked") from exc
+    saved_recovery_context = journal.context()
     if request.get("recoveryContinuation") is True:
         if journal.status()["status"] != "pending":
             raise WorkerError("This task requires an explicit user continuation.", code="recovery_blocked")
@@ -2303,6 +2304,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     delivery_event = None
     delivery_claim = None
     next_message = message
+    completed_turn = False
     deadline_controls = _start_deadline_controls(agent, deadline_child_ids, run_budget)
 
     def save_interrupt():
@@ -2332,6 +2334,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         return notification
 
     try:
+        if saved_recovery_context:
+            system_message = (system_message or "") + "\n\n" + saved_recovery_context
         if pending_background_delegations:
             async_delegation = importlib.import_module("tools.async_delegation")
             journal.reconcile(async_delegation)
@@ -2348,6 +2352,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 deadline_monotonic=interaction_deadline,
                 interrupt=lambda reason: _try_interrupt_agent(agent, reason),
             )
+            completed_turn = False
+            journal.set_turn_state("running")
             with native_approval_context(approval_callback, session_id):
                 result = agent.run_conversation(
                     user_message=next_message,
@@ -2387,6 +2393,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 message, code = result_failure
                 raise WorkerError(message, code=code)
 
+            completed_turn = True
+            journal.set_turn_state(None)
             if delivery_event is not None and delivery_claim is not None:
                 from tools.async_delegation import complete_event_delivery
 
@@ -2465,8 +2473,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         raise WorkerError(str(exc) if isinstance(exc, RecoveryBlocked) else "Native child recovery is unavailable.", code="recovery_blocked") from exc
     finally:
         deadline_controls.cancel()
-        if deadline_controls.finalization_started.is_set() and not journal.rows():
-            journal.block("Deadline reached without a saved child result; inspect session progress before continuing.")
+        if deadline_controls.finalization_started.is_set() and completed_turn:
+            journal.set_turn_state("pending")
         if delivery_event is not None and delivery_claim is not None:
             try:
                 from tools.async_delegation import release_event_delivery
