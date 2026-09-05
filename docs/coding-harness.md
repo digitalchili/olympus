@@ -42,7 +42,7 @@ Native recovery contracts were tested against Hermes **v2026.8.31**, source comm
 
 `sha256:64923faeae267792bf9bf87fe3b4c4869e35004e360c7df01730ad801b74d524`
 
-Olympus overlays the separately pinned Node 22.22.3 runtime in every Docker stage; the Hermes base now ships Node 26, outside Olympus's supported range.
+Olympus builds and runs its server with separately pinned Node 22.22.3 under `/opt/olympus-node`. Hermes keeps its own Node 26 toolchain on PATH. The application does not need to widen its supported Node range or replace Hermes's tool runtime.
 
 The integration depends on native durable delegation lookup, delivery claim/release/acknowledgement and the async-delegation ledger. Incompatible or unavailable native recovery remains an explicit blocker for known unfinished results. Local Hermes installations are not automatically upgraded by this code change. Use the installation dry-run and approval flow before updating a running installation.
 

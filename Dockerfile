@@ -3,16 +3,18 @@
 ARG HERMES_IMAGE=nousresearch/hermes-agent:v2026.8.31@sha256:64923faeae267792bf9bf87fe3b4c4869e35004e360c7df01730ad801b74d524
 
 # Hermes now ships Node 26; Olympus supports Node 22.22–25. Keep the tested
-# Node/npm toolchain identical in dependency, build and runtime stages.
+# Node toolchain identical for the Olympus build and server. Preserve Hermes's
+# own Node 26 tools on PATH; only Olympus build stages select Node 22 globally.
 FROM node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 AS node-runtime
 FROM ${HERMES_IMAGE} AS olympus-base
 USER root
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
-RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
-    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+COPY --from=node-runtime /usr/local/bin/node /opt/olympus-node/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /opt/olympus-node/lib/node_modules/npm
+RUN ln -sf /opt/olympus-node/lib/node_modules/npm/bin/npm-cli.js /opt/olympus-node/bin/npm && \
+    ln -sf /opt/olympus-node/lib/node_modules/npm/bin/npx-cli.js /opt/olympus-node/bin/npx
 
 FROM olympus-base AS dependencies
+ENV PATH="/opt/olympus-node/bin:${PATH}"
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -22,6 +24,7 @@ COPY . ./
 RUN npm run build
 
 FROM olympus-base AS production-dependencies
+ENV PATH="/opt/olympus-node/bin:${PATH}"
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
@@ -52,5 +55,5 @@ ENTRYPOINT []
 USER 10000:10000
 EXPOSE 6969
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-  CMD ["node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 6969}/api/ready`).then(response => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
-CMD ["node", "dist/server/server/index.js"]
+  CMD ["/opt/olympus-node/bin/node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 6969}/api/ready`).then(response => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
+CMD ["/opt/olympus-node/bin/node", "dist/server/server/index.js"]
