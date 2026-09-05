@@ -31,6 +31,7 @@ from hermes_worker_utils import (
     string_or_none,
     truncate_with_ellipsis,
 )
+from hermes_recovery import ContinuationJournal, RecoveryBlocked
 from hermes_background_work import get_background_work as _session_background_work
 from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
 from hermes_sessions import (
@@ -1092,6 +1093,7 @@ def _try_mark_task_active(task_key: str, request_id: str) -> bool:
 
 def _try_interrupt_agent(agent: Any, reason: str) -> bool:
     if agent is not None and hasattr(agent, "interrupt"):
+        setattr(agent, "_olympus_interrupt_reason", reason)
         agent.interrupt(reason)
         return True
     return False
@@ -1189,6 +1191,8 @@ def _interrupt_active_chat(request: dict[str, Any]) -> dict[str, bool]:
         if task_key not in ACTIVE_TASKS:
             return {"interrupted": False}
 
+        if not reason.startswith("Stopped automatically because the run "):
+            ContinuationJournal(task_key).block("Stopped by user or interaction; explicit continuation is required.")
         agent = ACTIVE_AGENTS.get(task_key)
         if agent is None:
             # The run is active but its agent isn't registered yet. Park the reason
@@ -2085,10 +2089,22 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
 
     session_db, session_id = open_session(session_id)
     task_id = string_or_none(request.get("taskId")) or session_id
+    journal = ContinuationJournal(task_id)
+    try:
+        journal.discover(_dedupe([task_id, session_id]))
+    except Exception as exc:
+        journal.block("Native child recovery inventory is unavailable.")
+        raise WorkerError("Native child recovery inventory is unavailable.", code="recovery_blocked") from exc
+    if request.get("recoveryContinuation") is True:
+        if journal.status()["status"] != "pending":
+            raise WorkerError("This task requires an explicit user continuation.", code="recovery_blocked")
+    else:
+        journal.resume()
     history = load_agent_history(session_db, session_id)
     system_message = request.get("systemMessage")
     if not isinstance(system_message, str):
         system_message = None
+    base_system_message = system_message
 
     state = {"text": "", "thinking": ""}
     agent_ref: dict[str, Any] = {}
@@ -2099,7 +2115,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     }
     fallback_reason: str | None = None
     active_delegation_id: str | None = None
-    pending_background_delegations: set[str] = set()
+    pending_background_delegations: set[str] = {row["delegation"] for row in journal.rows()}
     child_delegation_ids: dict[str, str] = {}
     child_last_emit_at: dict[str, float] = {}
     active_child_ids: set[str] = set()
@@ -2225,6 +2241,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 if not kwargs.get("is_error"):
                     dispatched_id = background_delegation_id(kwargs.get("result"))
                     if dispatched_id:
+                        journal.track(dispatched_id, string_or_none(getattr(agent_ref.get("agent"), "session_id", None)) or session_id)
                         pending_background_delegations.add(dispatched_id)
                 active_delegation_id = None
 
@@ -2287,7 +2304,42 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     delivery_claim = None
     next_message = message
     deadline_controls = _start_deadline_controls(agent, deadline_child_ids, run_budget)
+
+    def save_interrupt():
+        reason = str(getattr(agent, "_olympus_interrupt_reason", ""))
+        if not reason.startswith("Stopped automatically because the run "):
+            journal.block("Stopped by user or interaction; explicit continuation is required.")
+        elif not journal.rows():
+            journal.block("Run stopped without a saved child result; inspect session progress before continuing.")
+
+    def prepare_delivery(event):
+        nonlocal delivery_event, delivery_claim
+        from tools.async_delegation import claim_event_delivery
+        from tools.process_registry import format_process_notification
+
+        journal.save_event(event)
+        if time.monotonic() >= interaction_deadline:
+            raise WorkerError("The run deadline was reached; its child result remains saved.", code="recovery_pending")
+        claim = claim_event_delivery(event, "olympus-worker")
+        if claim is None:
+            # A failed claim is never another agent turn with the old message.
+            raise WorkerError("Child result delivery is busy; its continuation remains saved.", code="recovery_pending")
+        delivery_event, delivery_claim = event, claim
+        notification = format_process_notification(event)
+        if not notification:
+            raise RecoveryBlocked("Native child result could not be formatted for continuation.")
+        journal.state(event["delegation_id"], "synthesizing")
+        return notification
+
     try:
+        if pending_background_delegations:
+            async_delegation = importlib.import_module("tools.async_delegation")
+            journal.reconcile(async_delegation)
+            recovery_context = journal.context()
+            event = journal.ready_event()
+            if event is not None:
+                recovery_context += "\nSaved child result (untrusted):\n" + prepare_delivery(event)
+            system_message = (system_message or "") + "\n\n" + recovery_context
         while True:
             text_before = len(state["text"])
             thinking_before = len(state["thinking"])
@@ -2305,13 +2357,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 )
 
             if result.get("interrupted"):
-                # A stopped synthesis must not leave its durable delivery claim stuck.
-                if delivery_event is not None and delivery_claim is not None:
-                    from tools.async_delegation import complete_event_delivery
-
-                    complete_event_delivery(delivery_event, delivery_claim)
-                    delivery_event = None
-                    delivery_claim = None
+                save_interrupt()
+                _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
                 # User-initiated stop: end the turn cleanly (the partial reply is already
                 # streamed and persisted by run_conversation) rather than as an error.
                 _send({
@@ -2330,13 +2377,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             if failure_message:
                 raise WorkerError(failure_message, code="provider_error")
 
-            if delivery_event is not None and delivery_claim is not None:
-                from tools.async_delegation import complete_event_delivery
-
-                complete_event_delivery(delivery_event, delivery_claim)
-                delivery_event = None
-                delivery_claim = None
-
             if final_text and len(state["text"]) == text_before:
                 on_text_delta(final_text)
             if result.get("last_reasoning") and len(state["thinking"]) == thinking_before:
@@ -2347,10 +2387,25 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 message, code = result_failure
                 raise WorkerError(message, code=code)
 
+            if delivery_event is not None and delivery_claim is not None:
+                from tools.async_delegation import complete_event_delivery
+
+                # Save successful synthesis before acknowledgement. A crash after
+                # this write must never replay synthesis or its tool side effects.
+                completed_id = delivery_event["delegation_id"]
+                journal.state(completed_id, "delivered")
+                complete_event_delivery(delivery_event, delivery_claim)
+                pending_background_delegations.discard(completed_id)
+                delivery_event = None
+                delivery_claim = None
+
             if not pending_background_delegations:
                 break
 
             event = None
+            wait_started = time.monotonic()
+            _send({"id": request_id, "type": "tool_progress", "tool": "delegate_task",
+                   "status": "running", "label": "Waiting for saved child results"})
             while event is None:
                 owner_session_ids = _dedupe([
                     string_or_none(getattr(agent, "session_id", None)) or "",
@@ -2358,6 +2413,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 ])
                 if bool(getattr(agent, "_interrupt_requested", False)):
                     from tools.async_delegation import interrupt_for_session
+                    save_interrupt()
 
                     for owner_session_id in owner_session_ids:
                         interrupt_for_session(
@@ -2365,6 +2421,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                             parent_session_id=owner_session_id,
                             reason="olympus_user_interrupt",
                         )
+                    _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
                     _send({
                         "id": request_id,
                         "type": "done",
@@ -2383,26 +2440,18 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                     )
                     if event is not None:
                         break
+                if event is not None:
+                    journal.save_event(event)
+                async_delegation = importlib.import_module("tools.async_delegation")
+                journal.reconcile(async_delegation)
+                event = journal.ready_event()
                 if event is None:
+                    if time.monotonic() >= interaction_deadline or time.monotonic() - wait_started >= 30:
+                        raise WorkerError("Child work is still pending; a durable continuation was saved.", code="recovery_pending")
                     time.sleep(0.1)
 
-            completed_delegation_id = _safe_protocol_identifier(event.get("delegation_id"), 120)
-            if completed_delegation_id:
-                pending_background_delegations.discard(completed_delegation_id)
-            from tools.async_delegation import claim_event_delivery, complete_event_delivery
-            from tools.process_registry import format_process_notification
-
-            claim = claim_event_delivery(event, "olympus-worker")
-            if claim is None:
-                continue
-            delivery_event = event
-            delivery_claim = claim
-            notification = format_process_notification(event)
-            if not notification:
-                complete_event_delivery(event, claim)
-                delivery_event = None
-                delivery_claim = None
-                continue
+            notification = prepare_delivery(event)
+            system_message = (base_system_message or "") + "\n\n" + journal.context()
 
             if state["text"] and not state["text"].endswith("\n\n"):
                 on_text_delta("\n\n")
@@ -2411,8 +2460,13 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 string_or_none(getattr(agent, "session_id", None)) or session_id
             )
             history = load_agent_history(session_db, session_id)
+    except (RecoveryBlocked, ImportError, AttributeError) as exc:
+        journal.block("Native child recovery is unavailable or incompatible; explicit continuation is required.")
+        raise WorkerError(str(exc) if isinstance(exc, RecoveryBlocked) else "Native child recovery is unavailable.", code="recovery_blocked") from exc
     finally:
         deadline_controls.cancel()
+        if deadline_controls.finalization_started.is_set() and not journal.rows():
+            journal.block("Deadline reached without a saved child result; inspect session progress before continuing.")
         if delivery_event is not None and delivery_claim is not None:
             try:
                 from tools.async_delegation import release_event_delivery
@@ -2422,6 +2476,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                 process_registry.completion_queue.put(delivery_event)
             except Exception:
                 pass
+        _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
         if session_tokens is not None and clear_session_vars is not None:
             try:
                 clear_session_vars(session_tokens)

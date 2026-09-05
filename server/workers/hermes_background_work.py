@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from hermes_recovery import ContinuationJournal
+
 _ACTIVE_PROCESS_STATUSES = {"running"}
 _ACTIVE_DELEGATION_STATUSES = {"running", "finalizing", "stalling"}
 _ALLOWED_ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:@/-")
@@ -206,17 +208,26 @@ def get_background_work(
     async_delegation: Any = None,
 ) -> dict[str, Any]:
     """Return active Hermes-managed background work scoped to one task/session."""
+    journal = None
     try:
         if not isinstance(request, dict):
             raise RuntimeError("request must be a dict")
-        registry = process_registry if process_registry is not None else _native_process_registry()
-        delegation_registry = async_delegation if async_delegation is not None else _native_async_delegation()
         session_ids = _scoped_session_ids(request)
         if not session_ids:
             raise RuntimeError("session id is required")
 
+        journal = ContinuationJournal(_request_session_ids(request)[0])
+        journal.discover(session_ids)
+        registry = process_registry if process_registry is not None else _native_process_registry()
+        delegation_registry = async_delegation if async_delegation is not None else _native_async_delegation()
+        journal.reconcile(delegation_registry)
         work = _process_work(registry, session_ids)
         work.extend(_delegation_work(delegation_registry, session_ids))
-        return {"available": True, "work": work[:100]}
+        result = {"available": True, "work": work[:100]}
     except Exception:
-        return {"available": False, "work": []}
+        result = {"available": False, "work": []}
+        if journal is not None and journal.rows():
+            journal.block("Native child recovery inventory is unavailable; explicit continuation is required.")
+    if journal is not None and journal.path.exists():
+        result.update(continuation=journal.status(), checkpoint=journal.receipt())
+    return result

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import queue
 import sys
 import types
@@ -273,6 +275,10 @@ class DelegationEventProjectionTests(unittest.TestCase):
         fake_async.claim_event_delivery = lambda selected, owner: "claim-1"
         fake_async.complete_event_delivery = lambda selected, claim: completed_claims.append((selected, claim))
         fake_async.release_event_delivery = lambda selected, claim: None
+        fake_async.get_durable_delegation = lambda _: {
+            "origin_session": "task-1", "state": "completed", "delivery_state": "pending",
+            "result": {"summary": "reports"},
+        }
 
         fake_registry = FakeProcessRegistry()
         fake_process = types.ModuleType("tools.process_registry")
@@ -280,6 +286,8 @@ class DelegationEventProjectionTests(unittest.TestCase):
         fake_process.format_process_notification = lambda selected: "[ASYNC DELEGATION BATCH COMPLETE]\nreports"
 
         with (
+            tempfile.TemporaryDirectory() as recovery_home,
+            patch.dict(os.environ, {"OLYMPUS_DISPATCH_HOME": recovery_home, "HERMES_HOME": recovery_home + "/hermes"}),
             patch.object(hermes_worker, "open_session", return_value=(object(), "task-1")),
             patch.object(hermes_worker, "load_agent_history", return_value=[]),
             patch.object(hermes_worker, "_create_agent", side_effect=create_agent),
