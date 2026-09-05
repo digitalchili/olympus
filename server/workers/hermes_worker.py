@@ -222,7 +222,11 @@ def _project_subagent_completion_status(payload: dict[str, Any]) -> str:
         return "failed"
 
     summary = string_or_none(payload.get("summary")) or string_or_none(payload.get("preview")) or ""
-    if raw_status in {"completed", "success", ""} and _agent_failure_message(summary):
+    if raw_status in {"completed", "success", ""} and re.match(
+        r"^(?:Non-retryable client error:\s+Error code:\s+\d{3}\b|"
+        r"API call failed after \d+ (?:attempts|retries):|"
+        r"Rate limited after \d+ (?:attempts|retries):)", summary
+    ):
         return "failed"
 
     return status_map.get(raw_status, "unknown")

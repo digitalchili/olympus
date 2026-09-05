@@ -29,6 +29,13 @@ class FakeProcessRegistry:
 
 
 class DelegationEventProjectionTests(unittest.TestCase):
+    def test_successful_explanations_are_not_provider_failures(self):
+        for summary in ["Non-retryable client error handling should use explicit typed exceptions.", "API call failed after migration; here is the verified fix.", "Rate limited after bulk imports: the backoff fix is verified."]:
+            event = hermes_worker.project_delegation_event("subagent.complete", None,
+                {"subagent_id": "child-ok", "status": "completed", "summary": summary},
+                parent_session_id="task-1", delegation_id="deleg-1")
+            self.assertEqual(event["status"], "completed", summary)
+
     def test_projects_only_closed_safe_schema(self) -> None:
         event = project_delegation_event(
             "subagent.tool",
