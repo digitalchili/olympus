@@ -29,6 +29,8 @@ import { collaborationAssistantMessageIds } from '../lib/collaborationVisibility
 import { DelegationActivity } from './DelegationActivity';
 import { visibleToolProgress } from '../lib/toolProgressDisplay';
 import { RunModelResolution } from './RunModelResolution';
+import { RunFailureBanner } from './RunFailureBanner';
+import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSendQueuedMessage } from '../lib/runFailurePresentation';
 
 interface TaskChatProps {
   taskId: string;
@@ -149,6 +151,7 @@ function QueuedMessageBar({
   onEdit,
   onRemove,
   onRetry,
+  retryLabel = 'Retry',
 }: {
   queuedMessage: QueuedMessage;
   error: string | null;
@@ -161,8 +164,10 @@ function QueuedMessageBar({
   onEdit: () => void;
   onRemove: () => void;
   onRetry: () => void;
+  retryLabel?: string;
 }) {
   const statusLabel = isSending ? 'Sending...' : error ?? waitingLabel;
+  const showRetry = canRetry && (Boolean(error) || retryLabel !== 'Retry');
   const { text, filePaths } = splitAttachmentMessage(queuedMessage.content);
   const messagePreview = text || (filePaths.length === 1 ? '1 attachment' : `${filePaths.length} attachments`);
 
@@ -200,13 +205,13 @@ function QueuedMessageBar({
             Edit
           </button>
         </div>
-        {error && canRetry && (
+        {showRetry && (
           <button
             type="button"
             onClick={onRetry}
             className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:text-zinc-200 dark:hover:bg-zinc-700"
           >
-            Retry
+            {retryLabel}
           </button>
         )}
         <button
@@ -262,6 +267,7 @@ export function TaskChat({
     activeTools,
     context,
     modelResolution,
+    runFailureNotice,
     hasOlderMessages,
     isLoadingOlderMessages,
     olderMessagesError,
@@ -359,6 +365,12 @@ export function TaskChat({
   const compactionBlocker = isCompacting || compactInFlight;
   const taskBusyForQueue = isStreaming || compactionBlocker;
   const queuedIsSending = autoSendingQueuedId === queuedMessage?.id;
+  const pausedByRunFailure = Boolean(runFailureNotice);
+  const queuedCanManualSend = canManuallySendQueuedMessage({
+    taskBusyForQueue,
+    configPending,
+    queuedIsSending,
+  });
   const latestUserMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'user') return messages[i].id;
@@ -596,10 +608,19 @@ export function TaskChat({
   }, [refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
 
   useEffect(() => {
-    if (!queuedMessage || taskBusyForQueue || configPending || queuedSendError) return;
-    if (loadedTaskId !== taskId || queueHydratedTaskId !== taskId) return;
+    if (!queuedMessage) return;
+    if (!shouldAutoSendQueuedMessage({
+      queuedMessageId: queuedMessage.id,
+      taskBusyForQueue,
+      configPending,
+      queuedSendError,
+      loadedTaskId,
+      queueHydratedTaskId,
+      taskId,
+      pausedByRunFailure,
+    })) return;
     void sendQueuedMessage(queuedMessage);
-  }, [configPending, loadedTaskId, queueHydratedTaskId, queuedMessage, queuedSendError, sendQueuedMessage, taskBusyForQueue, taskId]);
+  }, [configPending, loadedTaskId, pausedByRunFailure, queueHydratedTaskId, queuedMessage, queuedSendError, sendQueuedMessage, taskBusyForQueue, taskId]);
 
   useEffect(() => {
     if (!isStreaming) setInterruptInFlight(false);
@@ -1067,6 +1088,7 @@ export function TaskChat({
 
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
+        <RunFailureBanner notice={runFailureNotice} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
           {persistentGrants.length > 0 && (
@@ -1153,8 +1175,9 @@ export function TaskChat({
               queuedMessage={queuedMessage}
               error={queuedSendError}
               isSending={queuedIsSending}
-              canRetry={!taskBusyForQueue && !configPending && !queuedIsSending}
-              waitingLabel={compactionBlocker ? 'Sends after compaction' : 'Sends after current response'}
+              canRetry={queuedCanManualSend}
+              waitingLabel={queuedMessageWaitingLabel({ pausedByRunFailure, compactionBlocker })}
+              retryLabel={pausedByRunFailure && !queuedSendError ? 'Send now' : 'Retry'}
               canSteer={queuedMessage.invitedProfileIds.length === 0}
               isSteering={steeringQueuedId === queuedMessage.id}
               onSteer={() => void handleSteerQueuedMessage()}

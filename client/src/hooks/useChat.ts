@@ -5,6 +5,7 @@ import type {
   ContextUsage,
   LiveChatMessage,
   LiveChatRun,
+  TaskAgentRun,
   TaskMessage,
   TaskMessagePageInfo,
   ToolProgressEvent,
@@ -15,6 +16,7 @@ import { toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
 import { shouldAppendRunErrorToReply } from '@shared/run-errors';
+import { runFailureNoticeForState, type RunFailureNotice } from '../lib/runFailurePresentation';
 
 export type { ContextUsage, ToolProgressEvent };
 
@@ -88,6 +90,7 @@ export function applyLiveErrorEvent(
   const error = event.error || 'Unknown error';
   run.status = 'error';
   run.error = error;
+  (run as LiveChatRun & { errorCode?: string | null }).errorCode = event.code ?? null;
   const assistant = ensureAssistant(run);
   if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
     assistant.content = assistant.content
@@ -333,6 +336,7 @@ export function useChat() {
   const [messagePageInfo, setMessagePageInfo] = useState<TaskMessagePageInfo>({ hasOlder: false, olderCursor: null });
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [olderMessagesError, setOlderMessagesError] = useState<string | null>(null);
+  const [runFailureNotice, setRunFailureNotice] = useState<RunFailureNotice | null>(null);
 
   const postAbortRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
@@ -341,6 +345,7 @@ export function useChat() {
   const liveRunRef = useRef<LiveChatRun | null>(null);
   const liveContextRef = useRef<ContextUsage | null>(null);
   const persistedModelResolutionRef = useRef<AgentModelResolution | null>(null);
+  const persistedLatestAgentRunRef = useRef<TaskAgentRun | null>(null);
   const messagePageInfoRef = useRef<TaskMessagePageInfo>({ hasOlder: false, olderCursor: null });
   const olderLoadTaskRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -377,6 +382,7 @@ export function useChat() {
       setActiveTools(streaming ? assistant?.tools?.map((t) => ({ ...t })) ?? [] : []);
       setContext(liveRun.context !== undefined ? liveRun.context : liveContextRef.current);
       setModelResolution(liveRun.modelResolution ?? null);
+      setRunFailureNotice(runFailureNoticeForState({ liveRun, latestAgentRun: persistedLatestAgentRunRef.current }));
       return;
     }
 
@@ -387,6 +393,7 @@ export function useChat() {
     setActiveTools([]);
     setContext(liveContextRef.current);
     setModelResolution(persistedModelResolutionRef.current);
+    setRunFailureNotice(runFailureNoticeForState({ liveRun: null, latestAgentRun: persistedLatestAgentRunRef.current }));
   }, []);
 
   const schedulePublish = useCallback(() => {
@@ -533,6 +540,7 @@ export function useChat() {
     liveRunRef.current = null;
     liveContextRef.current = null;
     persistedModelResolutionRef.current = null;
+    persistedLatestAgentRunRef.current = null;
     messagePageInfoRef.current = { hasOlder: false, olderCursor: null };
     olderLoadTaskRef.current = null;
     setMessages([]);
@@ -542,6 +550,7 @@ export function useChat() {
     setActiveTools([]);
     setContext(null);
     setModelResolution(null);
+    setRunFailureNotice(null);
     setMessagePageInfo(messagePageInfoRef.current);
     setIsLoadingOlderMessages(false);
     setOlderMessagesError(null);
@@ -558,6 +567,7 @@ export function useChat() {
     messagePageInfoRef.current = pageInfo;
     liveContextRef.current = persistedContext ?? null;
     persistedModelResolutionRef.current = latestAgentRun?.modelResolution ?? null;
+    persistedLatestAgentRunRef.current = latestAgentRun ?? null;
     setMessagePageInfo(pageInfo);
     publishState();
     openLiveSubscription(taskId);
@@ -737,6 +747,7 @@ export function useChat() {
     activeTools,
     context,
     modelResolution,
+    runFailureNotice,
     hasOlderMessages: messagePageInfo.hasOlder,
     isLoadingOlderMessages,
     olderMessagesError,
