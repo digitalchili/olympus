@@ -12,6 +12,7 @@ import type {
   TaskMessage,
   TaskMessagePageInfo,
 } from '../../shared/types.js';
+import type { InteractionResponse, NativeInteraction } from '../../shared/interactions.js';
 
 export type { AgentRunSettings, ContextUsage };
 
@@ -26,7 +27,7 @@ export interface AgentRunOptions {
 }
 
 export interface StreamEvent {
-  type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'done' | 'error';
+  type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
   content?: string;
   error?: string;
   code?: string;
@@ -40,7 +41,18 @@ export interface StreamEvent {
   pendingSteer?: string;
   attachments?: TaskMessage['attachments'];
   modelResolution?: AgentModelResolution;
+  interaction?: NativeInteraction;
+  interactionId?: string;
+  interactionStatus?: 'answered' | 'denied' | 'expired' | 'cancelled';
 }
+
+export interface InteractionRespondRequest {
+  taskId: string;
+  interactionId: string;
+  workerRunId: string;
+  response: InteractionResponse;
+}
+
 
 export interface AgentAdapter {
   chat(
@@ -58,6 +70,8 @@ export interface AgentAdapter {
   interruptChat(sessionId: string, reason?: string): Promise<boolean>;
 
   steerChat(sessionId: string, message: string): Promise<boolean>;
+
+  respondInteraction?(request: InteractionRespondRequest): Promise<{ accepted: true }>;
 
   healthCheck(): Promise<boolean>;
 

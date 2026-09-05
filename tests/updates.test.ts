@@ -66,7 +66,8 @@ try {
   assert.equal(unavailableStatus.body.updateAvailable, true);
   assert.equal(unavailableStatus.body.updateConfigured, false);
 
-  const socketDirectory = await mkdtemp(join(tmpdir(), 'olympus-update-status-'));
+  // Relative Unix-socket addresses also work in deeply nested worktrees.
+  const socketDirectory = await mkdtemp('.tmp-olympus-portable-update-status-');
   const socketPath = join(socketDirectory, 'update.sock');
   const socketServer = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -74,7 +75,7 @@ try {
     socketServer.listen(socketPath, resolve);
   });
   try {
-    process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET = socketPath;
+    process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET = join(process.cwd(), socketPath);
     const availableStatus = await callRoute('/api/updates?refresh=true');
     assert.equal(availableStatus.body.updateConfigured, true);
 

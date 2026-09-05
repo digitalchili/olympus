@@ -203,6 +203,17 @@ function recoverInterruptedCollaborations(): void {
   `).run(now);
 }
 
+
+function recoverInterruptedInteractions(): void {
+  const now = Date.now();
+  db.prepare(`
+    UPDATE task_interactions
+    SET status = 'cancelled', settled_at = COALESCE(settled_at, ?),
+        delivery_error = COALESCE(delivery_error, 'Olympus restarted before this interaction was answered')
+    WHERE status IN ('waiting', 'claimed')
+  `).run(now);
+}
+
 function recoverInterruptedDelegations(): void {
   const now = Date.now();
   db.prepare(`
@@ -246,6 +257,7 @@ try {
   migrateLegacyStudioProjects();
   recoverInterruptedCollaborations();
   recoverInterruptedDelegations();
+  recoverInterruptedInteractions();
   db.exec('COMMIT');
 } catch (error) {
   db.exec('ROLLBACK');

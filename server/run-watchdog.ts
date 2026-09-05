@@ -5,7 +5,9 @@ export interface RunWatchdogOptions {
   idleTimeoutMs: number;
   onTimeoutGraceMs?: number;
   onTimeout: (reason: RunWatchdogReason) => Promise<void> | void;
+  pauseUntil?: () => number | null | undefined;
 }
+
 
 export class RunWatchdogError extends Error {
   readonly reason: RunWatchdogReason;
@@ -60,16 +62,27 @@ export async function* withRunWatchdog<T>(
 ): AsyncIterable<T> {
   const iterator = stream[Symbol.asyncIterator]();
   const startedAt = Date.now();
+  let pausedAt: number | null = null;
+  let pausedMs = 0;
 
   try {
     while (true) {
-      const elapsed = Date.now() - startedAt;
+      const now = Date.now();
+      const pauseRemaining = Math.max(0, (options.pauseUntil?.() ?? 0) - now);
+      if (pauseRemaining > 0 && pausedAt === null) pausedAt = now;
+      if (pauseRemaining === 0 && pausedAt !== null) {
+        pausedMs += now - pausedAt;
+        pausedAt = null;
+      }
+      const currentPausedMs = pausedMs + (pausedAt === null ? 0 : now - pausedAt);
+      const elapsed = now - startedAt - currentPausedMs;
       if (elapsed >= options.maxRuntimeMs) {
         await stopTimedOutRun('runtime', options);
       }
       const runtimeRemaining = options.maxRuntimeMs - elapsed;
-      const waitMs = Math.min(options.idleTimeoutMs, runtimeRemaining);
-      const reason: RunWatchdogReason = runtimeRemaining <= options.idleTimeoutMs ? 'runtime' : 'idle';
+      // Human time is not provider runtime; still stop at the finite input deadline.
+      const waitMs = pauseRemaining > 0 ? pauseRemaining : Math.min(options.idleTimeoutMs, runtimeRemaining);
+      const reason: RunWatchdogReason = pauseRemaining > 0 ? 'idle' : runtimeRemaining <= options.idleTimeoutMs ? 'runtime' : 'idle';
       let timer: ReturnType<typeof setTimeout> | undefined;
 
       type NextOutcome = { kind: 'next'; next: IteratorResult<T> };
@@ -91,7 +104,9 @@ export async function* withRunWatchdog<T>(
         continue;
       }
       if (outcome.next.done) return;
-      if (Date.now() - startedAt >= options.maxRuntimeMs) {
+      const afterNow = Date.now();
+      const afterPausedMs = pausedMs + (pausedAt === null ? 0 : afterNow - pausedAt);
+      if (afterNow - startedAt - afterPausedMs >= options.maxRuntimeMs) {
         await stopTimedOutRun('runtime', options);
       }
       yield outcome.next.value;

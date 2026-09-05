@@ -5,6 +5,7 @@ import queue
 import sys
 import types
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -232,6 +233,9 @@ class DelegationEventProjectionTests(unittest.TestCase):
             patch.object(hermes_worker, "open_session", return_value=(object(), "task-1")),
             patch.object(hermes_worker, "load_agent_history", return_value=[]),
             patch.object(hermes_worker, "_create_agent", side_effect=create_agent),
+            # Native gates have separate real-runtime integration tests. This fixture
+            # replaces the entire agent and intentionally has no Hermes installation.
+            patch.object(hermes_worker, "native_approval_context", side_effect=lambda *_: nullcontext()),
             patch.object(hermes_worker, "take_owned_delegation_notification", return_value=event),
             patch.object(hermes_worker, "_send", side_effect=sent.append),
             patch.dict(sys.modules, {

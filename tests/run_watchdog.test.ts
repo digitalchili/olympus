@@ -163,4 +163,19 @@ async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
   assert.equal(interrupted, 0, 'healthy runs are not interrupted');
 }
 
+{
+  let pauseUntil: number | null = null;
+  async function* asksHuman() {
+    pauseUntil = Date.now() + 300;
+    yield 'question';
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    pauseUntil = null;
+    yield 'answer';
+    yield 'done';
+  }
+  assert.deepEqual(await collect(withRunWatchdog(asksHuman(), {
+    maxRuntimeMs: 40, idleTimeoutMs: 20, pauseUntil: () => pauseUntil,
+    onTimeout: () => { throw new Error('human wait is not model runtime'); },
+  })), ['question', 'answer', 'done'], 'bounded human waits pause both runtime and idle limits');
+}
 console.log('run watchdog tests passed');

@@ -12,6 +12,7 @@ import type {
   ContextUsage,
   DelegationWorkerEvent,
 } from '../../shared/types.js';
+import type { InteractionResponse, NativeInteraction } from '../../shared/interactions.js';
 import type { AgentRunSettings } from './types.js';
 
 export type WorkerRequest =
@@ -38,6 +39,7 @@ export type WorkerRequest =
   | { id: string; type: 'goal.evaluate'; sessionId: string; responseText: string }
   | { id: string; type: 'chat.interrupt'; taskId?: string; sessionId?: string; reason?: string }
   | { id: string; type: 'chat.steer'; taskId?: string; sessionId?: string; message: string }
+  | { id: string; type: 'interaction.respond'; taskId: string; interactionId: string; workerRunId: string; response: InteractionResponse }
   | {
       id: string;
       type: 'chat';
@@ -84,6 +86,7 @@ export type WorkerResult =
   | { cleared: boolean }
   | { interrupted: boolean }
   | { steered: boolean }
+  | { accepted: true }
   | GoalDecision
   | { title: string }
   | {
@@ -107,6 +110,8 @@ export type WorkerEvent =
       label?: string | null;
     }
   | { id: string; type: 'model_resolution'; modelResolution: AgentModelResolution }
+  | { id: string; type: 'interaction_requested'; interaction: NativeInteraction }
+  | { id: string; type: 'interaction_settled'; interactionId: string; status: 'answered' | 'denied' | 'expired' | 'cancelled' }
   | { id: string; type: 'delegation_event'; taskId: string; event: DelegationWorkerEvent }
   | {
       id: string;

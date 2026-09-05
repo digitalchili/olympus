@@ -59,6 +59,8 @@ import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTaskAgentRunResolution } from '../db/task-agent-runs.js';
 import { syncMessageAttachmentsToProjectReferences } from '../db/project-references.js';
+import { recordInteraction, markInteractionSettled, closeRunInteractions, hasUnansweredInteractions } from '../db/interactions.js';
+import { normalizeNativeInteraction } from '../interactions.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
@@ -273,7 +275,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
-  if (status && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
+  if (status && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
     const updated = recordCompletedAgentRun(taskId, context);
     if (updated) broadcast({ type: 'task_updated', task: updated });
   } else {
@@ -309,6 +311,8 @@ async function streamChatTurn(
   let hadError = false;
   let interrupted = false;
   let pendingSteer: string | undefined;
+  const interactionRunId = getRunStatus(runTask.id)?.runId;
+  const humanWaits = new Map<string, number>();
 
   try {
     const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
@@ -317,6 +321,7 @@ async function streamChatTurn(
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
     }), {
       ...runWatchdogConfig(),
+      pauseUntil: () => humanWaits.size ? Math.max(...humanWaits.values()) : null,
       onTimeout: async (reason: RunWatchdogReason) => {
         const message = reason === 'idle'
           ? 'Stopped automatically because the run stopped producing activity.'
@@ -335,6 +340,29 @@ async function streamChatTurn(
         const assistant = [...(run?.messages ?? [])].reverse().find((message) => message.role === 'assistant');
         const attachments = assistant ? await publishTaskAttachments(runTask, assistant.content) : [];
         if (attachments.length > 0) event = { ...rawEvent, attachments };
+      }
+      if (event.type === 'interaction_requested') {
+        const activeRun = getRunStatus(runTask.id);
+        const interaction = normalizeNativeInteraction(event.interaction, event.interaction?.workerRunId ?? '');
+        if (interaction && activeRun && activeRun.runId === interactionRunId) {
+          recordInteraction({
+            taskId: runTask.id,
+            profileName: taskProfileId(runTask),
+            olympusRunId: activeRun.runId,
+            interaction,
+          });
+          humanWaits.set(interaction.id, interaction.expiresAt);
+          broadcastLive(runTask.id, event);
+        }
+        continue;
+      }
+      if (event.type === 'interaction_settled') {
+        if (event.interactionId && event.interactionStatus && humanWaits.has(event.interactionId)) {
+          markInteractionSettled(event.interactionId, event.interactionStatus);
+          humanWaits.delete(event.interactionId);
+        }
+        broadcastLive(runTask.id, event);
+        continue;
       }
       if (options.captureResponseText && event.type === 'text_delta' && event.content) {
         responseText += event.content;
@@ -371,6 +399,7 @@ async function streamChatTurn(
     broadcastLive(runTask.id, event);
   }
 
+  if (interactionRunId) closeRunInteractions(runTask.id, interactionRunId);
   const finalRun = getRunStatus(runTask.id);
   if (!sawDone && !hadError && finalRun?.status === 'streaming') {
     if (options.completeOnDone) {

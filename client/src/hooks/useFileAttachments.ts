@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type RefObject } from 'react';
 import { deleteFileEntry, uploadChatAttachment } from '../lib/api';
 import { attachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import { failedUpload, retryUpload, uploadBlocksSend as filesBlockSend } from '../lib/upload-recovery';
+import {
+  createClipboardTextAttachment,
+  restoreClipboardAttachmentInline,
+  shouldAttachClipboardText,
+  type ClipboardTextAttachmentMetadata,
+} from '../lib/largePasteAttachments';
 
 export type PendingFile = {
   id: string;
@@ -11,14 +17,30 @@ export type PendingFile = {
   status: 'uploading' | 'uploaded' | 'error';
   uploadedPath?: string;
   error?: string;
+  textAttachment?: ClipboardTextAttachmentMetadata;
+};
+
+type ControlledTextInput = {
+  value: string;
+  setValue: (value: string, cursor?: number | null) => void;
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
 };
 
 // Backstop so a stalled connection eventually fails (surfacing a retry) instead
 // of leaving a file pinned in 'uploading' — and Send disabled — forever.
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
 
+function createObjectUrl(file: File): string | null {
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return null;
+  return URL.createObjectURL(file);
+}
+
 function revokePreviews(files: PendingFile[]) {
-  files.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
+  files.forEach((f) => {
+    if (f.previewUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(f.previewUrl);
+    }
+  });
 }
 
 /**
@@ -26,11 +48,16 @@ function revokePreviews(files: PendingFile[]) {
  * drag/drop + paste handlers used by the chat composers. Object URLs are
  * revoked on removal and on unmount.
  */
-export function useFileAttachments(uploadBucketId: string) {
+export function useFileAttachments(uploadBucketId: string, controlledInput?: ControlledTextInput) {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const uploadControllersRef = useRef(new Map<string, AbortController>());
+  const controlledInputRef = useRef(controlledInput);
+
+  useEffect(() => {
+    controlledInputRef.current = controlledInput;
+  }, [controlledInput]);
 
   const startUpload = useCallback((pendingFile: PendingFile) => {
     const controller = new AbortController();
@@ -72,13 +99,7 @@ export function useFileAttachments(uploadBucketId: string) {
       });
   }, [uploadBucketId]);
 
-  const addFiles = useCallback((files: FileList | File[]) => {
-    const next: PendingFile[] = Array.from(files).map((file) => ({
-      id: createUuid(),
-      file,
-      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-      status: 'uploading',
-    }));
+  const addPendingFiles = useCallback((next: PendingFile[]) => {
     if (next.length === 0) return;
 
     // Keep a still-relevant failure banner up; only clear it when nothing is failed.
@@ -87,11 +108,21 @@ export function useFileAttachments(uploadBucketId: string) {
     next.forEach(startUpload);
   }, [pendingFiles, startUpload]);
 
+  const addFiles = useCallback((files: FileList | File[]) => {
+    const next: PendingFile[] = Array.from(files).map((file) => ({
+      id: createUuid(),
+      file,
+      previewUrl: file.type.startsWith('image/') ? createObjectUrl(file) : null,
+      status: 'uploading',
+    }));
+    addPendingFiles(next);
+  }, [addPendingFiles]);
+
   const removeFile = useCallback((id: string) => {
     uploadControllersRef.current.get(id)?.abort();
     uploadControllersRef.current.delete(id);
     const target = pendingFiles.find((f) => f.id === id);
-    if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+    revokePreviews(target ? [target] : []);
     // The file was already uploaded to the workspace; drop the server copy too.
     if (target?.uploadedPath) void deleteFileEntry(target.uploadedPath, false).catch(() => {});
     setPendingFiles((prev) => prev.filter((f) => f.id !== id));
@@ -107,6 +138,29 @@ export function useFileAttachments(uploadBucketId: string) {
     setPendingFiles((prev) => prev.map((file) => file.id === id ? retryTarget : file));
     startUpload(retryTarget);
   }, [pendingFiles, startUpload]);
+
+  const restoreTextFile = useCallback((id: string) => {
+    const target = pendingFiles.find((file) => file.id === id);
+    const textInput = controlledInputRef.current;
+    if (!target?.textAttachment || !textInput) return;
+
+    const restored = restoreClipboardAttachmentInline({
+      currentValue: textInput.value,
+      snapshotValue: target.textAttachment.snapshotValue ?? textInput.value,
+      selectionStart: target.textAttachment.selectionStart ?? textInput.value.length,
+      selectionEnd: target.textAttachment.selectionEnd ?? textInput.value.length,
+      text: target.textAttachment.text,
+    });
+    removeFile(id);
+    textInput.setValue(restored.value, restored.cursor);
+    const applySelection = () => {
+      const input = textInput.inputRef?.current;
+      input?.focus();
+      input?.setSelectionRange(restored.cursor, restored.cursor);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(applySelection);
+    else setTimeout(applySelection, 0);
+  }, [pendingFiles, removeFile]);
 
   // Clear the tray (after a send, or when leaving the view). Aborts in-flight
   // uploads and revokes previews, but leaves already-uploaded server copies
@@ -169,8 +223,39 @@ export function useFileAttachments(uploadBucketId: string) {
     if (files.length > 0) {
       e.preventDefault();
       addFiles(files);
+      return;
     }
-  }, [addFiles]);
+
+    const pastedText = e.clipboardData.getData('text/plain');
+    if (!pastedText || !shouldAttachClipboardText(pastedText)) return;
+
+    const textAttachment = createClipboardTextAttachment(pastedText);
+    if (!textAttachment.ok) {
+      setUploadError(textAttachment.error);
+      return;
+    }
+
+    const textInput = controlledInputRef.current;
+    if (!textInput) return;
+    e.preventDefault();
+
+    const target = e.currentTarget as HTMLTextAreaElement;
+    const snapshotValue = textInput.value;
+    const selectionStart = target.selectionStart ?? snapshotValue.length;
+    const selectionEnd = target.selectionEnd ?? selectionStart;
+    addPendingFiles([{
+      id: createUuid(),
+      file: textAttachment.file,
+      previewUrl: createObjectUrl(textAttachment.file),
+      status: 'uploading',
+      textAttachment: {
+        ...textAttachment.metadata,
+        snapshotValue,
+        selectionStart,
+        selectionEnd,
+      },
+    }]);
+  }, [addFiles, addPendingFiles]);
 
   return {
     pendingFiles,
@@ -183,6 +268,7 @@ export function useFileAttachments(uploadBucketId: string) {
     addFiles,
     removeFile,
     retryFile,
+    restoreTextFile,
     clearFiles,
     submitWithAttachments,
     dragHandlers: { onDragOver, onDragLeave, onDrop },

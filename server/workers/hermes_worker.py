@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import inspect
+from functools import partial
 import json
 import os
 import queue
@@ -28,6 +29,7 @@ from hermes_worker_utils import (
     string_or_none,
     truncate_with_ellipsis,
 )
+from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
 from hermes_sessions import (
     load_agent_history,
     open_session,
@@ -152,6 +154,9 @@ _MODEL_LIST_CACHE: _ModelListCache | None = None
 _MODEL_LIST_CACHE_LOCK = threading.Lock()
 _CURATED_MODEL_CATALOG_CACHE: tuple[dict[str, Any] | None, float] | None = None
 _CURATED_MODEL_CATALOG_LOCK = threading.Lock()
+
+
+INTERACTIONS = InteractionBroker(lambda event: _send(event))
 
 
 def _send(payload: dict[str, Any]) -> None:
@@ -802,6 +807,10 @@ def _interrupt_active_chat(request: dict[str, Any]) -> dict[str, bool]:
             PENDING_INTERRUPTS[task_key] = reason
             return {"interrupted": True}
 
+    with ACTIVE_TASKS_LOCK:
+        active_run_id = ACTIVE_TASKS.get(task_key)
+    if active_run_id:
+        INTERACTIONS.cancel_run(active_run_id)
     return {"interrupted": _try_interrupt_agent(agent, reason)}
 
 
@@ -1429,11 +1438,8 @@ def _create_agent(
     if not resolved_base_url:
         resolved_base_url = string_or_none(runtime.get("base_url"))
 
-    def clarify_callback(question: Any, choices: Any = None) -> str:
-        return (
-            "The user is not available for an interactive clarification right now. "
-            "Make a reasonable assumption, proceed, and call out the assumption in the response if it matters."
-        )
+    def clarify_callback(question: Any = "", choices: Any = None, **kwargs) -> str:
+        raise WorkerError("Interactive clarification is unavailable for this non-interactive turn. Do not assume an answer.", code="interaction_unavailable")
 
     session_db = None
     if _SessionDB is not None:
@@ -1455,6 +1461,7 @@ def _create_agent(
         "session_id": session_id,
         "session_db": session_db,
         "enabled_toolsets": _resolve_toolsets(cfg),
+        "disabled_toolsets": interaction_disabled_toolsets(),
         "fallback_model": _fallback_model(cfg),
         "clarify_callback": clarify_callback,
     }
@@ -1682,6 +1689,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     _apply_task_workdir(request)
 
     session_db, session_id = open_session(session_id)
+    task_id = string_or_none(request.get("taskId")) or session_id
     history = load_agent_history(session_db, session_id)
     system_message = request.get("systemMessage")
     if not isinstance(system_message, str):
@@ -1824,6 +1832,10 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             "reasoning_callback": on_reasoning_delta,
             "tool_progress_callback": on_tool_progress,
             "status_callback": on_status,
+            "clarify_callback": partial(
+                INTERACTIONS.clarify, task_id, request_id,
+                interrupt=lambda reason: _try_interrupt_agent(agent_ref["agent"], reason) if agent_ref.get("agent") else None,
+            ),
         },
     )
     agent_ref["agent"] = agent
@@ -1862,12 +1874,17 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         while True:
             text_before = len(state["text"])
             thinking_before = len(state["thinking"])
-            result = agent.run_conversation(
-                user_message=next_message,
-                system_message=system_message,
-                conversation_history=history,
-                task_id=session_id,
+            approval_callback = partial(
+                INTERACTIONS.approve, task_id, request_id,
+                interrupt=lambda reason: _try_interrupt_agent(agent, reason),
             )
+            with native_approval_context(approval_callback, session_id):
+                result = agent.run_conversation(
+                    user_message=next_message,
+                    system_message=system_message,
+                    conversation_history=history,
+                    task_id=session_id,
+                )
 
             if result.get("interrupted"):
                 # A stopped synthesis must not leave its durable delivery claim stuck.
@@ -2036,6 +2053,7 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
                 "type": "done",
                 "sessionId": string_or_none(request.get("sessionId")) or request_id,
             })
+        INTERACTIONS.cancel_run(request_id)
         if acquired:
             AGENT_SEMAPHORE.release()
         _clear_task_active(task_key, request_id)
@@ -2292,6 +2310,15 @@ def _handle_request(request: dict[str, Any]) -> None:
             _result(request_id, _goal_clear(request))
         elif request_type == "goal.evaluate":
             _submit_background_agent_request(request_id, request, name_prefix="goal", handler=_goal_evaluate)
+        elif request_type == "interaction.respond":
+            try:
+                _result(request_id, INTERACTIONS.respond(request))
+            except InteractionError as exc:
+                raise WorkerError(str(exc), code=exc.code) from exc
+        elif request_type == "approval.check":
+            _ensure_imports()
+            terminal_config = _load_config().get("terminal") or {}
+            _result(request_id, approval_preflight(request.get("command"), terminal_config.get("backend", "local")))
         elif request_type == "chat.interrupt":
             _result(request_id, _interrupt_active_chat(request))
         elif request_type == "chat.steer":
@@ -2358,7 +2385,8 @@ def main() -> int:
     args = parser.parse_args()
 
     os.environ.setdefault("HERMES_QUIET", "1")
-    os.environ.setdefault("HERMES_YOLO_MODE", "1")
+    # The browser now hosts native human approval callbacks. Never force bypass.
+    os.environ["HERMES_YOLO_MODE"] = "0"
 
     if args.self_test:
         return _self_test()

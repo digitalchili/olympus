@@ -58,6 +58,7 @@ import type {
   SshProbeInput,
   UpdateStatus,
 } from '@shared/types';
+import type { InteractionResponse, TaskInteraction } from '@shared/interactions';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
 import { apiPathWithProfile } from './profileQuery';
 
@@ -197,6 +198,18 @@ export function revokeCollaborationGrant(
     `/tasks/${encodeURIComponent(taskId)}/collaboration-grants/${scope}/${encodeURIComponent(profileId)}`,
     { method: 'DELETE' },
   );
+}
+
+
+export function fetchTaskInteractions(taskId: string) {
+  return request<{ interactions: TaskInteraction[] }>(`/tasks/${encodeURIComponent(taskId)}/interactions`);
+}
+
+export function respondTaskInteraction(taskId: string, interaction: Pick<TaskInteraction, 'id' | 'workerRunId'>, response: InteractionResponse) {
+  return request<{ accepted: true }>(`/tasks/${encodeURIComponent(taskId)}/interactions/${encodeURIComponent(interaction.id)}/respond`, {
+    method: 'POST',
+    body: JSON.stringify({ workerRunId: interaction.workerRunId, response }),
+  });
 }
 
 export function fetchSession(taskId: string) {

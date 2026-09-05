@@ -16,7 +16,7 @@ import type {
   SessionMetadata,
   TaskMessage,
 } from '../../shared/types.js';
-import type { AgentAdapter, AgentRunOptions, AgentRunSettings, StreamEvent } from './types.js';
+import type { AgentAdapter, AgentRunOptions, AgentRunSettings, InteractionRespondRequest, StreamEvent } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
 import { operationalLog, redactOperationalReason } from '../observability.js';
@@ -390,7 +390,7 @@ export class HermesWorkerClient {
         ...process.env,
         HERMES_HOME: this.hermesHome,
         HERMES_QUIET: '1',
-        HERMES_YOLO_MODE: '1',
+        HERMES_YOLO_MODE: '0',
       },
     });
 
@@ -549,6 +549,12 @@ export class HermesWorkerAdapter implements AgentAdapter {
         case 'model_resolution':
           yield { type: 'model_resolution', modelResolution: event.modelResolution };
           break;
+        case 'interaction_requested':
+          yield { type: 'interaction_requested', interaction: event.interaction };
+          break;
+        case 'interaction_settled':
+          yield { type: 'interaction_settled', interactionId: event.interactionId, interactionStatus: event.status };
+          break;
         case 'error':
           yield { type: 'error', error: formatWorkerError(event.error), code: workerErrorCode(event.error) };
           break;
@@ -586,6 +592,17 @@ export class HermesWorkerAdapter implements AgentAdapter {
       message,
     }, WORKER_INTERRUPT_TIMEOUT_MS);
     return result.steered;
+  }
+
+
+  async respondInteraction(request: InteractionRespondRequest): Promise<{ accepted: true }> {
+    return await this.client.request<{ accepted: true }>({
+      type: 'interaction.respond',
+      taskId: request.taskId,
+      interactionId: request.interactionId,
+      workerRunId: request.workerRunId,
+      response: request.response,
+    });
   }
 
   async healthCheck(): Promise<boolean> {
