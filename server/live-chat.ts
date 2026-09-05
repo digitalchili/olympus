@@ -1,7 +1,7 @@
 import type { Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import type { GoalStateSnapshot, LiveChatRun, LiveChatMessage, LiveChatRunStatus, TaskRunState, ToolProgressEvent } from '../shared/types.js';
-import { shouldAppendRunErrorToReply } from '../shared/run-errors.js';
+import { safeRunErrorCode, shouldAppendRunErrorToReply } from '../shared/run-errors.js';
 import type { StreamEvent } from './adapters/types.js';
 
 export type LiveChatEvent = StreamEvent | { type: 'snapshot'; run: LiveChatRun };
@@ -37,6 +37,7 @@ function runState(run: LiveChatRun): TaskRunState {
     runId: run.runId,
     kind: run.kind,
     status: run.status,
+    ...(run.errorCode ? { errorCode: run.errorCode } : {}),
     startedAt: run.startedAt,
     updatedAt: run.updatedAt,
     goal: run.goal ? { ...run.goal } : null,
@@ -270,6 +271,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     const error = event.error || 'Unknown error';
     run.status = 'error';
     run.error = error;
+    run.errorCode = safeRunErrorCode(event.code);
     if (shouldAppendRunErrorToReply(event.code) && !assistant.content.includes(`[Error: ${error}]`)) {
       assistant.content = assistant.content
         ? `${assistant.content}\n[Error: ${error}]`
@@ -306,7 +308,7 @@ export function updateRunStatus(
   const run = runs.get(taskId);
   if (!run) return undefined;
 
-  run.status = status;
+  if (!((run.status === 'error' || run.status === 'stopped') && status === 'done')) run.status = status;
   run.updatedAt = Date.now();
   if (options?.context !== undefined) run.context = options.context;
   if (options?.error) run.error = options.error;

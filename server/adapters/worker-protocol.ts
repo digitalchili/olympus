@@ -12,7 +12,7 @@ import type {
   ContextUsage,
   DelegationWorkerEvent,
 } from '../../shared/types.js';
-import type { AgentRunSettings } from './types.js';
+import type { AgentRunSettings, TaskBackgroundWork } from './types.js';
 
 export type WorkerRequest =
   | { id: string; type: 'health' }
@@ -30,6 +30,7 @@ export type WorkerRequest =
   | { id: string; type: 'scheduledTasks.tick' }
   | { id: string; type: 'session.messages.get'; sessionId: string; taskId?: string; limit?: number; before?: string | null }
   | { id: string; type: 'session.get'; sessionId: string }
+  | { id: string; type: 'session.backgroundWork.get'; sessionId: string }
   | { id: string; type: 'goal.status'; sessionId: string }
   | { id: string; type: 'goal.set'; sessionId: string; goal: string; maxTurns?: number | null }
   | { id: string; type: 'goal.pause'; sessionId: string; reason?: string }
@@ -71,6 +72,7 @@ export interface WorkerErrorPayload {
 }
 
 export type WorkerResult =
+  | TaskBackgroundWork
   | { ok: boolean; agentDir?: string | null; python?: string | null }
   | AgentDefaults
   | AgentModelsResponse

@@ -1,6 +1,6 @@
 import { getTask } from '../db/queries.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
-import type { AgentAdapter, AgentRunOptions, StreamEvent } from './types.js';
+import type { AgentAdapter, AgentRunOptions, StreamEvent, TaskBackgroundWork } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
 import type { AdapterDelegationEvent, AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
 import { acquireProfileWork } from '../profile-deletion.js';
@@ -155,6 +155,11 @@ export class ProfileAgentAdapter implements AgentAdapter {
 
   async interruptChat(sessionId: string, reason?: string) {
     return await (await this.adapterForSession(sessionId)).interruptChat(sessionId, reason);
+  }
+
+  async getBackgroundWork(sessionId: string): Promise<TaskBackgroundWork> {
+    const worker = await this.adapterForSession(sessionId);
+    return worker.getBackgroundWork ? await worker.getBackgroundWork(sessionId) : { available: false, work: [] };
   }
 
   async steerChat(sessionId: string, message: string) {

@@ -38,6 +38,7 @@ import { getActiveTaskRunCount } from './task-run-lifecycle.js';
 import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsToProfile } from './profile-context.js';
 import { createRuntimeLiveness } from './runtime-liveness.js';
 import { operationalLog } from './observability.js';
+import { createTaskRecoveryRouter } from './routes/task-recovery.js';
 
 const app = express();
 
@@ -134,6 +135,7 @@ app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));
 app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));
+app.use('/api/tasks', createTaskRecoveryRouter(adapter));
 app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway }));
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));

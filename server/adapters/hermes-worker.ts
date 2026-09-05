@@ -16,7 +16,7 @@ import type {
   SessionMetadata,
   TaskMessage,
 } from '../../shared/types.js';
-import type { AgentAdapter, AgentRunOptions, AgentRunSettings, StreamEvent } from './types.js';
+import type { AgentAdapter, AgentRunOptions, AgentRunSettings, StreamEvent, TaskBackgroundWork } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
 import { operationalLog, redactOperationalReason } from '../observability.js';
@@ -576,6 +576,10 @@ export class HermesWorkerAdapter implements AgentAdapter {
       reason,
     }, WORKER_INTERRUPT_TIMEOUT_MS);
     return result.interrupted;
+  }
+
+  async getBackgroundWork(sessionId: string): Promise<TaskBackgroundWork> {
+    return await this.client.request<TaskBackgroundWork>({ type: 'session.backgroundWork.get', sessionId }, 4_000);
   }
 
   async steerChat(sessionId: string, message: string): Promise<boolean> {

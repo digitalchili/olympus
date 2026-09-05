@@ -8,7 +8,7 @@ export function hasReviewableAssistantOutput(messages: LiveChatMessage[]): boole
   ));
 }
 
-export function shouldPromoteTerminalRun(status: LiveChatRunStatus, hasAssistantOutput: boolean): boolean {
-  if (status === 'done') return true;
-  return (status === 'error' || status === 'stopped') && hasAssistantOutput;
+export function shouldPromoteTerminalRun(status: LiveChatRunStatus, _hasAssistantOutput: boolean): boolean {
+  // Partial prose, thinking and tool activity are not completion evidence.
+  return status === 'done';
 }

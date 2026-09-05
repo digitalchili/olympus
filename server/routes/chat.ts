@@ -88,6 +88,7 @@ function sendAdapterError(res: Response, error: unknown, fallback: string): void
 
 function hasNoSession(task: Task): boolean {
   if (task.last_agent_response_at !== null) return false;
+  if (getLatestTaskAgentRun(task.id)) return false;
   return getRunStatus(task.id)?.status !== 'streaming';
 }
 
@@ -141,12 +142,13 @@ function completeTaskRun(
   options?: Parameters<typeof updateRunStatus>[2],
 ): void {
   const updated = updateRunStatus(taskId, status, options);
+  finishTaskAgentRun(runId, updated?.status ?? status, Date.now(), getRun(taskId)?.errorCode);
   if (updated) {
     broadcast({ type: 'task_run_updated', run: updated });
     broadcastRunSnapshot(taskId);
   }
   finishRun(taskId, ttlMs, runId);
-  scheduleQueuedMessageDispatch(taskId);
+  if (updated?.status === 'done') scheduleQueuedMessageDispatch(taskId);
 }
 
 chatRouter.get('/:id/messages', async (req, res) => {
@@ -269,7 +271,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   const status = getRunStatus(taskId);
   const run = getRun(taskId);
   if (run?.modelResolution) updateTaskAgentRunResolution(runId, run.modelResolution);
-  finishTaskAgentRun(runId, status?.status ?? 'error');
+  finishTaskAgentRun(runId, status?.status ?? 'error', Date.now(), run?.errorCode);
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
@@ -282,7 +284,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
 
   const ttl = status?.status === 'error' ? ERROR_SNAPSHOT_TTL_MS : DONE_SNAPSHOT_TTL_MS;
   finishRun(taskId, ttl, runId);
-  scheduleQueuedMessageDispatch(taskId);
+  if (status?.status === 'done') scheduleQueuedMessageDispatch(taskId);
 }
 
 function taskSystemMessage(task: Task, supplemental = ''): string {
@@ -373,17 +375,10 @@ async function streamChatTurn(
 
   const finalRun = getRunStatus(runTask.id);
   if (!sawDone && !hadError && finalRun?.status === 'streaming') {
-    if (options.completeOnDone) {
-      const event: StreamEvent = { type: 'done', sessionId, context: doneContext };
-      sawDone = true;
-      applyEvent(runTask.id, event);
-      broadcastLive(runTask.id, event);
-    } else {
-      hadError = true;
-      const event: StreamEvent = { type: 'error', error: 'Hermes chat stream ended before completion' };
-      applyEvent(runTask.id, event);
-      broadcastLive(runTask.id, event);
-    }
+    hadError = true;
+    const event: StreamEvent = { type: 'error', code: 'stream_incomplete', error: 'Hermes chat stream ended before completion' };
+    applyEvent(runTask.id, event);
+    broadcastLive(runTask.id, event);
   }
 
   return { responseText, sawDone, context: doneContext, hadError, interrupted, pendingSteer };

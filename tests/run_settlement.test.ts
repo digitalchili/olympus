@@ -4,10 +4,10 @@ import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../serve
 assert.equal(shouldPromoteTerminalRun('done', false), true, 'successful runs always move to review');
 assert.equal(
   shouldPromoteTerminalRun('error', true),
-  true,
-  'forced limits with a visible assistant result stop looking perpetually active',
+  false,
+  'forced limits preserve partial output without presenting it as successful delivery',
 );
-assert.equal(shouldPromoteTerminalRun('stopped', true), true, 'user-stopped runs with useful output are reviewable');
+assert.equal(shouldPromoteTerminalRun('stopped', true), false, 'user-stopped runs remain incomplete');
 assert.equal(shouldPromoteTerminalRun('error', false), false, 'failures with no assistant result remain retryable');
 assert.equal(shouldPromoteTerminalRun('streaming', true), false, 'active runs never move early');
 assert.equal(hasReviewableAssistantOutput([

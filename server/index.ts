@@ -8,6 +8,7 @@ import { closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
 import { getRunStatus } from './live-chat.js';
 import { getTask } from './db/queries.js';
+import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
 import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-queue.js';
 import { assertQueuedMessageDeliveryResponse, configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
 
@@ -74,8 +75,9 @@ async function main() {
   const queuedMessageDispatcher = createQueuedMessageDispatcher({
     load: getQueuedTaskMessage,
     isActive: (taskId) => {
-      const status = getRunStatus(taskId)?.status;
-      return status === 'streaming' || status === 'compacting';
+      const status = getRunStatus(taskId)?.status ?? getLatestTaskAgentRun(taskId)?.status;
+      // Failed/stopped runs require deliberate recovery, never automatic replay.
+      return status === 'streaming' || status === 'compacting' || status === 'error' || status === 'stopped';
     },
     deliver: async (taskId, message) => {
       const task = getTask(taskId);

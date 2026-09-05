@@ -220,6 +220,7 @@ try {
   migrateCollaborationContributions();
   ensureCollaborationContributionIndex();
   migrateStudioGitHubConnectionStates();
+  ensureColumn('task_agent_runs', 'error_code', 'TEXT');
   ensureColumn('tasks', 'agent_provider', 'TEXT');
   ensureColumn('tasks', 'workdir', 'TEXT');
   ensureColumn('tasks', 'profile_name', 'TEXT');

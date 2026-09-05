@@ -1,4 +1,5 @@
 import db from './index.js';
+import { safeRunErrorCode } from '../../shared/run-errors.js';
 import type { AgentModelResolution, LiveChatRunStatus, TaskAgentRun, TaskRunKind } from '../../shared/types.js';
 
 type AgentRunRow = {
@@ -6,6 +7,7 @@ type AgentRunRow = {
   task_id: string;
   kind: TaskRunKind;
   status: LiveChatRunStatus;
+  error_code: string | null;
   requested_model: string | null;
   requested_provider: string | null;
   requested_reasoning_effort: AgentModelResolution['requested']['reasoningEffort'];
@@ -35,8 +37,9 @@ const updateResolution = db.prepare(`
   WHERE run_id = @runId
 `);
 const finishRun = db.prepare(`
-  UPDATE task_agent_runs SET status = @status, completed_at = @completedAt, updated_at = @completedAt
-  WHERE run_id = @runId
+  UPDATE task_agent_runs SET status = @status, completed_at = @completedAt, updated_at = @completedAt,
+    error_code = COALESCE(error_code, @errorCode)
+  WHERE run_id = @runId AND NOT (status IN ('error', 'stopped') AND @status = 'done')
 `);
 const latestRun = db.prepare(`
   SELECT * FROM task_agent_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1
@@ -50,6 +53,7 @@ function project(row: AgentRunRow | undefined): TaskAgentRun | undefined {
     taskId: row.task_id,
     kind: row.kind,
     status: row.status,
+    ...(row.error_code ? { errorCode: row.error_code } : {}),
     modelResolution: hasResolution ? {
       requested: {
         model: row.requested_model,
@@ -93,8 +97,9 @@ export function updateTaskAgentRunResolution(runId: string, resolution: AgentMod
   });
 }
 
-export function finishTaskAgentRun(runId: string, status: LiveChatRunStatus, completedAt = Date.now()): void {
-  finishRun.run({ runId, status, completedAt });
+export function finishTaskAgentRun(runId: string, status: LiveChatRunStatus, completedAt = Date.now(), errorCode?: string | null): void {
+  finishRun.run({ runId, status, completedAt, errorCode: status === 'error'
+    ? safeRunErrorCode(errorCode) : status === 'stopped' ? 'run_stopped' : null });
 }
 
 export function getLatestTaskAgentRun(taskId: string): TaskAgentRun | undefined {

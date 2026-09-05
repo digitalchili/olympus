@@ -15,6 +15,11 @@ import type {
 
 export type { AgentRunSettings, ContextUsage };
 
+export interface TaskBackgroundWork {
+  available: boolean;
+  work: Array<{ id: string; kind: 'process' | 'delegation'; status: string }>;
+}
+
 export interface AgentRunOptions {
   systemMessage?: string;
   settings?: AgentRunSettings;
@@ -56,6 +61,8 @@ export interface AgentAdapter {
   ): AsyncIterable<StreamEvent>;
 
   interruptChat(sessionId: string, reason?: string): Promise<boolean>;
+
+  getBackgroundWork?(sessionId: string): Promise<TaskBackgroundWork>;
 
   steerChat(sessionId: string, message: string): Promise<boolean>;
 
