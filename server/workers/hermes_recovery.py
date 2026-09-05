@@ -121,7 +121,53 @@ class ContinuationJournal:
         with closing(self._db()) as db, db:
             db.execute('UPDATE continuation_results SET state=? WHERE task=? AND delegation=?', (state, self.task_id, delegation))
 
-    def reconcile(self, native):
+    def acknowledge(self, native, delegation, claim=None):
+        """Repair only native acknowledgement after synthesis is committed."""
+        row = next((row for row in self.rows() if row['delegation'] == delegation), None)
+        if not row or row['state'] != 'ack_pending':
+            raise RecoveryBlocked('Successful synthesis receipt is unavailable.')
+        event = json.loads(row['event'])
+        acquired = claim is None
+        delivered = False
+        try:
+            record = native.get_durable_delegation(delegation)
+            if not isinstance(record, dict) or not ({self.task_id, row['owner']} & {
+                    record.get('origin_session'), record.get('origin_session_id')}):
+                raise RecoveryBlocked('Native acknowledgement record is unavailable or belongs to another task.')
+            if record.get('delivery_state') == 'delivered':
+                self.state(delegation, 'delivered')
+                delivered = True
+                return True
+            if record.get('delivery_state') != 'pending':
+                raise RecoveryBlocked('Native acknowledgement was dropped or is incompatible.')
+            if not all(callable(getattr(native, name, None)) for name in (
+                    'claim_event_delivery', 'complete_event_delivery', 'release_event_delivery')):
+                raise RecoveryBlocked('Installed Hermes cannot acknowledge saved child results.')
+            if claim is None:
+                claim = native.claim_event_delivery(event, 'olympus-worker-ack')
+            if claim is None:
+                return False
+            native.complete_event_delivery(event, claim)
+            # Native complete_event_delivery returns None even for a failed CAS.
+            record = native.get_durable_delegation(delegation)
+            if isinstance(record, dict) and record.get('delivery_state') == 'delivered':
+                self.state(delegation, 'delivered')
+                delivered = True
+            return delivered
+        except RecoveryBlocked:
+            raise
+        except Exception:
+            # Native I/O can fail before or after committing. Keep the receipt
+            # so a later attempt checks native state before acknowledging again.
+            return False
+        finally:
+            if acquired and claim is not None and not delivered:
+                try:
+                    native.release_event_delivery(event, claim)
+                except Exception:
+                    pass
+
+    def reconcile(self, native, *, acknowledge=False):
         rows = self.rows()
         if not rows:
             return
@@ -135,6 +181,12 @@ class ContinuationJournal:
             owners = {record.get('origin_session'), record.get('origin_session_id')}
             if not ({self.task_id, row['owner']} & owners):
                 raise RecoveryBlocked('Native child recovery record belongs to another task.')
+            if row['state'] == 'ack_pending':
+                if acknowledge:
+                    self.acknowledge(native, row['delegation'])
+                elif record.get('delivery_state') not in {'pending', 'delivered'}:
+                    raise RecoveryBlocked('Native acknowledgement was dropped or is incompatible.')
+                continue
             if record.get('delivery_state') in {'delivered', 'dropped'}:
                 raise RecoveryBlocked('Native child delivery was consumed or dropped outside this continuation.')
             if row['event']:

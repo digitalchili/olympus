@@ -2338,7 +2338,14 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             system_message = (system_message or "") + "\n\n" + saved_recovery_context
         if pending_background_delegations:
             async_delegation = importlib.import_module("tools.async_delegation")
-            journal.reconcile(async_delegation)
+            journal.reconcile(async_delegation, acknowledge=True)
+            pending_background_delegations = {row["delegation"] for row in journal.rows()}
+            if any(row["state"] == "ack_pending" for row in journal.rows()):
+                raise WorkerError("Successful synthesis is saved; native acknowledgement is still pending.", code="recovery_pending")
+            if request.get("recoveryContinuation") is True and not pending_background_delegations and not journal.turn_state():
+                _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
+                _send({"id": request_id, "type": "done", "sessionId": session_id})
+                return
             recovery_context = journal.context()
             event = journal.ready_event()
             if event is not None:
@@ -2396,13 +2403,14 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             completed_turn = True
             journal.set_turn_state(None)
             if delivery_event is not None and delivery_claim is not None:
-                from tools.async_delegation import complete_event_delivery
+                async_delegation = importlib.import_module("tools.async_delegation")
 
-                # Save successful synthesis before acknowledgement. A crash after
-                # this write must never replay synthesis or its tool side effects.
+                # Commit successful synthesis separately from native delivery.
+                # Recovery retries acknowledgement only, never the model/tools.
                 completed_id = delivery_event["delegation_id"]
-                journal.state(completed_id, "delivered")
-                complete_event_delivery(delivery_event, delivery_claim)
+                journal.state(completed_id, "ack_pending")
+                if not journal.acknowledge(async_delegation, completed_id, delivery_claim):
+                    raise WorkerError("Successful synthesis is saved; native acknowledgement is still pending.", code="recovery_pending")
                 pending_background_delegations.discard(completed_id)
                 delivery_event = None
                 delivery_claim = None

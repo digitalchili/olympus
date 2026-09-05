@@ -28,11 +28,15 @@ class RecoveryTests(unittest.TestCase):
         self.released = []
         self.native = types.ModuleType('tools.async_delegation')
         self.native.claim_event_delivery = lambda *_: 'claim-1'
-        self.native.complete_event_delivery = lambda event, claim: self.completed.append(event)
+        self.native_states = {}
+        def complete(event, claim):
+            self.completed.append(event)
+            self.native_states[event['delegation_id']] = 'delivered'
+        self.native.complete_event_delivery = complete
         self.native.release_event_delivery = lambda event, claim: self.released.append(event)
         self.native.get_durable_delegation = lambda ident: {
             'delegation_id': ident, 'origin_session': 'task-1', 'origin_session_id': 'task-1',
-            'state': 'completed', 'delivery_state': 'pending', 'result': {'summary': 'Saved child result'},
+            'state': 'completed', 'delivery_state': self.native_states.get(ident, 'pending'), 'result': {'summary': 'Saved child result'},
         }
         self.native.interrupt_for_session = lambda **_: None
         self.process = types.ModuleType('tools.process_registry')
@@ -192,6 +196,21 @@ class RecoveryTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('OLYMPUS_NATIVE_HERMES_SOURCE'), 'native Hermes source not selected')
     def test_real_pinned_native_result_recovers_with_queue_lost(self):
+        self.native_recovery_probe()
+
+    @unittest.skipUnless(os.environ.get('OLYMPUS_NATIVE_HERMES_SOURCE'), 'native Hermes source not selected')
+    def test_real_native_ack_failure_repairs_without_synthesis_replay(self):
+        self.native_recovery_probe('failure')
+
+    @unittest.skipUnless(os.environ.get('OLYMPUS_NATIVE_HERMES_SOURCE'), 'native Hermes source not selected')
+    def test_real_native_ack_cas_noop_is_retried_without_synthesis_replay(self):
+        self.native_recovery_probe('noop')
+
+    @unittest.skipUnless(os.environ.get('OLYMPUS_NATIVE_HERMES_SOURCE'), 'native Hermes source not selected')
+    def test_real_native_committed_ack_lost_receipt_repairs_without_synthesis_replay(self):
+        self.native_recovery_probe('committed')
+
+    def native_recovery_probe(self, failure=None):
         import importlib
         import queue
         import time
@@ -216,7 +235,29 @@ class RecoveryTests(unittest.TestCase):
                 except queue.Empty:
                     break
             self.native, self.process = native, process
-            self.run_chat(dispatch=False, notification=False)
+            if failure:
+                complete = native.complete_event_delivery
+                def fail_ack(*args):
+                    if failure == 'committed':
+                        complete(*args)
+                    raise OSError('Injected acknowledgement failure')
+                failure_patch = (patch.object(native, 'complete_completion_delivery', return_value=False)
+                                 if failure == 'noop' else patch.object(native, 'complete_event_delivery', side_effect=fail_ack))
+                with failure_patch, self.assertRaises(worker.WorkerError):
+                    self.run_chat(dispatch=False, notification=False)
+                self.assertEqual(len(self.messages), 1)
+                journal = ContinuationJournal('task-1')
+                self.assertEqual(journal.rows()[0]['state'], 'ack_pending')
+                self.assertEqual(native.get_durable_delegation(delegation)['delivery_state'],
+                                 'delivered' if failure == 'committed' else 'pending')
+                import hermes_background_work
+                inventory = hermes_background_work.get_background_work({'sessionId': 'task-1'},
+                    process_registry=process.process_registry, async_delegation=native)
+                self.assertEqual(inventory['continuation']['status'], 'pending')
+                self.run_chat(dispatch=False, notification=False, recoveryContinuation=True)
+                self.assertEqual(len(self.messages), 1, 'Acknowledgement repair must not rerun synthesis')
+            else:
+                self.run_chat(dispatch=False, notification=False)
             self.assertIn('Saved child result', self.messages[0][1])
             self.assertEqual(native.get_durable_delegation(delegation)['delivery_state'], 'delivered')
             self.assertEqual(ContinuationJournal('task-1').status(), {'status': 'none'})
@@ -283,6 +324,27 @@ class RecoveryTests(unittest.TestCase):
             self.run_chat({'completed': False, 'final_response': 'Partial'}, dispatch=False, recoveryContinuation=True)
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(ContinuationJournal('task-1').status()['status'], 'blocked')
+
+
+    def test_ack_failure_keeps_ack_pending_and_retry_never_reruns_synthesis(self):
+        complete = self.native.complete_event_delivery
+        self.native.complete_event_delivery = lambda *_: (_ for _ in ()).throw(OSError('ack unavailable'))
+        with self.assertRaises((worker.WorkerError, OSError)):
+            self.run_chat()
+        self.assertEqual(len(ContinuationJournal('task-1').rows()), 1)
+        self.assertEqual(ContinuationJournal('task-1').rows()[0]['state'], 'ack_pending')
+        self.assertEqual(len(self.messages), 2)
+        self.native.complete_event_delivery = complete
+        self.run_chat(dispatch=False, recoveryContinuation=True)
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(ContinuationJournal('task-1').status(), {'status': 'none'})
+
+    def test_silent_native_ack_noop_is_not_success(self):
+        self.native.complete_event_delivery = lambda *_: None
+        with self.assertRaises(worker.WorkerError):
+            self.run_chat()
+        self.assertEqual(ContinuationJournal('task-1').rows()[0]['state'], 'ack_pending')
+        self.assertFalse(any(event['type'] == 'done' for event in self.sent))
 
 
 if __name__ == '__main__':

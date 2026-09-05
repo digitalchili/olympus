@@ -276,7 +276,7 @@ class DelegationEventProjectionTests(unittest.TestCase):
         fake_async.complete_event_delivery = lambda selected, claim: completed_claims.append((selected, claim))
         fake_async.release_event_delivery = lambda selected, claim: None
         fake_async.get_durable_delegation = lambda _: {
-            "origin_session": "task-1", "state": "completed", "delivery_state": "pending",
+            "origin_session": "task-1", "state": "completed", "delivery_state": "delivered" if completed_claims else "pending",
             "result": {"summary": "reports"},
         }
 
