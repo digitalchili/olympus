@@ -1,0 +1,6 @@
+{
+  "name": "olympus-task-reliability-qa",
+  "private": true,
+  "type": "module",
+  "devDependencies": {"playwright": "1.55.0"}
+}
