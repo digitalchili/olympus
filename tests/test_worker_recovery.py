@@ -50,7 +50,7 @@ class RecoveryTests(unittest.TestCase):
             raise AssertionError('Missing notification never reconciled native state')
         return None
 
-    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, **request_extra):
+    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, **request_extra):
         outer = self
         class Agent:
             session_id = 'task-1'
@@ -79,12 +79,18 @@ class RecoveryTests(unittest.TestCase):
                 'native_approval_context': lambda *_: nullcontext(),
                 '_start_deadline_controls': lambda *_: types.SimpleNamespace(cancel=lambda: None, finalization_started=finalization),
                 'take_owned_delegation_notification': self.notification if not notification else lambda *_a, **_k: self.event,
-                '_send': self.sent.append,
+                '_send': lambda event: (self.sent.append(event), on_send(event) if on_send else None),
             }.items():
                 stack.enter_context(patch.object(worker, name, value))
             stack.enter_context(patch.dict(sys.modules, {'tools.async_delegation': self.native, 'tools.process_registry': self.process}))
-            worker._run_chat('request-1', {'sessionId': 'task-1', 'taskId': 'task-1', 'message': 'User request',
-                'runBudget': {'maxRuntimeMs': 1000, 'finalizeBeforeMs': 100, 'childDrainBeforeMs': 50}, **request_extra})
+            request = {'sessionId': 'task-1', 'taskId': 'task-1', 'message': 'User request',
+                'runBudget': {'maxRuntimeMs': 1000, 'finalizeBeforeMs': 100, 'childDrainBeforeMs': 50}, **request_extra}
+            if threaded:
+                worker._run_chat_thread('request-1', request, 'task-1')
+            else:
+                terminal = worker._run_chat('request-1', request)
+                if terminal:
+                    self.sent.extend(terminal)
 
     def test_claim_busy_never_replays_user_request(self):
         self.native.claim_event_delivery = lambda *_: None
@@ -345,6 +351,132 @@ class RecoveryTests(unittest.TestCase):
             self.run_chat()
         self.assertEqual(ContinuationJournal('task-1').rows()[0]['state'], 'ack_pending')
         self.assertFalse(any(event['type'] == 'done' for event in self.sent))
+
+
+
+    def terminal_handoff(self, synthesis):
+        entered, release, finished = (threading.Event() for _ in range(3))
+        original_done = False
+        def evaluate(_request):
+            entered.set()
+            release.wait(2)
+            return {}
+        def send(event):
+            nonlocal original_done
+            if event.get('id') == 'next-eval' and event.get('type') == 'result':
+                finished.set()
+            if event.get('id') == 'request-1' and event['type'] in {'done', 'error'} and not original_done:
+                original_done = True
+                worker._handle_request({'id': 'next-eval', 'type': 'goal.evaluate', 'sessionId': 'task-1'})
+        self.assertTrue(worker._try_mark_task_active('task-1', 'request-1'))
+        try:
+            with patch.object(worker, '_goal_evaluate', side_effect=evaluate), patch.object(worker, '_send', side_effect=send):
+                self.run_chat(synthesis, dispatch=False, threaded=True, on_send=send)
+                self.assertTrue(entered.wait(0.2), 'Immediate evaluator must not see the finished chat as busy')
+                self.assertEqual(worker.ACTIVE_TASKS.get('task-1'), 'next-eval', 'Old chat cleanup must not clear the new evaluator')
+                release.set()
+                self.assertTrue(finished.wait(1))
+        finally:
+            release.set()
+            worker._clear_task_active('task-1', 'request-1')
+            worker._clear_task_active('task-1', 'next-eval')
+
+    def test_done_chat_allows_immediate_goal_evaluation(self):
+        self.terminal_handoff({'completed': True, 'final_response': 'Done'})
+
+    def test_failed_chat_allows_immediate_goal_evaluation_after_error(self):
+        self.terminal_handoff({'completed': False, 'final_response': 'Incomplete'})
+
+    def test_interrupted_chat_allows_immediate_goal_evaluation(self):
+        self.terminal_handoff({'interrupted': True})
+
+
+class GoalOperationTests(unittest.TestCase):
+    def blocked_operation(self, operation):
+        entered, release, returned, finished = (threading.Event() for _ in range(4))
+        sent, mutations, lock_at_result = [], [], []
+        independent = threading.Event()
+        request = {'id': 'private-operation-value', 'type': operation, 'sessionId': 'task-lock'}
+        def handler(request):
+            if request['id'] == 'private-operation-value':
+                entered.set()
+                if not release.wait(3):
+                    raise AssertionError('Blocked goal fixture was not released')
+            else:
+                mutations.append(request['type'])
+            return {'goal': None}
+        def send(event):
+            sent.append(event)
+            if event.get('id') == 'independent':
+                independent.set()
+            if event.get('id') == 'private-operation-value' and event.get('type') in {'result', 'error'}:
+                lock_at_result.append(worker.ACTIVE_TASKS.get('task-lock'))
+                finished.set()
+        with ExitStack() as stack:
+            for name in ('_goal_set', '_goal_pause', '_goal_resume', '_goal_clear', '_goal_evaluate'):
+                stack.enter_context(patch.object(worker, name, handler))
+            stack.enter_context(patch.object(worker, '_goal_status', return_value={'goal': None}))
+            stack.enter_context(patch.object(worker, '_send', side_effect=send))
+            # Keep the native read-only inventory isolated; test the real RPC overlay.
+            if hasattr(worker, '_native_session_background_work'):
+                stack.enter_context(patch.object(worker, '_native_session_background_work', return_value={'available': True, 'work': []}))
+            else:
+                stack.enter_context(patch.object(worker, '_session_background_work', return_value={'available': True, 'work': []}))
+            stack.enter_context(patch.object(worker, '_run_chat', side_effect=lambda *_: mutations.append('chat')))
+            stack.enter_context(patch.object(worker, '_run_compress', side_effect=lambda *_: mutations.append('compress') or {}))
+            def dispatch():
+                worker._handle_request(request)
+                returned.set()
+            dispatcher = threading.Thread(target=dispatch, daemon=True)
+            dispatcher.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(returned.wait(0.2), 'Goal setup must not block JSONL reads')
+                for kind in ('goal.set', 'goal.pause', 'goal.resume', 'goal.clear', 'goal.evaluate', 'session.compress', 'chat'):
+                    worker._handle_request({'id': kind, 'type': kind, 'sessionId': 'task-lock', 'message': 'New request'})
+                errors = [event for event in sent if event['type'] == 'error']
+                self.assertEqual(len(errors), 7)
+                self.assertTrue(all(event['error']['code'] == 'task_busy' for event in errors))
+                self.assertEqual(mutations, [])
+                worker._handle_request({'id': 'status', 'type': 'goal.status', 'sessionId': 'task-lock'})
+                worker._handle_request({'id': 'inventory', 'type': 'session.backgroundWork.get', 'sessionId': 'task-lock'})
+                worker._handle_request({'id': 'foreign', 'type': 'session.backgroundWork.get', 'sessionId': 'task-other'})
+                status = next(event for event in sent if event['id'] == 'status')
+                self.assertEqual(status['type'], 'result')
+                inventory = next(event['data'] for event in sent if event['id'] == 'inventory')
+                self.assertEqual(len(inventory['work']), 1)
+                self.assertEqual(inventory['work'][0]['kind'], 'operation')
+                self.assertEqual(inventory['work'][0]['status'], 'running')
+                self.assertNotIn('private-operation-value', str(inventory))
+                self.assertEqual(next(event['data']['work'] for event in sent if event['id'] == 'foreign'), [])
+                worker._handle_request({'id': 'independent', 'type': 'goal.set', 'sessionId': 'task-other'})
+                self.assertTrue(independent.wait(1), 'Different tasks must remain independent')
+                self.assertEqual(mutations, ['goal.set'])
+            finally:
+                release.set()
+                dispatcher.join(1)
+                self.assertTrue(finished.wait(1))
+            self.assertEqual(lock_at_result, [None], 'Next request may arrive as soon as the result is sent')
+            self.assertNotIn('task-lock', worker.ACTIVE_TASKS)
+
+    def test_goal_evaluator_failure_releases_task_lock_before_error(self):
+        finished = threading.Event()
+        sent = []
+        def send(event):
+            sent.append((event, worker.ACTIVE_TASKS.get('failed-goal')))
+            finished.set()
+        with patch.object(worker, '_goal_evaluate', side_effect=RuntimeError('fixture failed')), patch.object(worker, '_send', side_effect=send):
+            worker._handle_request({'id': 'failed-eval', 'type': 'goal.evaluate', 'sessionId': 'failed-goal'})
+            self.assertTrue(finished.wait(1))
+        self.assertEqual(sent[0][0]['type'], 'error')
+        self.assertIsNone(sent[0][1])
+        self.assertNotIn('failed-goal', worker.ACTIVE_TASKS)
+
+    def test_blocked_goal_evaluation_excludes_new_writes_but_not_status(self):
+        self.blocked_operation('goal.evaluate')
+
+    def test_blocked_goal_setup_excludes_new_writes_but_not_status(self):
+        self.blocked_operation('goal.set')
 
 
 if __name__ == '__main__':

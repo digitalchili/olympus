@@ -301,13 +301,13 @@ class DelegationEventProjectionTests(unittest.TestCase):
                 "tools.process_registry": fake_process,
             }),
         ):
-            hermes_worker._run_chat("request-1", {
+            sent.extend(hermes_worker._run_chat("request-1", {
                 "taskId": "task-1",
                 "taskTitle": "Compare platforms",
                 "sessionId": "task-1",
                 "message": "Research three platforms.",
                 "systemMessage": "Test system message",
-            })
+            }))
 
         self.assertEqual(run_messages, [
             "Research three platforms.",

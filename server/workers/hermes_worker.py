@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import importlib
 import inspect
 from functools import partial
@@ -32,7 +33,7 @@ from hermes_worker_utils import (
     truncate_with_ellipsis,
 )
 from hermes_recovery import ContinuationJournal, RecoveryBlocked
-from hermes_background_work import get_background_work as _session_background_work
+from hermes_background_work import get_background_work as _native_session_background_work
 from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
 from hermes_sessions import (
     load_agent_history,
@@ -1049,6 +1050,21 @@ def _task_key_for(request: dict[str, Any]) -> str:
         or string_or_none(request.get("sessionId"))
         or str(request.get("id"))
     )
+
+
+def _session_background_work(request: dict[str, Any], **kwargs) -> dict[str, Any]:
+    result = _native_session_background_work(request, **kwargs)
+    with ACTIVE_TASKS_LOCK:
+        request_id = ACTIVE_TASKS.get(_task_key_for(request))
+    if request_id:
+        # Include worker-owned setup/judge/compression calls even after the
+        # server has stopped awaiting them. Never expose request content/IDs.
+        operation_id = hashlib.sha256(request_id.encode()).hexdigest()[:16]
+        result = {**result, "work": [
+            {"id": f"worker-{operation_id}", "kind": "operation", "status": "running"},
+            *result.get("work", []),
+        ][:100]}
+    return result
 
 
 OLYMPUS_WORKDIR_KEYS: set[str] = set()
@@ -2072,7 +2088,7 @@ def _goal_evaluate(request: dict[str, Any]) -> dict[str, Any]:
     return _project_goal_decision(decision, mgr.state)
 
 
-def _run_chat(request_id: str, request: dict[str, Any]) -> None:
+def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
     settings = request.get("settings") if isinstance(request.get("settings"), dict) else {}
     requested_model = string_or_none(settings.get("model"))
     requested_provider = string_or_none(settings.get("provider"))
@@ -2343,9 +2359,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
             if any(row["state"] == "ack_pending" for row in journal.rows()):
                 raise WorkerError("Successful synthesis is saved; native acknowledgement is still pending.", code="recovery_pending")
             if request.get("recoveryContinuation") is True and not pending_background_delegations and not journal.turn_state():
-                _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
-                _send({"id": request_id, "type": "done", "sessionId": session_id})
-                return
+                return [{"id": request_id, "type": "done", "sessionId": session_id}]
             recovery_context = journal.context()
             event = journal.ready_event()
             if event is not None:
@@ -2371,10 +2385,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
 
             if result.get("interrupted"):
                 save_interrupt()
-                _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
                 # User-initiated stop: end the turn cleanly (the partial reply is already
                 # streamed and persisted by run_conversation) rather than as an error.
-                _send({
+                return [{
                     "id": request_id,
                     "type": "done",
                     "sessionId": getattr(agent, "session_id", None) or session_id,
@@ -2382,8 +2395,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                     "modelResolution": _model_resolution_payload(
                         agent, requested_resolution, fallback_reason=fallback_reason,
                     ),
-                })
-                return
+                }]
 
             final_text = str(result.get("final_response") or "")
             failure_message = _agent_failure_message(final_text)
@@ -2437,8 +2449,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                             parent_session_id=owner_session_id,
                             reason="olympus_user_interrupt",
                         )
-                    _send({"id": request_id, "type": "checkpoint", "checkpoint": journal.receipt()})
-                    _send({
+                    return [{
                         "id": request_id,
                         "type": "done",
                         "sessionId": getattr(agent, "session_id", None) or session_id,
@@ -2446,8 +2457,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
                         "modelResolution": _model_resolution_payload(
                             agent, requested_resolution, fallback_reason=fallback_reason,
                         ),
-                    })
-                    return
+                    }]
                 for owner_index, owner_session_id in enumerate(owner_session_ids):
                     event = take_owned_delegation_notification(
                         owner_session_id,
@@ -2502,8 +2512,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
         # loop exits (including return/error paths), so retire the agent here.
         _unregister_active_agent(_task_key_for(request), request_id)
 
+    terminal_events = []
     if deadline_controls.finalization_started.is_set():
-        _send({"id": request_id, **_deadline_finalized_event()})
+        terminal_events.append({"id": request_id, **_deadline_finalized_event()})
 
     context_engine = getattr(agent, "context_compressor", None)
     context_used = int(result.get("last_prompt_tokens") or 0)
@@ -2526,30 +2537,36 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> None:
     pending_steer = _strip_internal_deadline_steers(_drain_unapplied_steer(agent))
     if pending_steer:
         done_event["pendingSteer"] = pending_steer
-    _send(done_event)
+    terminal_events.append(done_event)
+    return terminal_events
 
 
 def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) -> None:
-    done_sent = False
+    terminal_events = []
+    failure = None
     acquired = False
     try:
         AGENT_SEMAPHORE.acquire()
         acquired = True
-        _run_chat(request_id, request)
-        done_sent = True
+        terminal_events = _run_chat(request_id, request) or []
     except Exception as exc:
-        _send_error(request_id, exc)
+        failure = exc
     finally:
-        if not done_sent:
-            _send({
-                "id": request_id,
-                "type": "done",
-                "sessionId": string_or_none(request.get("sessionId")) or request_id,
-            })
         INTERACTIONS.cancel_run(request_id)
         if acquired:
             AGENT_SEMAPHORE.release()
         _clear_task_active(task_key, request_id)
+    # A terminal event can trigger an immediate evaluator or follow-up. All
+    # old-run writes and cleanup must finish before the client observes it.
+    if failure is not None:
+        _send_error(request_id, failure)
+        terminal_events = [{
+            "id": request_id,
+            "type": "done",
+            "sessionId": string_or_none(request.get("sessionId")) or request_id,
+        }]
+    for event in terminal_events:
+        _send(event)
 
 
 def _run_one_shot_agent(label: str, system_message: str, user_message: str) -> str:
@@ -2591,17 +2608,23 @@ def _submit_background_agent_request(
 
     def runner() -> None:
         acquired = False
+        failure = None
         try:
             AGENT_SEMAPHORE.acquire()
             acquired = True
-            _result(request_id, handler(request))
+            result = handler(request)
         except Exception as exc:
-            _send_error(request_id, exc)
+            failure = exc
         finally:
             if acquired:
                 AGENT_SEMAPHORE.release()
             if task_key:
                 _clear_task_active(task_key, request_id)
+        # A client may immediately send its next turn upon seeing this result.
+        if failure is not None:
+            _send_error(request_id, failure)
+        else:
+            _result(request_id, result)
 
     threading.Thread(
         target=runner,
@@ -2795,16 +2818,16 @@ def _handle_request(request: dict[str, Any]) -> None:
             _result(request_id, project_session_metadata(request.get("sessionId")))
         elif request_type == "goal.status":
             _result(request_id, _goal_status(request))
-        elif request_type == "goal.set":
-            _result(request_id, _goal_set(request))
-        elif request_type == "goal.pause":
-            _result(request_id, _goal_pause(request))
-        elif request_type == "goal.resume":
-            _result(request_id, _goal_resume(request))
-        elif request_type == "goal.clear":
-            _result(request_id, _goal_clear(request))
-        elif request_type == "goal.evaluate":
-            _submit_background_agent_request(request_id, request, name_prefix="goal", handler=_goal_evaluate)
+        elif request_type in {"goal.set", "goal.pause", "goal.resume", "goal.clear", "goal.evaluate"}:
+            handler = {
+                "goal.set": _goal_set, "goal.pause": _goal_pause,
+                "goal.resume": _goal_resume, "goal.clear": _goal_clear,
+                "goal.evaluate": _goal_evaluate,
+            }[request_type]
+            _submit_background_agent_request(
+                request_id, request, name_prefix="goal", handler=handler,
+                task_key=_task_key_for(request),
+            )
         elif request_type == "interaction.respond":
             try:
                 _result(request_id, INTERACTIONS.respond(request))
