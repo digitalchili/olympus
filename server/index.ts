@@ -12,6 +12,7 @@ import { getTask } from './db/queries.js';
 import { getLatestTaskAgentRun, recoverInterruptedTaskAgentRuns } from './db/task-agent-runs.js';
 import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-queue.js';
 import { assertQueuedMessageDeliveryResponse, configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
+import { checkDiskSpaceAndAlert } from './disk-alert.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -133,6 +134,13 @@ async function main() {
   recover();
   configureQueuedMessageDispatcher(queuedMessageDispatcher);
   for (const message of listQueuedTaskMessages()) queuedMessageDispatcher.schedule(message.taskId);
+
+  const diskAlertTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void checkDiskSpaceAndAlert();
+  }, 60_000);
+  diskAlertTimer.unref();
+  void checkDiskSpaceAndAlert();
 
   const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;

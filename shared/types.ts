@@ -246,7 +246,7 @@ export const DEFAULT_PROFILE_NAME = 'default';
 export const TASK_HANDOFF_STATES = ['created', 'running', 'completed', 'failed', 'cancelled'] as const;
 export type TaskHandoffState = (typeof TASK_HANDOFF_STATES)[number];
 // `automatic` remains readable for tasks created by older Olympus versions.
-export const TASK_ROUTING_SOURCES = ['manual', 'automatic'] as const;
+export const TASK_ROUTING_SOURCES = ['manual', 'automatic', 'system_alert'] as const;
 export type TaskRoutingSource = (typeof TASK_ROUTING_SOURCES)[number];
 
 export interface HermesProfileCapabilities {

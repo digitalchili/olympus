@@ -8,6 +8,7 @@ import {
   resolveProjectRoot,
 } from '../paths.js';
 import { detectStorageMount } from '../storage-probe.js';
+import { checkDiskSpaceAndAlert } from '../disk-alert.js';
 import type { StorageStatus } from '../../shared/types.js';
 
 export function createStorageRouter(): Router {
@@ -40,6 +41,12 @@ export function createStorageRouter(): Router {
       disk.fsType = mountInfo.fsType;
       disk.isExternal = mountInfo.isExternal;
       disk.label = mountInfo.label;
+    }
+
+    if (disk) {
+      void checkDiskSpaceAndAlert({
+        customStats: { totalBytes: disk.totalBytes, freeBytes: disk.freeBytes },
+      });
     }
 
     const isDocker = existsSync('/.dockerenv') || Boolean(process.env.HERMES_WRITE_SAFE_ROOT);

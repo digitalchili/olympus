@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
-import { FolderKanban, Loader2, MoreHorizontal, Target } from 'lucide-react';
+import { AlertTriangle, FolderKanban, Loader2, MoreHorizontal, Target } from 'lucide-react';
 import { Link } from 'react-router';
 import { ProfileLink, useProfile } from '../contexts/ProfileContext';
 import { DEFAULT_PROFILE_NAME, type ProjectSummary, type Task, type TaskRunState, type TaskStatus } from '@shared/types';
@@ -17,6 +17,7 @@ const BUSY_LABELS: Record<string, string> = { compact: 'Compacting...', goal: 'W
 
 function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
   const { profiles } = useProfile();
+  const isAlert = task.routing_source === 'system_alert';
   const isUnseen = hasUnseenAgentResponse(task);
   const isBusy = !!run && isActiveRun(run);
   const isGoalRun = run?.kind === 'goal' && run.status === 'streaming';
@@ -32,11 +33,21 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
 
   return (
     <div>
+      {isAlert && (
+        <div className="mb-2 inline-flex items-center gap-1.5 rounded-md bg-rose-100 dark:bg-rose-900/60 px-2 py-0.5 text-[11px] font-semibold text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+          <AlertTriangle size={12} strokeWidth={2.5} className="shrink-0 text-rose-600 dark:text-rose-400" />
+          <span>Storage Alert</span>
+        </div>
+      )}
       <RenameTitle
         value={task.title}
         identity={task.id}
-        className={`block text-sm text-zinc-900 dark:text-zinc-100 line-clamp-2 ${
-          isUnseen ? 'font-semibold' : 'font-medium'
+        className={`block text-sm line-clamp-2 ${
+          isAlert
+            ? 'font-semibold text-rose-950 dark:text-rose-100'
+            : isUnseen
+              ? 'font-semibold text-zinc-900 dark:text-zinc-100'
+              : 'font-medium text-zinc-900 dark:text-zinc-100'
         }`}
       />
       {task.description && (
@@ -106,6 +117,7 @@ export function TaskCard({
     isDragging,
   } = useDraggable({ id: task.id, data: { task } });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const isAlert = task.routing_source === 'system_alert';
   const isUnseen = hasUnseenAgentResponse(task);
   const isUnseenReview = isUnseen && task.status === 'in_review';
 
@@ -136,15 +148,17 @@ export function TaskCard({
         ref={setNodeRef}
         onContextMenu={handleContextMenu}
         className={`group/card relative rounded-lg border cursor-grab active:cursor-grabbing select-none transition-[background-color,opacity,box-shadow,border-color] duration-150 ${
-          isUnseenReview ? 'bg-violet-50/80 dark:bg-violet-950/25' : 'bg-white dark:bg-zinc-900'
+          isAlert
+            ? 'bg-rose-50/90 dark:bg-rose-950/35 border-rose-300 dark:border-rose-800/80 shadow-md hover:shadow-lg hover:border-rose-400 dark:hover:border-rose-700'
+            : isUnseenReview
+              ? 'bg-violet-50/80 dark:bg-violet-950/25 border-violet-200 dark:border-violet-800/70 shadow-md hover:shadow-lg hover:border-violet-300 dark:hover:border-violet-700'
+              : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
         } ${
           isDragging
             ? 'opacity-30 border-dashed border-zinc-300 dark:border-zinc-600 shadow-none'
-            : isUnseenReview
-              ? 'border-violet-200 dark:border-violet-800/70 shadow-md hover:shadow-lg hover:border-violet-300 dark:hover:border-violet-700'
-              : isUnseen
-                ? 'border-zinc-400 dark:border-zinc-600 shadow-lg hover:shadow-xl hover:border-zinc-400 dark:hover:border-zinc-500'
-                : 'border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700'
+            : !isAlert && !isUnseenReview && isUnseen
+              ? 'border-zinc-400 dark:border-zinc-600 shadow-lg hover:shadow-xl hover:border-zinc-400 dark:hover:border-zinc-500'
+              : ''
         }`}
       >
         <Link
@@ -199,8 +213,13 @@ export function TaskCard({
 }
 
 export function TaskCardOverlay({ task, run, project, showLocation = false }: { task: Task; run?: TaskRunState; project?: ProjectSummary; showLocation?: boolean }) {
+  const isAlert = task.routing_source === 'system_alert';
   return (
-    <div className="p-3.5 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 shadow-2xl rotate-[2deg] scale-105 w-[280px] pointer-events-none">
+    <div className={`p-3.5 rounded-lg border shadow-2xl rotate-[2deg] scale-105 w-[280px] pointer-events-none ${
+      isAlert
+        ? 'bg-rose-50 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800'
+        : 'bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-600'
+    }`}>
       <TaskCardBody task={task} run={run} />
       {showLocation && project && <div className={`mt-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium ring-1 ring-inset ${projectChipClasses(project.id)}`}><FolderKanban size={12} />{project.name}</div>}
     </div>

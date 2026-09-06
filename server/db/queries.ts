@@ -10,13 +10,13 @@ import {
 } from '../../shared/types.js';
 import { assertProfileAcceptingWork, isProfileDeleting } from '../profile-deletion.js';
 
-const stmtAllTasks = db.prepare('SELECT * FROM tasks ORDER BY updated_at DESC');
-const stmtTasksByStatus = db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC');
-const stmtTasksByProfile = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY updated_at DESC');
-const stmtTasksByProfileAndStatus = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY updated_at DESC');
-const stmtDefaultProfileTasks = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY updated_at DESC');
-const stmtDefaultProfileTasksByStatus = db.prepare('SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY updated_at DESC');
-const stmtTasksByProject = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY updated_at DESC');
+const stmtAllTasks = db.prepare("SELECT * FROM tasks ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByStatus = db.prepare("SELECT * FROM tasks WHERE status = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByProfile = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByProfileAndStatus = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtDefaultProfileTasks = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtDefaultProfileTasksByStatus = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByProject = db.prepare("SELECT * FROM tasks WHERE project_id = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
 const stmtGetTask = db.prepare('SELECT * FROM tasks WHERE id = ?');
 const stmtInsertTask = db.prepare(`
   INSERT INTO tasks (

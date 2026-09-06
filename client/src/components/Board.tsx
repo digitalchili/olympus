@@ -120,7 +120,14 @@ export function TaskKanban({
     for (const task of visibleTasks) {
       if (task.status in buckets) buckets[task.status].push(task);
     }
-    for (const status of TASK_STATUSES) buckets[status].sort((a, b) => b.updated_at - a.updated_at);
+    for (const status of TASK_STATUSES) {
+      buckets[status].sort((a, b) => {
+        const aAlert = a.routing_source === 'system_alert' ? 1 : 0;
+        const bAlert = b.routing_source === 'system_alert' ? 1 : 0;
+        if (aAlert !== bAlert) return bAlert - aAlert;
+        return b.updated_at - a.updated_at;
+      });
+    }
     return buckets;
   }, [visibleTasks]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
