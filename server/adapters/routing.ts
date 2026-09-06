@@ -1,6 +1,6 @@
 import { getTask } from '../db/queries.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
-import type { AgentAdapter, AgentRunOptions, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
+import type { AgentAdapter, AgentRunOptions, BotMessageRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
 import type { AdapterDelegationEvent, AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
 import { acquireProfileWork } from '../profile-deletion.js';
@@ -196,6 +196,12 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return await (await this.adapterForSession(sessionId)).steerChat(sessionId, message);
   }
 
+
+  async respondBotMessage(request: BotMessageRespondRequest): Promise<void> {
+    const worker = await this.adapterForTaskId(request.taskId);
+    if (!worker.respondBotMessage) throw Object.assign(new Error('Bot messaging is unavailable'), { code: 'bot_messaging_unavailable' });
+    await worker.respondBotMessage(request);
+  }
 
   async respondInteraction(request: Parameters<NonNullable<AgentAdapter['respondInteraction']>>[0]) {
     const worker = await this.adapterForTaskId(request.taskId);

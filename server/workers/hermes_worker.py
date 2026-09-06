@@ -32,6 +32,7 @@ from hermes_worker_utils import (
     string_or_none,
     truncate_with_ellipsis,
 )
+from hermes_bot_messaging import BotMessageBroker, BotMessageError, configure_bot_agent, install_native_guard
 from hermes_recovery import ContinuationJournal, RecoveryBlocked
 from hermes_background_work import get_background_work as _native_session_background_work
 from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
@@ -362,6 +363,7 @@ def _apply_native_run_budget_kwargs(
 
 
 INTERACTIONS = InteractionBroker(lambda event: _send(event))
+BOT_MESSAGES = BotMessageBroker(lambda event: _send(event))
 
 
 def _send(payload: dict[str, Any]) -> None:
@@ -1221,6 +1223,7 @@ def _interrupt_active_chat(request: dict[str, Any]) -> dict[str, bool]:
         active_run_id = ACTIVE_TASKS.get(task_key)
     if active_run_id:
         INTERACTIONS.cancel_run(active_run_id)
+        BOT_MESSAGES.cancel_run(active_run_id)
     return {"interrupted": _try_interrupt_agent(agent, reason)}
 
 
@@ -1820,6 +1823,7 @@ def _create_agent(
     run_budget: RunBudget | None = None,
 ) -> Any:
     _ensure_imports()
+    install_native_guard()
     _install_delegate_child_reasoning_compat()
     _install_delegate_run_budget_guard()
     cfg = _load_config()
@@ -1906,7 +1910,10 @@ def _create_agent(
         if key in agent_params and value is not None
     }
 
-    return _AIAgent(**filtered_kwargs)
+    agent = _AIAgent(**filtered_kwargs)
+    # Olympus supplies its own opted-in Bot roster and owns every delivery run.
+    agent._bot_mode_protocol = False
+    return agent
 
 
 def _agent_failure_message(text: str) -> str | None:
@@ -2282,6 +2289,11 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         run_budget=run_budget,
     )
     agent_ref["agent"] = agent
+    if request.get("bot") is not None:
+        try:
+            configure_bot_agent(agent, request["bot"], BOT_MESSAGES, task_id, request_id, interaction_deadline)
+        except BotMessageError as exc:
+            raise WorkerError(str(exc), code=exc.code) from exc
     setattr(agent, "_olympus_delegate_limit", run_budget.max_delegated_children)
     setattr(agent, "_olympus_delegated_children_used", 0)
     setattr(agent, "_olympus_delegate_closed", False)
@@ -2554,6 +2566,7 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
         failure = exc
     finally:
         INTERACTIONS.cancel_run(request_id)
+        BOT_MESSAGES.cancel_run(request_id)
         if acquired:
             AGENT_SEMAPHORE.release()
         _clear_task_active(task_key, request_id)
@@ -2833,6 +2846,11 @@ def _handle_request(request: dict[str, Any]) -> None:
                 request_id, request, name_prefix="goal", handler=handler,
                 task_key=_task_key_for(request),
             )
+        elif request_type == "bot.message.respond":
+            try:
+                _result(request_id, BOT_MESSAGES.respond(request))
+            except BotMessageError as exc:
+                raise WorkerError(str(exc), code=exc.code) from exc
         elif request_type == "interaction.respond":
             try:
                 _result(request_id, INTERACTIONS.respond(request))

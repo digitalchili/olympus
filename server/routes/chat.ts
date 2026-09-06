@@ -71,6 +71,9 @@ import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTa
 import { syncMessageAttachmentsToProjectReferences } from '../db/project-references.js';
 import { recordInteraction, markInteractionSettled, closeRunInteractions, hasUnansweredInteractions } from '../db/interactions.js';
 import { normalizeNativeInteraction } from '../interactions.js';
+import { acceptBotMessage, botRunOptions, botSystemMessage, stopBotTask } from '../bot-messaging.js';
+import { beginBotRun, botDeliveryContent, finishBotRun, getBotRun, requireQueuedBotMessage, type BotDelivery } from '../db/bot-messages.js';
+import { scheduleBotMessageDispatch } from '../bot-message-dispatcher.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
@@ -273,7 +276,7 @@ interface StreamChatTurnResult {
 
 function recordCompletedAgentRun(taskId: string, context: ContextUsage | null): Task | undefined {
   const updated = recordAgentResponse(taskId, Date.now(), context);
-  if (updated && updated.status === 'in_progress') {
+  if (updated && updated.kind !== 'bot' && updated.status === 'in_progress') {
     return updateTask(taskId, { status: 'in_review' });
   }
   return updated;
@@ -282,13 +285,20 @@ function recordCompletedAgentRun(taskId: string, context: ContextUsage | null): 
 function settleRun(taskId: string, runId: string, context: ContextUsage | null): void {
   const status = getRunStatus(taskId);
   const run = getRun(taskId);
+  const bot = getTask(taskId)?.kind === 'bot';
+  if (bot) {
+    const response = (run?.messages ?? []).filter(message => message.role === 'assistant').map(message => message.content).join('\n\n');
+    finishBotRun(runId, status?.status ?? 'error', response, run?.error ?? undefined);
+    // Retrying an uncertain incoming delivery must be deliberate and correlated.
+    if (getBotRun(runId)?.deliveryId) cancelRecovery(taskId, 'Use the Bot message receipt to retry interrupted delivery');
+  }
   if (run?.modelResolution) updateTaskAgentRunResolution(runId, run.modelResolution);
   finishTaskAgentRun(runId, status?.status ?? 'error', Date.now(), run?.errorCode);
   recoveryOutcome(taskId, runId, status?.status ?? 'error', run?.errorCode);
   if (status) broadcast({ type: 'task_run_updated', run: status });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
-  if (status && codingReviewAllowed(taskId, runId) && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
+  if (status && (bot || codingReviewAllowed(taskId, runId)) && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
     const updated = recordCompletedAgentRun(taskId, context);
     if (updated) broadcast({ type: 'task_updated', task: updated });
   } else {
@@ -298,9 +308,11 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   const ttl = status?.status === 'error' ? ERROR_SNAPSHOT_TTL_MS : DONE_SNAPSHOT_TTL_MS;
   finishRun(taskId, ttl, runId);
   if (status?.status === 'done') scheduleQueuedMessageDispatch(taskId);
+  if (bot) scheduleBotMessageDispatch();
 }
 
 function taskSystemMessage(task: Task, supplemental = ''): string {
+  if (task.kind === 'bot') return `${botSystemMessage(task)}${supplemental}`;
   const base = !task.workdir
     ? TASK_AGENT_SYSTEM_PROMPT
     : `${TASK_AGENT_SYSTEM_PROMPT}\n\n<workspace>\n  <path>${task.workdir}</path>\n  <rule>Use this as the project root. Keep file and terminal work inside it; begin shell commands with cd ${JSON.stringify(task.workdir)} && when needed.</rule>\n</workspace>`;
@@ -311,6 +323,9 @@ function taskRunBudget(taskId: string): AgentRunBudget {
   const budget = createRunBudget();
   const recovery = getRecovery(taskId);
   if (recovery && recovery.attempts > 0) budget.hardDeadlineAtMs = Math.min(budget.hardDeadlineAtMs, recovery.deadline_at);
+  const run = getRunStatus(taskId);
+  const bot = run && getBotRun(run.runId);
+  if (bot) budget.hardDeadlineAtMs = Math.min(budget.hardDeadlineAtMs, bot.deadlineAt);
   return budget;
 }
 
@@ -368,13 +383,14 @@ async function streamChatTurn(
   const humanWaits = new Map<string, number>();
 
   try {
-    if (interactionRunId) await captureBaselineWithinBudget(runTask, interactionRunId, runBudget);
+    if (interactionRunId && runTask.kind !== 'bot') await captureBaselineWithinBudget(runTask, interactionRunId, runBudget);
     const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
       systemMessage: taskSystemMessage(runTask, `${options.supplementalSystemMessage ?? ''}${deadlineMessage}`),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
       runBudget,
       recoveryContinuation: options.recoveryContinuation === true,
+      bot: botRunOptions(runTask),
     }), {
       ...remainingRunWatchdogConfig(runBudget),
       pauseUntil: () => humanWaits.size ? Math.max(...humanWaits.values()) : null,
@@ -388,6 +404,10 @@ async function streamChatTurn(
 
     for await (const rawEvent of stream) {
       let event = rawEvent;
+      if (event.type === 'bot_message_requested') {
+        if (interactionRunId && event.botMessage) await acceptBotMessage(runTask, interactionRunId, event.botMessage, adapter);
+        continue;
+      }
       if (event.type === 'checkpoint') {
         if (interactionRunId) saveRecoveryCheckpoint(runTask.id, interactionRunId, event.checkpoint);
         continue;
@@ -395,7 +415,7 @@ async function streamChatTurn(
       if (options.hideInternalEvents && isPrivateCollaborationEvent(event.type)) {
         continue;
       }
-      if (rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
+      if (runTask.kind !== 'bot' && rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
         const passed = await verifyBeforeReview(runTask, interactionRunId, runBudget);
         if (!passed) {
           appendSystemMessage(runTask.id, 'Code verification did not pass. Review the saved checks and remaining work.');
@@ -797,6 +817,9 @@ chatRouter.put('/:id/queued-message', (req, res) => {
   try {
     const parsed = parseRunSettingsBody({ settings: req.body?.settings });
     const mode = parseChatRunMode({ settings: req.body?.settings });
+    if (task.kind === 'bot' && (mode !== 'task' || rawInvites.length > 0 || (req.body?.collaborationScope && req.body.collaborationScope !== 'discussion'))) {
+      throw new LocalProfileError(400, 'Bot chats use ordinary messages and message_agent; create a task for goals or task collaboration', 'BOT_CHAT_MODE');
+    }
     const ownerProfileId = task.profile_name ?? DEFAULT_PROFILE_NAME;
     const invites = validateCollaborationInvites(rawInvites, ownerProfileId);
     invitedProfileIds = [
@@ -861,6 +884,18 @@ chatRouter.post('/:id/messages', async (req, res) => {
     return res.status(400).json({ error: 'content is required' });
   }
   let content = requestContent;
+  let botDelivery: BotDelivery | undefined;
+  if (requestBody.botDeliveryId !== undefined) {
+    try {
+      if (task.kind !== 'bot' || typeof requestBody.botDeliveryId !== 'string') throw new Error('Invalid Bot delivery');
+      if (getQueuedTaskMessage(task.id)) return res.status(409).json({ error: 'A queued user message has priority' });
+      botDelivery = requireQueuedBotMessage(requestBody.botDeliveryId, task.id);
+      content = botDeliveryContent(botDelivery);
+      if (requestContent !== content) throw new Error('Bot delivery content does not match its receipt');
+    } catch (error) {
+      return res.status(409).json({ error: toErrorMessage(error, 'Bot delivery changed') });
+    }
+  }
 
   const activeRun = getRunStatus(task.id);
   if (hasActiveTaskRun(task.id) || isTaskRunActive(activeRun)) {
@@ -918,7 +953,12 @@ chatRouter.post('/:id/messages', async (req, res) => {
   let collaborationInvites: ReturnType<typeof validateCollaborationInvites>;
   try {
     runSettings = parseRunSettingsBody(effectiveBody);
+    if (botDelivery && runSettings.hasFields) throw new LocalProfileError(400, 'Bot deliveries use the recipient settings; change settings in that Bot chat', 'BOT_DELIVERY_SETTINGS');
     mode = res.locals.recoveryContinuation === true ? (res.locals.recoveryKind === 'goal' ? 'goal' : 'task') : parseChatRunMode(effectiveBody);
+    if (task.kind === 'bot' && (mode !== 'task' || (Array.isArray(effectiveBody.invitedProfileIds) && effectiveBody.invitedProfileIds.length > 0)
+      || (effectiveBody.collaborationScope && effectiveBody.collaborationScope !== 'discussion'))) {
+      throw new LocalProfileError(400, 'Bot chats use ordinary messages and message_agent; create a task for goals or task collaboration', 'BOT_CHAT_MODE');
+    }
     invitationScope = parseCollaborationInvitationScope(
       effectiveBody.collaborationScope,
       effectiveBody.confirmPersistentCollaboration === true,
@@ -985,7 +1025,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       taskUpdates.reasoning_effort = taskFields.reasoning_effort;
     }
   }
-  if (task.status === 'in_review' || task.status === 'done') {
+  if (task.kind !== 'bot' && (task.status === 'in_review' || task.status === 'done')) {
     taskUpdates.status = 'in_progress';
   }
 
@@ -1034,8 +1074,21 @@ chatRouter.post('/:id/messages', async (req, res) => {
       status: snapshot.status,
       startedAt: snapshot.startedAt,
     });
+    if (runTask.kind === 'bot') {
+      try {
+        beginBotRun(runTask.id, snapshot.runId, createRunBudget().hardDeadlineAtMs, botDelivery?.id,
+          res.locals.recoveryContinuation === true ? String(requestBody.recoveryOfRunId) : undefined);
+      } catch (error) {
+        const message = toErrorMessage(error, 'Bot exchange could not start');
+        applyEvent(runTask.id, { type: 'error', error: message });
+        settleRun(runTask.id, snapshot.runId, null);
+        restoreConsumedQueue();
+        return res.status(409).json({ error: message });
+      }
+    }
     broadcast({ type: 'task_run_updated', run: state });
     beginRecovery(runTask.id, snapshot.runId, snapshot.startedAt, res.locals.recoveryContinuation === true);
+    if (botDelivery) cancelRecovery(runTask.id, 'Use the Bot message receipt to retry interrupted delivery');
     broadcastLive(runTask.id, { type: 'snapshot', run: snapshot });
 
     const hasCollaboration = collaborationInvites.participants.length > 0 || collaborationInvites.ownerInvited;
@@ -1089,6 +1142,11 @@ chatRouter.post('/:id/messages', async (req, res) => {
 chatRouter.post('/:id/interrupt', async (req, res) => {
   const task = res.locals.task as Task;
   cancelRecovery(task.id);
+  if (task.kind === 'bot') {
+    try {
+      if (await stopBotTask(task, adapter)) return res.json({ interrupted: true });
+    } catch (error) { return sendAdapterError(res, error, 'Could not stop Bot exchange'); }
+  }
 
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim()
     ? req.body.reason.trim()

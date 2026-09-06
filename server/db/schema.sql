@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS tasks (
   id                TEXT PRIMARY KEY,
+  kind              TEXT NOT NULL DEFAULT 'task' CHECK(kind IN ('task', 'bot')),
   title             TEXT NOT NULL,
   description       TEXT,
   status            TEXT NOT NULL DEFAULT 'in_progress',

@@ -41,6 +41,7 @@ import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsTo
 import { createRuntimeLiveness } from './runtime-liveness.js';
 import { operationalLog } from './observability.js';
 import { createTaskRecoveryRouter } from './routes/task-recovery.js';
+import { createBotsRouter } from './routes/bots.js';
 
 const app = express();
 
@@ -145,6 +146,7 @@ app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: stud
 app.use('/api/tasks', createInteractionRouter(adapter));
 app.use('/api/tasks', codingVerificationRouter);
 app.use('/api/tasks', chatRouter);
+app.use('/api/bots', createBotsRouter(adapter));
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/storage', createStorageRouter(() => drainController.status().ready));

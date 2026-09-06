@@ -16,7 +16,7 @@ import type {
   SessionMetadata,
   TaskMessage,
 } from '../../shared/types.js';
-import type { AgentAdapter, AgentRunOptions, AgentRunSettings, InteractionRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
+import type { AgentAdapter, AgentRunOptions, AgentRunSettings, BotMessageRespondRequest, InteractionRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
 import { operationalLog, redactOperationalReason } from '../observability.js';
@@ -49,6 +49,7 @@ export function buildChatWorkerRequest(
     taskTitle: options?.task?.title ?? null,
     workdir: options?.task?.workdir ?? null,
     runBudget: options?.runBudget,
+    ...(options?.bot ? { bot: options.bot } : {}),
     ...(options?.recoveryContinuation ? { recoveryContinuation: true } : {}),
   };
 }
@@ -573,6 +574,9 @@ export class HermesWorkerAdapter implements AgentAdapter {
   ): AsyncIterable<StreamEvent> {
     for await (const event of this.client.stream(buildChatWorkerRequest(sessionId, message, options))) {
       switch (event.type) {
+        case 'bot_message_requested':
+          yield { type: 'bot_message_requested', botMessage: event.botMessage };
+          break;
         case 'checkpoint':
           yield { type: 'checkpoint', checkpoint: event.checkpoint };
           break;
@@ -643,6 +647,10 @@ export class HermesWorkerAdapter implements AgentAdapter {
     return result.steered;
   }
 
+
+  async respondBotMessage(request: BotMessageRespondRequest): Promise<void> {
+    await this.client.request<{ accepted: true }>({ type: 'bot.message.respond', ...request }, WORKER_INTERRUPT_TIMEOUT_MS);
+  }
 
   async respondInteraction(request: InteractionRespondRequest): Promise<{ accepted: true }> {
     return await this.client.request<{ accepted: true }>({

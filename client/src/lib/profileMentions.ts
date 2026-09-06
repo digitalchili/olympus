@@ -47,6 +47,15 @@ export function addProfileInvite<T extends ProfileMentionOption>(selected: T[], 
   return selected.some((item) => item.id === profile.id) ? selected : [...selected, profile];
 }
 
+export function applyBotProfileMentionSelection(
+  text: string,
+  range: Pick<ActiveProfileMention, 'start' | 'end'>,
+  profile: ProfileMentionOption,
+): { text: string; cursor: number } {
+  const prefix = `${text.slice(0, range.start)}@${profile.id} `;
+  return { text: prefix + text.slice(range.end).replace(/^[ \t]+/, ''), cursor: prefix.length };
+}
+
 export function removeProfileInvite<T extends ProfileMentionOption>(selected: T[], profileId: string): T[] {
   return selected.filter((profile) => profile.id !== profileId);
 }

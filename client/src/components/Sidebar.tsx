@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, FolderKanban, Search, MessageCircle } from 'lucide-react';
+import { Bot, SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, FolderKanban, Search, MessageCircle } from 'lucide-react';
 import type { HermesChannel, ProfileTaskAttention } from '@shared/types';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
@@ -60,7 +60,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   }, []);
 
   const handleProfileChange = (profileId: string) => {
-    if ((attentionByProfile.get(profileId)?.reviewCount ?? 0) > 0) {
+    if (location.pathname !== '/bots' && (attentionByProfile.get(profileId)?.reviewCount ?? 0) > 0) {
       rawNavigate({ pathname: '/', search: `?profile=${encodeURIComponent(profileId)}` });
       return;
     }
@@ -184,7 +184,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
       >
         <nav
           aria-label="Primary"
-          className="flex h-full flex-1 items-center justify-around gap-1 sm:block sm:h-auto sm:flex-none sm:space-y-1"
+          className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:block sm:h-auto sm:flex-none sm:overflow-visible sm:space-y-1"
         >
           <SidebarLink
             icon={<SquarePen size={18} />}
@@ -211,6 +211,13 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             collapsed={desktopCollapsed}
           />
           <SidebarLink
+            icon={<Bot size={18} />}
+            label="Bots"
+            to="/bots"
+            active={isActive('/bots')}
+            collapsed={desktopCollapsed}
+          />
+          <SidebarLink
             icon={<FolderKanban size={18} />}
             label="Projects"
             to="/projects"
@@ -229,7 +236,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             type="button"
             onClick={onOpenSearch}
             title={`Search tasks (${isMac ? '⌘K' : 'Ctrl+K'})`}
-            className={`group flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${desktopCollapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'}`}
+            className={`group flex min-w-12 shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:min-w-0 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${desktopCollapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'}`}
           >
             <Search size={18} />
             <span className={desktopCollapsed ? 'sm:hidden' : ''}>Search</span>
@@ -373,7 +380,7 @@ function SidebarLink({
     <ProfileLink
       to={to}
       title={shortcut ? `${label} (${Array.isArray(shortcut) ? shortcut.join(' then ') : shortcut})` : label}
-      className={`group flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none transition-colors sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${
+      className={`group flex min-w-12 shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none transition-colors sm:min-w-0 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${
         collapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'
       } ${
         active

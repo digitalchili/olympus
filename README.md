@@ -4,6 +4,10 @@
 
 Olympus never discovers, synchronizes with, or falls back to another host or Hermes installation.
 
+## v0.7.0 Bots
+
+Open **Bots** for one persistent conversation per local Hermes profile. Bots can ask teammates for help with Hermes's native `message_agent` tool; Olympus owns the durable queue, attributed replies, Stop, and deployment drain. Bot conversations stay separate from Kanban tasks. See [Bot conversations and messaging](docs/bots.md) for usage and limits.
+
 ## v0.6.0 coding harness
 
 Coding tasks now retain Git and check evidence before entering review. Durable child-result reconciliation and bounded continuation recover safely saved work after missed notifications or restarts. See [coding and recovery](docs/coding-harness.md) for setup, runtime compatibility and limits.

@@ -30,7 +30,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 FROM olympus-base AS runtime
-ARG VERSION=0.6.3
+ARG VERSION=0.7.0
 ARG REVISION=unknown
 WORKDIR /opt/olympus-dispatch
 # HOST=0.0.0.0 is required inside the container network namespace; exposure to the

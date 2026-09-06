@@ -18,6 +18,7 @@ codingVerificationRouter.get('/:id/verification', async (_req, res) => {
 });
 codingVerificationRouter.post('/:id/verification', async (_req, res) => {
   const task = res.locals.task as Task;
+  if (task.kind === 'bot') return res.status(400).json({ error: 'Create a coding task to run Project verification.', code: 'BOT_CHAT_MODE' });
   if (hasActiveTaskRun(task.id) || isVerifying(task.id) || ['streaming','compacting'].includes(getRunStatus(task.id)?.status ?? '')) return res.status(409).json({ error: 'Wait for the active run to settle.' });
   const lease = task.project_id ? getProjectEditor(task.project_id) : undefined;
   if (lease && lease.taskId !== task.id) return res.status(409).json({ error: 'Another task owns this project checkout.' });

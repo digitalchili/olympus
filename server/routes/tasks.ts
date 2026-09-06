@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed } from '../db/queries.js';
+import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed, assertTaskFieldsAllowed, PermanentBotTaskError } from '../db/queries.js';
 import { getProject } from '../db/projects.js';
 import { broadcast } from '../events.js';
 import { adapter } from '../app.js';
@@ -69,6 +69,9 @@ async function enrichTaskTitle(taskId: string, fallbackTitle: string, descriptio
 }
 
 tasksRouter.post('/', async (req, res) => {
+  if (req.body.kind !== undefined && req.body.kind !== 'task') {
+    return res.status(400).json({ error: 'Create permanent Bot chats from Bots.', code: 'INVALID_TASK_KIND' });
+  }
   const { description, title } = req.body;
   if (!description || typeof description !== 'string') {
     return res.status(400).json({ error: 'description is required' });
@@ -147,6 +150,11 @@ tasksRouter.post('/', async (req, res) => {
 
 tasksRouter.patch('/:id', requireTask, async (req, res) => {
   const task = res.locals.task as Task;
+  try { assertTaskFieldsAllowed(task, req.body); }
+  catch (error) {
+    if (error instanceof PermanentBotTaskError) return res.status(409).json({ error: error.message, code: 'BOT_TASK_PERMANENT' });
+    throw error;
+  }
   const allowed = ['title', 'description', 'status'] as const;
   const fields: Record<string, unknown> = {};
   for (const key of allowed) {
@@ -180,6 +188,7 @@ tasksRouter.post('/:id/viewed', requireTask, (_req, res) => {
 
 tasksRouter.delete('/:id', requireTask, async (_req, res) => {
   const task = res.locals.task as Task;
+  if (task.kind === 'bot') return res.status(409).json({ error: new PermanentBotTaskError().message, code: 'BOT_TASK_PERMANENT' });
   if (getActiveProjectEditorForTask(task.id)) {
     return res.status(409).json({
       error: 'Release the Project editor before deleting this task',
@@ -197,6 +206,7 @@ tasksRouter.delete('/:id', requireTask, async (_req, res) => {
 
 tasksRouter.post('/:id/move', requireTask, (req, res) => {
   const task = res.locals.task as Task;
+  if (task.kind === 'bot') return res.status(409).json({ error: new PermanentBotTaskError().message, code: 'BOT_TASK_PERMANENT' });
   const { status } = req.body;
   if (!TASK_STATUSES.includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${TASK_STATUSES.join(', ')}` });

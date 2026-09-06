@@ -14,6 +14,10 @@ import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-
 import { assertQueuedMessageDeliveryResponse, configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
 import { pollDiskSpaceAndAlert } from './disk-alert.js';
 import { cancelAllCodingVerifications } from './coding-verification.js';
+import { hasActiveTaskRun } from './task-run-lifecycle.js';
+import { localProfileRegistry } from './local-profiles.js';
+import { botDeliveryContent, listPendingBotMessages, markBotMessageFailed, recoverBotMessages, requireQueuedBotMessage } from './db/bot-messages.js';
+import { configureBotMessageDispatcher, createBotMessageDispatcher } from './bot-message-dispatcher.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -64,6 +68,7 @@ async function listenWithFallback(
 async function main() {
   recoverInterruptedTaskAgentRuns();
   recoverRecoveryRecords();
+  recoverBotMessages();
   closeFrontend = await mountFrontend(app, httpServer);
   try {
     await adapter.start();
@@ -115,8 +120,32 @@ async function main() {
       console.error(`Queued message dispatch failed for task ${taskId}:`, error instanceof Error ? error.message : error);
     },
   });
+  const botDispatcher = createBotMessageDispatcher({
+    canDispatch: () => !shuttingDown && drainController.status().ready,
+    load: listPendingBotMessages,
+    isBusy: taskId => hasActiveTaskRun(taskId) || Boolean(getQueuedTaskMessage(taskId))
+      || ['streaming', 'compacting'].includes(getRunStatus(taskId)?.status ?? ''),
+    deliver: async message => {
+      const current = requireQueuedBotMessage(message.id, message.recipientTaskId);
+      localProfileRegistry.requireActive(current.recipientProfileId);
+      localProfileRegistry.requireActive(current.senderProfileId);
+      const response = await fetch(`http://${dispatchHost}:${boundPort}/api/tasks/${encodeURIComponent(current.recipientTaskId)}/messages?profile=${encodeURIComponent(current.recipientProfileId)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({ content: botDeliveryContent(current), botDeliveryId: current.id, settings: { mode: 'task' } }),
+      });
+      if (response.status === 202 || response.status === 409 || response.status === 503) {
+        await response.body?.cancel();
+        return;
+      }
+      const detail = await response.text();
+      throw new Error(`Bot delivery was not accepted (HTTP ${response.status}): ${detail.slice(0, 300)}`);
+    },
+    onError: (message, error) => markBotMessageFailed(message.id, error instanceof Error ? error.message : 'Bot delivery could not start'),
+  });
+  configureBotMessageDispatcher(botDispatcher);
   const recover = () => {
     if (shuttingDown || !drainController.status().ready) return;
+    void botDispatcher.dispatch().catch(error => console.error('Bot message dispatch failed:', error));
     void reconcileRecoveries(adapter, async (taskId, runId) => {
       const task = getTask(taskId);
       if (!task) return;

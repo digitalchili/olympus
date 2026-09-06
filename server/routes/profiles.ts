@@ -18,6 +18,8 @@ import { profileRequestGate, requestProfile } from '../profile-context.js';
 import { closeClientsForProfile } from '../events.js';
 import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
 import { beginProfileDeletion, ProfileDeletingError } from '../profile-deletion.js';
+import { cancelTaskRunForDeletion } from '../task-run-lifecycle.js';
+import { stopBotTask } from '../bot-messaging.js';
 
 interface ProfileDraftAdapter {
   chatForProfile(
@@ -27,6 +29,8 @@ interface ProfileDraftAdapter {
     options: AgentRunOptions,
   ): Promise<{ text: string; sessionId: string }>;
   evictProfile?(profileId: string): Promise<void>;
+  interruptChat?(sessionId: string, reason?: string): Promise<boolean>;
+  interruptChatForProfile?(profileId: string, sessionId: string, reason?: string): Promise<boolean>;
 }
 
 export const PROFILE_BUILDER_SYSTEM_MESSAGE = `You draft configuration for a new local Hermes profile.
@@ -225,12 +229,26 @@ export function createProfilesRouter(adapter: ProfileDraftAdapter): Router {
       }
       deletionLock = beginProfileDeletion(target.id);
 
-      const initialTasks = getTasksForProfile(target.id, false);
+      const initialTasks = getTasksForProfile(target.id, false, undefined, true);
       closeClientsForProfile(target.id);
       closeSubscribersForTasks(initialTasks.map((task) => task.id));
+      const botCancellation = {
+        interruptChat: async (id: string, reason?: string) => {
+          if (!adapter.interruptChat) throw new Error('Bot cancellation is unavailable');
+          return adapter.interruptChat(id, reason);
+        },
+        interruptChatForProfile: async (profileId: string, id: string, reason?: string) => {
+          if (!adapter.interruptChatForProfile) throw new Error('Bot cancellation is unavailable');
+          return adapter.interruptChatForProfile(profileId, id, reason);
+        },
+      };
+      await Promise.all(initialTasks.filter(task => task.kind === 'bot').map(async task => {
+        await stopBotTask(task, botCancellation);
+        await cancelTaskRunForDeletion(task, botCancellation);
+      }));
       await deletionLock.waitForIdle();
 
-      const tasks = getTasksForProfile(target.id, false);
+      const tasks = getTasksForProfile(target.id, false, undefined, true);
       closeSubscribersForTasks(tasks.map((task) => task.id));
       await adapter.evictProfile?.(target.id);
       const { backupDir } = await localProfileRegistry.delete(

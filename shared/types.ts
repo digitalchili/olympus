@@ -360,6 +360,7 @@ export type HermesProfileSettingsUpdate = Partial<Omit<HermesProfileSettings, 'i
 
 export interface Task {
   id: string;
+  kind?: 'task' | 'bot';
   title: string;
   description: string | null;
   status: TaskStatus;
@@ -382,6 +383,20 @@ export interface Task {
   handoff_child_task_id?: string | null;
   handoff_state?: TaskHandoffState | null;
   handoff_route?: string | null;
+}
+
+export interface BotMessage {
+  id: string;
+  senderProfileId: string;
+  recipientProfileId: string;
+  senderLabel: string;
+  recipientLabel: string;
+  message: string;
+  kind: 'request' | 'reply';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface TaskHandoff {

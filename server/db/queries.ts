@@ -10,23 +10,21 @@ import {
 } from '../../shared/types.js';
 import { assertProfileAcceptingWork, isProfileDeleting } from '../profile-deletion.js';
 
-const stmtAllTasks = db.prepare("SELECT * FROM tasks ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
-const stmtTasksByStatus = db.prepare("SELECT * FROM tasks WHERE status = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
-const stmtTasksByProfile = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
-const stmtTasksByProfileAndStatus = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
-const stmtDefaultProfileTasks = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
-const stmtDefaultProfileTasksByStatus = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
-const stmtTasksByProject = db.prepare("SELECT * FROM tasks WHERE project_id = ? ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtAllTasks = db.prepare("SELECT * FROM tasks WHERE (kind = 'task' OR ? = 1) ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByStatus = db.prepare("SELECT * FROM tasks WHERE status = ? AND (kind = 'task' OR ? = 1) ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByProfile = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? AND (kind = 'task' OR ? = 1) ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByProfileAndStatus = db.prepare("SELECT * FROM tasks WHERE handling_profile_id = ? AND status = ? AND (kind = 'task' OR ? = 1) ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
+const stmtTasksByProject = db.prepare("SELECT * FROM tasks WHERE project_id = ? AND kind = 'task' ORDER BY CASE WHEN routing_source = 'system_alert' THEN 0 ELSE 1 END, updated_at DESC");
 const stmtGetTask = db.prepare('SELECT * FROM tasks WHERE id = ?');
 const stmtInsertTask = db.prepare(`
   INSERT INTO tasks (
-    id, title, description, status, profile_name, routing_source, agent_model, agent_provider, reasoning_effort, workdir,
+    id, kind, title, description, status, profile_name, routing_source, agent_model, agent_provider, reasoning_effort, workdir,
     project_id, handling_profile_id, delegated_worker_id,
     created_at, updated_at, last_agent_response_at, last_viewed_at,
     last_context_used_tokens, last_context_window_tokens
   )
   VALUES (
-    @id, @title, @description, @status, @profile_name, @routing_source, @agent_model, @agent_provider, @reasoning_effort, @workdir,
+    @id, @kind, @title, @description, @status, @profile_name, @routing_source, @agent_model, @agent_provider, @reasoning_effort, @workdir,
     @project_id, @handling_profile_id, @delegated_worker_id,
     @created_at, @updated_at, @last_agent_response_at, @last_viewed_at,
     @last_context_used_tokens, @last_context_window_tokens
@@ -45,26 +43,21 @@ const stmtMarkTaskViewed = db.prepare(`
 const stmtProfileTaskAttention = db.prepare(`
   SELECT handling_profile_id AS profileId, COUNT(*) AS reviewCount
   FROM tasks
-  WHERE status = 'in_review'
+  WHERE kind = 'task' AND status = 'in_review'
     AND last_agent_response_at IS NOT NULL
     AND (last_viewed_at IS NULL OR last_viewed_at < last_agent_response_at)
   GROUP BY handling_profile_id
   ORDER BY handling_profile_id
 `);
 
-export function getAllTasks(status?: TaskStatus): Task[] {
-  return status ? stmtTasksByStatus.all(status) as Task[] : stmtAllTasks.all() as Task[];
+export function getAllTasks(status?: TaskStatus, includeBots = false): Task[] {
+  return status ? stmtTasksByStatus.all(status, Number(includeBots)) as Task[] : stmtAllTasks.all(Number(includeBots)) as Task[];
 }
 
-export function getTasksForProfile(profileId: string, isDefault: boolean, status?: TaskStatus): Task[] {
-  if (isDefault) {
-    return status
-      ? stmtDefaultProfileTasksByStatus.all(profileId, status) as Task[]
-      : stmtDefaultProfileTasks.all(profileId) as Task[];
-  }
+export function getTasksForProfile(profileId: string, _isDefault: boolean, status?: TaskStatus, includeBots = false): Task[] {
   return status
-    ? stmtTasksByProfileAndStatus.all(profileId, status) as Task[]
-    : stmtTasksByProfile.all(profileId) as Task[];
+    ? stmtTasksByProfileAndStatus.all(profileId, status, Number(includeBots)) as Task[]
+    : stmtTasksByProfile.all(profileId, Number(includeBots)) as Task[];
 }
 
 export function getTasksForProject(projectId: string): Task[] {
@@ -80,6 +73,7 @@ export function getTask(id: string): Task | undefined {
 }
 
 export function insertTask(task: {
+  kind?: 'task' | 'bot';
   title: string;
   description?: string | null;
   status: TaskStatus;
@@ -100,6 +94,7 @@ export function insertTask(task: {
   const now = Date.now();
   const row = {
     id,
+    kind: task.kind ?? 'task',
     title: task.title,
     description: task.description ?? null,
     status: task.status,
@@ -140,6 +135,19 @@ const ALLOWED_UPDATE_FIELDS = new Set<string>([
 ]);
 const updateStmtCache = new Map<string, ReturnType<typeof db.prepare>>();
 
+export class PermanentBotTaskError extends Error {
+  constructor() { super('Bot chats are permanent and cannot be moved, reassigned, or deleted.'); }
+}
+
+export function assertTaskFieldsAllowed(task: Task, fields: Record<string, unknown>): void {
+  if (fields.kind !== undefined && fields.kind !== (task.kind ?? 'task')) throw new PermanentBotTaskError();
+  if (task.kind !== 'bot') return;
+  for (const key of ['status', 'profile_name', 'handling_profile_id', 'project_id', 'workdir', 'delegated_worker_id'] as const) {
+    if (fields[key] !== undefined && fields[key] !== task[key]) throw new PermanentBotTaskError();
+  }
+  if (fields.projectId !== undefined || fields.handlingProfileId !== undefined) throw new PermanentBotTaskError();
+}
+
 type TaskUpdateFields = Pick<
   Task,
   | 'title'
@@ -174,6 +182,7 @@ export function updateTask(
 ): Task | undefined {
   const current = getTask(id);
   if (!current || isProfileDeleting(current.handling_profile_id ?? current.profile_name ?? DEFAULT_PROFILE_NAME)) return undefined;
+  assertTaskFieldsAllowed(current, inputFields);
   const fields = { ...inputFields };
   if (fields.profile_name !== undefined || fields.handling_profile_id !== undefined) {
     const nextHandler = fields.handling_profile_id ?? fields.profile_name ?? DEFAULT_PROFILE_NAME;
@@ -232,13 +241,13 @@ export function markTaskViewed(id: string): { task: Task | undefined; changed: b
 
 export function deleteTask(id: string): boolean {
   const task = getTask(id);
-  if (!task || isProfileDeleting(task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)) return false;
+  if (!task || task.kind === 'bot' || isProfileDeleting(task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)) return false;
   const result = stmtDeleteTask.run(id);
   return result.changes > 0;
 }
 
 export function deleteTasksForProfile(profileId: string): string[] {
-  const taskIds = (stmtTasksByProfile.all(profileId) as Task[]).map((task) => task.id);
+  const taskIds = (stmtTasksByProfile.all(profileId, 1) as Task[]).map((task) => task.id);
   stmtDeleteTasksByProfile.run(profileId);
   return taskIds;
 }

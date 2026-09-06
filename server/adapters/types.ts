@@ -27,7 +27,22 @@ export interface TaskBackgroundWork {
   work: Array<{ id: string; kind: 'process' | 'delegation' | 'operation'; status: string }>;
 }
 
+export interface BotMessageRequest {
+  requestId: string;
+  workerRunId: string;
+  target: string;
+  message: string;
+}
+
+export interface BotMessageRespondRequest {
+  taskId: string;
+  requestId: string;
+  workerRunId: string;
+  result: { accepted: boolean; messageId?: string; error?: string };
+}
+
 export interface AgentRunOptions {
+  bot?: { profileId: string; peers: Array<{ id: string; label: string; description?: string }> };
   recoveryContinuation?: boolean;
   systemMessage?: string;
   settings?: AgentRunSettings;
@@ -46,7 +61,8 @@ export interface AgentRunOptions {
 }
 
 export interface StreamEvent {
-  type: 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
+  type: 'bot_message_requested' | 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
+  botMessage?: BotMessageRequest;
   checkpoint?: unknown;
   content?: string;
   error?: string;
@@ -92,6 +108,8 @@ export interface AgentAdapter {
   getBackgroundWork?(sessionId: string): Promise<TaskBackgroundWork>;
 
   steerChat(sessionId: string, message: string): Promise<boolean>;
+
+  respondBotMessage?(request: BotMessageRespondRequest): Promise<void>;
 
   respondInteraction?(request: InteractionRespondRequest): Promise<{ accepted: true }>;
 

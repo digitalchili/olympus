@@ -18,6 +18,7 @@ import { messageTimestampTitle } from '../lib/messageTimestamps';
 import {
   addProfileInvite,
   applyProfileMentionSelection,
+  applyBotProfileMentionSelection,
   findActiveProfileMention,
   numericProfileSelectionIndex,
   removeProfileInvite,
@@ -36,6 +37,7 @@ import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSend
 
 interface TaskChatProps {
   taskId: string;
+  conversationKind?: 'task' | 'bot';
   projectId?: string | null;
   initialMessage?: string;
   initialSettings?: AgentRunSettings;
@@ -255,12 +257,14 @@ function GoalRunStatus({ goal }: { goal: GoalStateSnapshot | null | undefined })
 
 export function TaskChat({
   taskId,
+  conversationKind = 'task',
   projectId,
   initialMessage,
   initialSettings,
   initialInvitedProfileIds,
   collaborationRuns = [],
 }: TaskChatProps) {
+  const isBot = conversationKind === 'bot';
   const { activeProfileId } = useProfile();
   const {
     messages,
@@ -289,7 +293,7 @@ export function TaskChat({
   const [persistentGrants, setPersistentGrants] = useState<PersistentCollaborationGrant[]>([]);
   const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
   const [highlightedProfileIndex, setHighlightedProfileIndex] = useState(0);
-  const [runMode, setRunMode] = useState<ChatRunMode>(initialSettings?.mode ?? 'task');
+  const [runMode, setRunMode] = useState<ChatRunMode>(isBot ? 'task' : initialSettings?.mode ?? 'task');
   const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
   const [messageLoadError, setMessageLoadError] = useState(false);
   const [compactInFlight, setCompactInFlight] = useState(false);
@@ -344,13 +348,14 @@ export function TaskChat({
   const queuedMessageRef = useRef<QueuedMessage | null>(null);
 
   const refreshPersistentGrants = useCallback(async () => {
+    if (isBot) { setPersistentGrants([]); return; }
     try {
       const result = await fetchCollaborationGrants(taskId);
       setPersistentGrants(result.grants);
     } catch {
       setPersistentGrants([]);
     }
-  }, [taskId]);
+  }, [isBot, taskId]);
 
   useEffect(() => { void refreshPersistentGrants(); }, [refreshPersistentGrants]);
 
@@ -364,7 +369,7 @@ export function TaskChat({
   }, [refreshPersistentGrants, setUploadError, taskId]);
   const lastGoalStatusRef = useRef<GoalStateSnapshot['status'] | null>(null);
   const runIsStreaming = !runFailureNotice && (taskRun?.kind === 'chat' || taskRun?.kind === 'goal') && taskRun.status === 'streaming';
-  const isGoalStreaming = !runFailureNotice && taskRun?.kind === 'goal' && taskRun.status === 'streaming';
+  const isGoalStreaming = !isBot && !runFailureNotice && taskRun?.kind === 'goal' && taskRun.status === 'streaming';
   const isStreaming = liveIsStreaming || runIsStreaming;
   const isCompacting = taskRun?.kind === 'compact' && taskRun.status === 'compacting';
   const compactionBlocker = isCompacting || compactInFlight;
@@ -437,7 +442,7 @@ export function TaskChat({
     setHighlightedProfileIndex(0);
     setQueuedSendError(null);
     setAutoSendingQueuedId(null);
-    setRunMode(startupRef.current.initialSettings?.mode ?? 'task');
+    setRunMode(isBot ? 'task' : startupRef.current.initialSettings?.mode ?? 'task');
     setOutgoingRevealActive(false);
     setInterruptInFlight(false);
     setInterruptError(null);
@@ -455,13 +460,13 @@ export function TaskChat({
         setLoadedTaskId(taskId);
         const firstMessage = startupRef.current.initialMessage;
         if (firstMessage) {
-          const invitedProfileIds = startupRef.current.initialInvitedProfileIds ?? [];
+          const invitedProfileIds = isBot ? [] : startupRef.current.initialInvitedProfileIds ?? [];
           startupRef.current.initialMessage = undefined;
           startupRef.current.initialInvitedProfileIds = undefined;
           if (loadedMessages.length === 0) {
             pendingRevealRef.current = true;
             setOutgoingRevealActive(true);
-            sendMessage(taskId, firstMessage, startupRef.current.initialSettings, { invitedProfileIds });
+            sendMessage(taskId, firstMessage, isBot ? { ...startupRef.current.initialSettings, mode: 'task' } : startupRef.current.initialSettings, { invitedProfileIds });
           }
         }
       })
@@ -481,7 +486,7 @@ export function TaskChat({
         if (!cancelled) setQueuedSendError('Could not reload the queued message.');
       });
     return () => { cancelled = true; };
-  }, [taskId, loadMessages, sendMessage, clearFiles]);
+  }, [isBot, taskId, loadMessages, sendMessage, clearFiles]);
 
   useEffect(() => {
     if (!configPending) inputRef.current?.focus();
@@ -589,15 +594,15 @@ export function TaskChat({
     setQueuedSendError(null);
 
     const completedGoal = taskRun?.kind === 'goal' && taskRun.goal?.status === 'done';
-    const effectiveSettings = completedGoal && message.settings.mode === 'goal'
+    const effectiveSettings = isBot || (completedGoal && message.settings.mode === 'goal')
       ? { ...message.settings, mode: 'task' as const }
       : message.settings;
     const result = await sendMessage(taskId, message.content, effectiveSettings, {
       appendLocalError: false,
       queuedMessageId: message.id,
-      invitedProfileIds: message.invitedProfileIds,
-      collaborationScope: message.collaborationScope,
-      confirmPersistentCollaboration: message.confirmPersistentCollaboration,
+      invitedProfileIds: isBot ? [] : message.invitedProfileIds,
+      collaborationScope: isBot ? 'discussion' : message.collaborationScope,
+      confirmPersistentCollaboration: !isBot && message.confirmPersistentCollaboration,
     });
     if (result.ok) {
       if (message.collaborationScope !== 'discussion') await refreshPersistentGrants();
@@ -610,7 +615,7 @@ export function TaskChat({
 
     if (pendingAutoSendRef.current === message.id) pendingAutoSendRef.current = null;
     setAutoSendingQueuedId((current) => current === message.id ? null : current);
-  }, [refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
+  }, [isBot, refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
 
   useEffect(() => {
     if (!queuedMessage) return;
@@ -648,9 +653,9 @@ export function TaskChat({
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
-    const next = applyProfileMentionSelection(input, activeMention, profile);
+    const next = isBot ? applyBotProfileMentionSelection(input, activeMention, profile) : applyProfileMentionSelection(input, activeMention, profile);
     setInput(next.text);
-    setSelectedProfiles((current) => {
+    if (!isBot) setSelectedProfiles((current) => {
       if (current.some((item) => item.id === profile.id)) return current;
       if (current.length >= 9) {
         setUploadError('You can invite up to 9 profiles.');
@@ -663,7 +668,7 @@ export function TaskChat({
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(next.cursor, next.cursor);
     });
-  }, [activeMention, input]);
+  }, [activeMention, input, isBot]);
 
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
@@ -680,11 +685,11 @@ export function TaskChat({
     }
 
     const messageText = submitWithAttachments(text);
-    const invitedProfileIds = selectedProfiles.map((profile) => profile.id);
+    const invitedProfileIds = isBot ? [] : selectedProfiles.map((profile) => profile.id);
     const selectedAtSend = selectedProfiles;
-    const scopeAtSend = collaborationScope;
-    const confirmationAtSend = confirmPersistentCollaboration;
-    const settings = { model, provider, reasoningEffort, mode: isGoalStreaming ? 'task' : runMode };
+    const scopeAtSend = isBot ? 'discussion' : collaborationScope;
+    const confirmationAtSend = !isBot && confirmPersistentCollaboration;
+    const settings = { model, provider, reasoningEffort, mode: isBot || isGoalStreaming ? 'task' as const : runMode };
     if (taskBusyForQueue) {
       try {
         const { queuedMessage: persisted } = await putQueuedTaskMessage(taskId, {
@@ -733,7 +738,7 @@ export function TaskChat({
       setCollaborationScope(scopeAtSend);
       setConfirmPersistentCollaboration(confirmationAtSend);
     }
-  }, [submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
+  }, [isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;
@@ -805,15 +810,15 @@ export function TaskChat({
     setModel(queuedMessage.settings.model ?? null);
     setProvider(queuedMessage.settings.provider ?? null);
     setReasoningEffort(queuedMessage.settings.reasoningEffort ?? null);
-    setRunMode(queuedMessage.settings.mode ?? 'task');
-    setSelectedProfiles(profiles.filter((profile) => queuedMessage.invitedProfileIds.includes(profile.id)));
-    setCollaborationScope(queuedMessage.collaborationScope);
-    setConfirmPersistentCollaboration(queuedMessage.confirmPersistentCollaboration);
+    setRunMode(isBot ? 'task' : queuedMessage.settings.mode ?? 'task');
+    setSelectedProfiles(isBot ? [] : profiles.filter((profile) => queuedMessage.invitedProfileIds.includes(profile.id)));
+    setCollaborationScope(isBot ? 'discussion' : queuedMessage.collaborationScope);
+    setConfirmPersistentCollaboration(!isBot && queuedMessage.confirmPersistentCollaboration);
     setActiveMention(null);
     setQueuedMessage(null);
     setQueuedSendError(null);
     window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [profiles, queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId, taskId]);
+  }, [isBot, profiles, queuedIsSending, queuedMessage, setModel, setProvider, setReasoningEffort, steeringQueuedId, taskId]);
 
   const handleRemoveQueuedMessage = useCallback(async () => {
     if (!queuedMessage || queuedIsSending) return;
@@ -833,7 +838,7 @@ export function TaskChat({
   }, [configPending, queuedIsSending, queuedMessage, sendQueuedMessage, taskBusyForQueue]);
 
   const goalToggleDisabled = isStreaming || compactionBlocker || queuedMessage !== null;
-  const collaborationGoalToggleDisabled = goalToggleDisabled || selectedProfiles.length > 0;
+  const collaborationGoalToggleDisabled = isBot || goalToggleDisabled || selectedProfiles.length > 0;
   const handleToggleGoalMode = useCallback(() => {
     if (!collaborationGoalToggleDisabled) setRunMode(toggleRunMode);
   }, [collaborationGoalToggleDisabled]);
@@ -1095,11 +1100,11 @@ export function TaskChat({
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         <RunFailureBanner notice={runFailureNotice} />
-        <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
+        {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
-          {persistentGrants.length > 0 && (
+          {!isBot && persistentGrants.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-100 px-4 py-2 text-xs dark:border-zinc-700">
               <span className="mr-1 font-medium text-zinc-500 dark:text-zinc-400">Persistent collaborators</span>
               {persistentGrants.map((grant) => (
@@ -1118,15 +1123,15 @@ export function TaskChat({
               ))}
             </div>
           )}
-          <ProfileInviteControls
+          {!isBot && <ProfileInviteControls
             selected={selectedProfiles}
             activeMention={null}
             highlightedIndex={highlightedProfileIndex}
             showPicker={false}
             onSelect={selectMentionProfile}
             onRemove={(profileId) => setSelectedProfiles((current) => removeProfileInvite(current, profileId))}
-          />
-          {selectedProfiles.length > 0 && (
+          />}
+          {!isBot && selectedProfiles.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 px-4 py-2 text-xs dark:border-zinc-700">
               <label htmlFor="collaboration-scope" className="font-medium text-zinc-600 dark:text-zinc-300">Invite scope</label>
               <select
@@ -1163,7 +1168,7 @@ export function TaskChat({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             disabled={configPending}
-            placeholder={runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Message your assistant… Type @ to invite profiles'}
+            placeholder={isBot ? 'Message this bot… Type @ to mention another bot' : runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Message your assistant… Type @ to invite profiles'}
             rows={2}
             className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-relaxed text-zinc-900 placeholder-zinc-400 focus:outline-none disabled:opacity-60 dark:text-zinc-100 dark:placeholder-zinc-500 sm:px-5 sm:text-sm"
           />
@@ -1172,6 +1177,7 @@ export function TaskChat({
             activeMention={activeMention}
             highlightedIndex={highlightedProfileIndex}
             showSelected={false}
+            pickerLabel={isBot ? 'Mention a bot' : undefined}
             onSelect={selectMentionProfile}
             onRemove={() => {}}
           />
@@ -1201,7 +1207,7 @@ export function TaskChat({
                 model={model}
                 provider={provider}
                 reasoningEffort={reasoningEffort}
-                runMode={runMode}
+                runMode={isBot ? undefined : runMode}
                 defaults={toolbarDefaults}
                 modelGroups={modelGroups}
                 disabled={goalToggleDisabled}
@@ -1211,7 +1217,7 @@ export function TaskChat({
                   setProvider(nextProvider ?? null);
                 }}
                 onReasoningEffortChange={setReasoningEffort}
-                onRunModeChange={(nextMode) => {
+                onRunModeChange={isBot ? undefined : (nextMode) => {
                   if (nextMode === 'goal' && selectedProfiles.length > 0) {
                     setUploadError('Remove invited profiles before starting Goal mode.');
                     return;

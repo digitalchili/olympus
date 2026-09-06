@@ -3,6 +3,7 @@ import type {
   AgentModelsResponse,
   AgentRunSettings,
   AppVersion,
+  BotMessage,
   CompactResult,
   FileCreateResponse,
   FileCreateType,
@@ -104,6 +105,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function fetchTasks() {
   return request<{ tasks: Task[] }>('/tasks');
+}
+
+export type BotRosterEntry = { profile: HermesProfile; task: Task | null };
+
+export function fetchBots() {
+  return request<{ bots: BotRosterEntry[] }>('/bots');
+}
+
+export function ensureBotSession(profileId: string) {
+  return request<{ task: Task }>(apiPathWithProfile('/bots/session', profileId), { method: 'POST' });
+}
+
+export function fetchBotMessages(profileId: string) {
+  return request<{ messages: BotMessage[] }>(apiPathWithProfile('/bots/messages', profileId));
+}
+
+export function retryBotMessage(id: string, profileId: string) {
+  return request<unknown>(apiPathWithProfile(`/bots/messages/${encodeURIComponent(id)}/retry`, profileId), { method: 'POST' });
+}
+
+export function cancelBotMessage(id: string, profileId: string) {
+  return request<unknown>(apiPathWithProfile(`/bots/messages/${encodeURIComponent(id)}/cancel`, profileId), { method: 'POST' });
 }
 
 export function moveTask(id: string, status: TaskStatus, profileId?: string | null) {

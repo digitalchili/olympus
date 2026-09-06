@@ -11,6 +11,7 @@ interface ProfileInviteControlsProps<T extends ProfileInviteOption> {
   highlightedIndex: number;
   showSelected?: boolean;
   showPicker?: boolean;
+  pickerLabel?: string;
   onSelect: (profile: T) => void;
   onRemove: (profileId: string) => void;
 }
@@ -21,6 +22,7 @@ export function ProfileInviteControls<T extends ProfileInviteOption>({
   highlightedIndex,
   showSelected = true,
   showPicker = true,
+  pickerLabel = 'Invite a profile',
   onSelect,
   onRemove,
 }: ProfileInviteControlsProps<T>) {
@@ -52,7 +54,7 @@ export function ProfileInviteControls<T extends ProfileInviteOption>({
         <div
           className="mx-4 mb-2 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
           role="listbox"
-          aria-label="Invite a profile"
+          aria-label={pickerLabel}
         >
           {activeMention.options.slice(0, 9).map((profile, index) => {
             const option = profile as T;

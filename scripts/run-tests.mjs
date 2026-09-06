@@ -15,6 +15,7 @@ const pythonTests = [
   'test_background_work_native.py',
   'test_scheduled_task_drain.py',
   'hermes_worker_interactions_test.py',
+  'test_bot_messaging.py',
 ];
 const selected = process.argv.slice(2);
 const tests = selected.length ? selected : [

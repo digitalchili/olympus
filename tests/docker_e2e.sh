@@ -27,7 +27,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for command in docker curl openssl; do command -v "$command" >/dev/null 2>&1 || { printf 'Required command not found: %s\n' "$command" >&2; exit 1; }; done
+for command in docker curl openssl node; do command -v "$command" >/dev/null 2>&1 || { printf 'Required command not found: %s\n' "$command" >&2; exit 1; }; done
+
+assert_bot_persisted() {
+  curl --fail --silent -X POST "http://127.0.0.1:$port/api/bots/session?profile=default" | node -e \
+    'const b=JSON.parse(require("fs").readFileSync(0,"utf8")); if(b.task?.id!==process.argv[1]||b.task.kind!=="bot")process.exit(1)' "$bot_id"
+  curl --fail --silent "http://127.0.0.1:$port/api/tasks?profile=default" | node -e \
+    'const b=JSON.parse(require("fs").readFileSync(0,"utf8")); if(!Array.isArray(b.tasks)||b.tasks.some(t=>t.id===process.argv[1]||t.kind==="bot"))process.exit(1)' "$bot_id"
+}
 
 docker info >/dev/null
 if [ "${OLYMPUS_E2E_SKIP_BUILD:-0}" != 1 ]; then
@@ -60,6 +67,9 @@ curl --fail --silent "http://127.0.0.1:$port/api/health" >/dev/null
 curl --fail --silent -X POST -H 'Content-Type: application/json' \
   -d '{"title":"E2E persistence sentinel","description":"Prove the live database and verified backup contain operator data."}' \
   "http://127.0.0.1:$port/api/tasks" >/dev/null
+bot_id=$(curl --fail --silent -X POST "http://127.0.0.1:$port/api/bots/session?profile=default" | node -e \
+  'const b=JSON.parse(require("fs").readFileSync(0,"utf8")); if(!b.task?.id||b.task.kind!=="bot")process.exit(1); process.stdout.write(b.task.id)')
+assert_bot_persisted
 blue_id=$(docker compose -f docker-compose.ha.yml ps -q olympus-blue)
 [ "$(docker inspect "$blue_id" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = 0.3.0-e2e1 ]
 docker run --rm --network none -v "$state_volume:/state:ro" --entrypoint sh "$image_v1" -c 'test -f /state/data/olympus-dispatch.db'
@@ -76,13 +86,14 @@ curl --fail --silent "http://127.0.0.1:$port/api/ready" >/dev/null
 green_id=$(docker compose -f docker-compose.ha.yml ps -q olympus-green)
 [ "$(docker inspect "$green_id" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = 0.3.0-e2e2 ]
 curl --fail --silent "http://127.0.0.1:$port/api/ready" >/dev/null
+assert_bot_persisted
 [ -n "$(find backups -name '*.integrity' -print -quit)" ]
 [ "$(cat "$(find backups -name '*.integrity' -print -quit)")" = ok ]
 backup_file=$(find backups -name '*.sqlite' -print -quit)
 docker run --rm --network none -v "$sandbox/backups:/backups:ro" --entrypoint sh "$image_v2" \
   -c 'if [ -x /opt/olympus-node/bin/node ]; then exec /opt/olympus-node/bin/node "$@"; else exec node "$@"; fi' olympus-node -e \
-  'const Database=require("better-sqlite3"); const db=new Database(process.argv[1],{readonly:true}); const row=db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = ?").get("E2E persistence sentinel"); if(row.n !== 1) process.exit(1)' \
-  "/backups/$(basename "$backup_file")"
+  'const Database=require("better-sqlite3"); const db=new Database(process.argv[1],{readonly:true}); const row=db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = ?").get("E2E persistence sentinel"); const bot=db.prepare("SELECT kind FROM tasks WHERE id = ?").get(process.argv[2]); if(row.n !== 1||bot?.kind!=="bot") process.exit(1); db.close()' \
+  "/backups/$(basename "$backup_file")" "$bot_id"
 
 # Force a valid Nginx reload to an unreachable candidate and prove recovery.
 cp deploy/nginx/active-blue.conf deploy/nginx/active-blue.conf.good
@@ -131,6 +142,6 @@ for attempt in $(seq 1 60); do
 done
 [ "$restore_ready" = 1 ] || { printf 'Restored server did not become ready.\n' >&2; exit 1; }
 docker exec "$restore_container" /opt/olympus-node/bin/node -e \
-  'fetch("http://127.0.0.1:6969/api/tasks").then(r=>r.json()).then(b=>{if(!b.tasks.some(t=>t.title==="E2E persistence sentinel"))process.exit(1)}).catch(()=>process.exit(1))'
+  '(async()=>{const r=await fetch("http://127.0.0.1:6969/api/tasks"); if(!r.ok)throw Error("Restored board unavailable"); const b=await r.json(); if(!b.tasks.some(t=>t.title==="E2E persistence sentinel")||b.tasks.some(t=>t.kind==="bot"||t.id===process.argv[1]))throw Error("Restored board contents changed"); const opened=await fetch("http://127.0.0.1:6969/api/bots/session?profile=default",{method:"POST"}); if(!opened.ok)throw Error("Restored Bot unavailable"); const bot=(await opened.json()).task; if(bot?.id!==process.argv[1]||bot.kind!=="bot")throw Error("Restored canonical Bot changed")})().catch(e=>{console.error(e);process.exit(1)})' "$bot_id"
 
-printf 'Docker E2E passed: fresh install, drain guard, verified backup, restored server/data, promotion, failed-promotion recovery, and immutable rollback.\n'
+printf 'Docker E2E passed: fresh install, canonical Bot persistence and board exclusion, drain guard, verified backup, restored server/data, promotion, failed-promotion recovery, and immutable rollback.\n'

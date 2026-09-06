@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { Board } from './components/Board';
 import { NewTaskPage } from './components/NewTaskPage';
 import { TaskDetailPage } from './components/TaskDetailPage';
+import { BotsPage } from './components/BotsPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ScheduledTasksPage } from './components/ScheduledTasksPage';
 import { SkillsPage } from './components/SkillsPage';
@@ -32,6 +33,7 @@ function AppShell() {
           <Header />
           <Routes>
             <Route path="/" element={<Board />} />
+            <Route path="/bots" element={<BotsPage />} />
             <Route path="/tasks/new" element={<NewTaskPage />} />
             <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
             <Route path="/projects/:projectId/tasks/:taskId" element={<TaskDetailPage />} />

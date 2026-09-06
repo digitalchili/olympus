@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveOlympusDbPath, ensureOlympusStateDirs } from '../paths.js';
+import { BOT_SCHEMA } from './bot-schema.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -232,6 +233,7 @@ try {
   ensureCollaborationContributionIndex();
   migrateStudioGitHubConnectionStates();
   ensureColumn('task_agent_runs', 'error_code', 'TEXT');
+  ensureColumn('tasks', 'kind', "TEXT NOT NULL DEFAULT 'task' CHECK(kind IN ('task', 'bot'))");
   ensureColumn('tasks', 'agent_provider', 'TEXT');
   ensureColumn('tasks', 'workdir', 'TEXT');
   ensureColumn('tasks', 'profile_name', 'TEXT');
@@ -248,13 +250,15 @@ try {
   `).run();
   db.prepare(`
     UPDATE tasks
-    SET handling_profile_id = COALESCE(NULLIF(profile_name, ''), 'default')
-    WHERE handling_profile_id IS NULL
+    SET handling_profile_id = COALESCE(NULLIF(TRIM(profile_name), ''), 'default')
+    WHERE handling_profile_id IS NULL OR TRIM(handling_profile_id) = ''
   `).run();
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tasks_handler ON tasks(handling_profile_id, updated_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_bot_profile ON tasks(handling_profile_id) WHERE kind = 'bot';
   `);
+  db.exec(BOT_SCHEMA);
   migrateLegacyStudioProjects();
   recoverInterruptedCollaborations();
   recoverInterruptedDelegations();

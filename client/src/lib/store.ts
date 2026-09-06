@@ -49,10 +49,11 @@ export const useStore = create<AppState>((set) => ({
   sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
   installationName: 'Hermes',
 
-  setTasks: (tasks) => set({ tasks, tasksLoaded: true }),
+  setTasks: (tasks) => set({ tasks: tasks.filter(task => task.kind !== 'bot'), tasksLoaded: true }),
 
   upsertTask: (task) =>
     set((state) => {
+      if (task.kind === 'bot') return state;
       const idx = state.tasks.findIndex((t) => t.id === task.id);
       if (idx === -1) return { tasks: [...state.tasks, task] };
       const existing = state.tasks[idx];

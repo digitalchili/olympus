@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import type { Task } from '../shared/types.js';
+Object.defineProperty(globalThis, 'localStorage', { value: { getItem: () => null, setItem: () => {} }, configurable: true });
+const { useStore } = await import('../client/src/lib/store.js');
+const task = { id: 'ordinary', updated_at: 1, last_viewed_at: null } as Task;
+const bot = { ...task, id: 'bot', kind: 'bot' } as Task;
+useStore.getState().setTasks([task, bot]);
+assert.deepEqual(useStore.getState().tasks.map(item => item.id), ['ordinary'], 'bot sessions cannot enter board snapshots');
+useStore.getState().upsertTask(bot);
+assert.deepEqual(useStore.getState().tasks.map(item => item.id), ['ordinary'], 'bot SSE updates cannot add board cards');
+useStore.getState().setTaskRun({ taskId: bot.id, runId: 'run', kind: 'chat', status: 'streaming', startedAt: 1, updatedAt: 1 });
+assert.ok(useStore.getState().taskRuns.has(bot.id), 'bot run activity remains available to its composer');
+console.log('Bot board store isolation passed');
