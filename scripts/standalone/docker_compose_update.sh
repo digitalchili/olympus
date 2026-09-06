@@ -99,7 +99,11 @@ recover() {
     chmod 600 "$ENV_FILE"
     if compose up -d --no-deps --no-build "$SERVICE" >/dev/null 2>&1; then
       restored=$(compose ps -q "$SERVICE" 2>/dev/null || true)
-      [ -z "$restored" ] || wait_ready "$restored" || printf 'CRITICAL: old Olympus image was restored but readiness failed.\n' >&2
+      if [ -n "$restored" ]; then
+        # A failed replacement can leave the original, drained container intact.
+        maintenance "$restored" POST cancel >/dev/null 2>&1 || true
+        wait_ready "$restored" || printf 'CRITICAL: old Olympus image was restored but readiness failed.\n' >&2
+      fi
     else
       printf 'CRITICAL: automatic restoration of the old Olympus image failed.\n' >&2
     fi
@@ -189,6 +193,8 @@ candidate_container=$(compose ps -q "$SERVICE")
 [ -n "$candidate_container" ] || { printf 'Candidate service did not start.\n' >&2; exit 1; }
 candidate_id=$(docker inspect "$candidate_container" --format '{{.Image}}')
 [ "$candidate_id" = "$requested_id" ] || { printf 'Compose started image %s instead of requested %s.\n' "$candidate_id" "$requested_id" >&2; exit 1; }
+# Reapplying the installed version may leave Compose with nothing to recreate.
+if [ "$candidate_container" = "$current_container" ]; then maintenance "$candidate_container" POST cancel >/dev/null; fi
 wait_ready "$candidate_container" || { printf 'Candidate readiness check failed.\n' >&2; exit 1; }
 
 rm -f "$env_backup"

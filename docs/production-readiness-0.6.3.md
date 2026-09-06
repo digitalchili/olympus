@@ -30,6 +30,8 @@ Validated on 2026-09-06: all 125 TypeScript test programs and eleven Python suit
 
 The final AMD64 lifecycle run passed all stages above. The browser showed a user-stopped check remaining in progress, a successful retry moving to review, and visible Project conflict guidance with the original draft intact. Independent review covered each implementation area and the follow-up ownership, shutdown and error-display fixes.
 
+An operator follow-up after publishing 0.6.3 fixes two standalone updater cases: reapplying the installed image and recovering from a replacement that failed before changing the original container. Both now cancel maintenance on the retained container before checking readiness. Regression tests execute the real updater using disposable fixtures with a stubbed Docker CLI and proved both failures before the fix. This script correction is on `main`; it is separate from the already-published 0.6.3 image and can be installed on the update host without changing the application image.
+
 ## Operating limits
 
 This is a bounded repair and validation pass, not a claim that arbitrary agent code or every external provider is failure-free. Olympus still assumes trusted callers and deliberately has no application authentication; remote installations need their own access boundary. Shell checks can spawn programs outside the ordinary child process group, so production containment still depends on the selected host/container runtime.
