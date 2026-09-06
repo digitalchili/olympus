@@ -56,6 +56,7 @@ export function StorageSettings() {
   };
 
   const disk = status?.disk;
+  const mount = status?.mount;
   const usedPercent = disk?.usedPercent ?? 0;
   const isCritical = usedPercent >= 95;
   const isWarning = usedPercent >= 85 && !isCritical;
@@ -90,9 +91,22 @@ export function StorageSettings() {
               <HardDrive size={20} />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Disk Storage</h3>
                 {disk && statusBadge}
+                {mount && (
+                  <span
+                    className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${
+                      mount.isExternal
+                        ? 'text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 border-sky-200 dark:border-sky-800'
+                        : 'text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700'
+                    }`}
+                    title={`Mounted at ${mount.mountPoint}`}
+                  >
+                    <HardDrive size={12} />
+                    {mount.label}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                 Volume storage for task workspaces, SQLite state, and project repositories.
@@ -140,6 +154,16 @@ export function StorageSettings() {
                 style={{ width: `${Math.min(100, Math.max(2, usedPercent))}%` }}
               />
             </div>
+            {mount && (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500 dark:text-zinc-400 pt-1 border-t border-zinc-100 dark:border-zinc-800/60 mt-3">
+                <span>
+                  Device: <code className="font-mono font-medium text-zinc-700 dark:text-zinc-300">{mount.device}</code> ({mount.fsType})
+                </span>
+                <span>
+                  Mount Point: <code className="font-mono font-medium text-zinc-700 dark:text-zinc-300">{mount.mountPoint}</code>
+                </span>
+              </div>
+            )}
           </div>
         ) : !loading && (
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-2">
@@ -155,6 +179,15 @@ export function StorageSettings() {
           <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Storage Locations</h3>
         </div>
         <div className="divide-y divide-zinc-100 dark:divide-zinc-800/80 text-xs">
+          {mount && (
+            <div className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+              <span className="text-zinc-500 dark:text-zinc-400 font-medium sm:w-48">Storage Device</span>
+              <span className="inline-flex items-center gap-1.5 font-mono text-zinc-800 dark:text-zinc-200 truncate select-all">
+                <HardDrive size={13} className="text-zinc-400 shrink-0" />
+                {mount.device} ({mount.fsType}) on {mount.mountPoint}
+              </span>
+            </div>
+          )}
           <div className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <span className="text-zinc-500 dark:text-zinc-400 font-medium sm:w-48">Olympus State & DB</span>
             <span className="font-mono text-zinc-800 dark:text-zinc-200 truncate select-all">{status?.olympusHome ?? '—'}</span>
@@ -185,7 +218,15 @@ export function StorageSettings() {
             Storage Customization Options
           </h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-            By default, Olympus stores all repositories and state locally on the VPS disk. If you need larger or external storage:
+            {mount?.isExternal ? (
+              <span>
+                Active storage is mounted from an external volume (<code className="font-mono text-zinc-700 dark:text-zinc-300">{mount.device}</code> at <code className="font-mono text-zinc-700 dark:text-zinc-300">{mount.mountPoint}</code>). Task workspaces, databases, and project repositories are stored on this volume.
+              </span>
+            ) : (
+              <span>
+                Olympus is currently storing state and repositories on the primary system disk. If you need larger or external storage:
+              </span>
+            )}
           </p>
         </div>
 

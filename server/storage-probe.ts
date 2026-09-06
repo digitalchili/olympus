@@ -1,11 +1,204 @@
-import { stat, statfs, writeFile, unlink, mkdtemp, rm } from 'node:fs/promises';
+import { stat, statfs, writeFile, unlink, mkdtemp, rm, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { StorageMountInfo } from '../shared/types.js';
 
 const execFilePromise = promisify(execFileCallback);
+
+export function buildStorageMountInfo(
+  device: string,
+  mountPoint: string,
+  fsType: string
+): StorageMountInfo {
+  // Check for remote network mounts
+  if (
+    fsType === 'fuse.sshfs' ||
+    fsType === 'sshfs' ||
+    device.includes('sshfs')
+  ) {
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: true,
+      label: `Remote SSHFS Drive (${mountPoint})`,
+    };
+  }
+
+  if (fsType === 'nfs' || fsType === 'cifs' || fsType === 'smb3') {
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: true,
+      label: `Network Storage (${fsType.toUpperCase()})`,
+    };
+  }
+
+  // Check for secondary block devices (attached volumes, e.g. /dev/sdb, /dev/vdb, Hetzner volumes, AWS EBS)
+  const isSecondaryDisk = /\/dev\/(sd[b-z]|vd[b-z]|xvd[b-z]|nvme[1-9])/i.test(device);
+  const isPrimaryDisk = /\/dev\/(sda|vda|xvda|nvme0n1)/i.test(device);
+
+  if (isSecondaryDisk) {
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: true,
+      label: `Attached Volume (${device} · ${fsType})`,
+    };
+  }
+
+  if (device.startsWith('/dev/disk/by-')) {
+    const idName = device.split('/').pop() || device;
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: true,
+      label: `Attached Volume (${idName} · ${fsType})`,
+    };
+  }
+
+  if (isPrimaryDisk) {
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: false,
+      label: `Primary VPS Disk (${device} · ${fsType})`,
+    };
+  }
+
+  if (device === 'overlay' || fsType === 'overlay') {
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: false,
+      label: `Container Overlay (${fsType})`,
+    };
+  }
+
+  if (device === 'tmpfs' || fsType === 'tmpfs') {
+    return {
+      device,
+      mountPoint,
+      fsType,
+      isExternal: false,
+      label: 'Memory Drive (tmpfs)',
+    };
+  }
+
+  const isDedicated = mountPoint !== '/' && !mountPoint.startsWith('/etc') && !mountPoint.startsWith('/sys') && !mountPoint.startsWith('/proc');
+  return {
+    device,
+    mountPoint,
+    fsType,
+    isExternal: isDedicated,
+    label: isDedicated ? `Dedicated Volume (${device} · ${fsType})` : `System Disk (${device} · ${fsType})`,
+  };
+}
+
+export function parseLinuxMounts(mountsContent: string, targetPath: string): StorageMountInfo | null {
+  const lines = mountsContent.split('\n');
+  const resolvedTarget = resolve(targetPath);
+  let bestMatch: { device: string; mountPoint: string; fsType: string } | null = null;
+  let bestLen = -1;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 3) continue;
+
+    const rawDevice = parts[0];
+    const rawMount = parts[1];
+    const fsType = parts[2];
+
+    const unescapedMount = rawMount.replace(/\\([0-7]{3})/g, (_, oct) =>
+      String.fromCharCode(parseInt(oct, 8))
+    );
+    const resolvedMount = resolve(unescapedMount);
+
+    // Skip pseudo filesystems that are not real storage
+    if (
+      fsType === 'proc' ||
+      fsType === 'sysfs' ||
+      fsType === 'devpts' ||
+      fsType === 'cgroup' ||
+      fsType === 'cgroup2' ||
+      fsType === 'mqueue' ||
+      fsType === 'autofs'
+    ) {
+      continue;
+    }
+
+    const isInside =
+      resolvedTarget === resolvedMount ||
+      (resolvedMount === '/' ? resolvedTarget.startsWith('/') : resolvedTarget.startsWith(resolvedMount + '/'));
+
+    if (isInside && resolvedMount.length > bestLen) {
+      bestLen = resolvedMount.length;
+      bestMatch = {
+        device: rawDevice.replace(/\\([0-7]{3})/g, (_, oct) =>
+          String.fromCharCode(parseInt(oct, 8))
+        ),
+        mountPoint: resolvedMount,
+        fsType,
+      };
+    }
+  }
+
+  if (!bestMatch) return null;
+  return buildStorageMountInfo(bestMatch.device, bestMatch.mountPoint, bestMatch.fsType);
+}
+
+export async function detectStorageMount(
+  targetPath: string,
+  customMountsFile?: string
+): Promise<StorageMountInfo | null> {
+  const mountsPath = customMountsFile || '/proc/mounts';
+  if (existsSync(mountsPath)) {
+    try {
+      const content = await readFile(mountsPath, 'utf8');
+      return parseLinuxMounts(content, targetPath);
+    } catch {
+      // Ignore read errors and proceed to fallback
+    }
+  }
+
+  // Fallback for macOS / BSD using `df -P`
+  try {
+    const { stdout } = await execFilePromise('df', ['-P', resolve(targetPath)], { timeout: 3000 });
+    const lines = stdout.trim().split('\n');
+    if (lines.length >= 2) {
+      const lastLine = lines[lines.length - 1].trim();
+      const parts = lastLine.split(/\s+/);
+      if (parts.length >= 6) {
+        const device = parts[0];
+        const mountPoint = parts.slice(5).join(' ');
+        const isExternal = mountPoint.startsWith('/Volumes/') && !mountPoint.startsWith('/Volumes/Macintosh');
+        const label = isExternal ? `External Drive (${device})` : `Local Disk (${device})`;
+        return {
+          device,
+          mountPoint,
+          fsType: process.platform === 'darwin' ? 'apfs' : 'unknown',
+          isExternal,
+          label,
+        };
+      }
+    }
+  } catch {
+    // Non-fatal fallback
+  }
+
+  return null;
+}
 
 export interface StorageProbeResult {
   ok: boolean;

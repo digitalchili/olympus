@@ -36,6 +36,14 @@ export interface UpdateStatus {
   error?: string;
 }
 
+export interface StorageMountInfo {
+  device: string;
+  mountPoint: string;
+  fsType: string;
+  isExternal: boolean;
+  label: string;
+}
+
 export interface StorageStatus {
   olympusHome: string;
   hermesHome: string;
@@ -47,7 +55,13 @@ export interface StorageStatus {
     freeBytes: number;
     usedBytes: number;
     usedPercent: number;
+    device?: string;
+    mountPoint?: string;
+    fsType?: string;
+    isExternal?: boolean;
+    label?: string;
   } | null;
+  mount?: StorageMountInfo | null;
 }
 
 export interface StorageProbeResult {

@@ -7,6 +7,7 @@ import {
   resolveOlympusHome,
   resolveProjectRoot,
 } from '../paths.js';
+import { detectStorageMount } from '../storage-probe.js';
 import type { StorageStatus } from '../../shared/types.js';
 
 export function createStorageRouter(): Router {
@@ -32,6 +33,15 @@ export function createStorageRouter(): Router {
       // statfs may fail in restricted virtual environments
     }
 
+    const mountInfo = await detectStorageMount(olympusHome);
+    if (disk && mountInfo) {
+      disk.device = mountInfo.device;
+      disk.mountPoint = mountInfo.mountPoint;
+      disk.fsType = mountInfo.fsType;
+      disk.isExternal = mountInfo.isExternal;
+      disk.label = mountInfo.label;
+    }
+
     const isDocker = existsSync('/.dockerenv') || Boolean(process.env.HERMES_WRITE_SAFE_ROOT);
 
     const status: StorageStatus = {
@@ -41,6 +51,7 @@ export function createStorageRouter(): Router {
       dbPath: resolveOlympusDbPath(),
       isDocker,
       disk,
+      mount: mountInfo,
     };
 
     res.json(status);

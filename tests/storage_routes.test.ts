@@ -47,6 +47,14 @@ try {
     assert.ok(result.body.disk.usedPercent >= 0 && result.body.disk.usedPercent <= 100);
   }
 
+  if (result.body.mount) {
+    assert.equal(typeof result.body.mount.device, 'string');
+    assert.equal(typeof result.body.mount.mountPoint, 'string');
+    assert.equal(typeof result.body.mount.fsType, 'string');
+    assert.equal(typeof result.body.mount.isExternal, 'boolean');
+    assert.equal(typeof result.body.mount.label, 'string');
+  }
+
   server.close();
 } finally {
   server.close();
