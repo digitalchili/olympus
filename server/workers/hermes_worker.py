@@ -49,6 +49,7 @@ from hermes_scheduled_tasks import (
     pause_scheduled_task,
     remove_scheduled_task,
     resume_scheduled_task,
+    set_scheduled_task_drain,
     start_scheduled_task_ticker,
     tick_scheduled_tasks,
     trigger_scheduled_task,
@@ -2802,6 +2803,10 @@ def _handle_request(request: dict[str, Any]) -> None:
             _result(request_id, remove_scheduled_task(request.get("scheduledTaskId")))
         elif request_type == "scheduledTasks.tick":
             _result(request_id, {"executed": tick_scheduled_tasks()})
+        elif request_type == "scheduledTasks.drain":
+            if not isinstance(request.get("draining"), bool):
+                raise WorkerError("draining must be a boolean", code="bad_request")
+            _result(request_id, set_scheduled_task_drain(request["draining"]))
         elif request_type == "session.messages.get":
             if request.get("limit") is None and request.get("before") is None:
                 _result(request_id, project_session_messages(request.get("sessionId"), request.get("taskId")))

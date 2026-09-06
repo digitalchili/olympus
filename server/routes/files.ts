@@ -60,6 +60,7 @@ const UPLOAD_TMP_DIR = join(tmpdir(), 'olympus-dispatch-uploads');
 const UPLOAD_REQUEST_TIMEOUT_MS = Number.parseInt(process.env.OLYMPUS_UPLOAD_REQUEST_TIMEOUT_MS || '360000', 10);
 
 type UploadRequest = Request & { uploadRequestId?: string; uploadRequestDir?: string };
+let uploadCommitQueue: Promise<void> = Promise.resolve();
 
 mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
 
@@ -310,7 +311,12 @@ filesRouter.post('/upload', (req, res) => {
       return;
     }
 
-    void handleUploadRequest(req, res)
+    // Two overlapping replacements must not restore each other's previous bytes.
+    const commit = uploadCommitQueue.then(() => {
+      if (!aborted) return handleUploadRequest(req, res);
+    });
+    uploadCommitQueue = commit.catch(() => undefined);
+    void commit
       .then(() => finish(res.statusCode >= 200 && res.statusCode < 300 ? 'success' : 'failed'))
       .catch((uploadError) => {
         finish('failed', redactOperationalReason(uploadError));
@@ -361,7 +367,11 @@ filesRouter.delete('/', async (req, res) => {
 
 async function handleUploadRequest(req: Request, res: Response): Promise<void> {
   const uploadedFiles = Array.isArray(req.files) ? req.files : [];
-  const movedDestinationPaths: string[] = [];
+  const destinations: Array<{ path: string; staged: string; backup?: string; installed: boolean }> = [];
+  let committed = false;
+  const assertConnected = () => {
+    if (req.aborted || res.destroyed) throw new FileRouteError(400, 'Upload was interrupted', 'UPLOAD_ABORTED');
+  };
 
   try {
     if (uploadedFiles.length === 0) {
@@ -392,26 +402,61 @@ async function handleUploadRequest(req: Request, res: Response): Promise<void> {
       }
 
       await assertWritableUploadTarget(destinationPath);
-      try {
-        await rename(file.path, destinationPath);
-      } catch {
-        await copyFile(file.path, destinationPath);
+      if (destinations.some((entry) => entry.path === destinationPath)) {
+        throw new FileRouteError(400, 'Upload contains a duplicate destination', 'BAD_REQUEST');
       }
-      movedDestinationPaths.push(destinationPath);
+      const staged = join(dirname(destinationPath), `.olympus-upload-${randomUUID()}.next`);
+      destinations.push({ path: destinationPath, staged, installed: false });
+      assertConnected();
+      // Stage on the destination filesystem, including uploads across devices.
+      await copyFile(file.path, staged, constants.COPYFILE_EXCL);
       uploadedRootPaths.add(join(targetDirectory, segments[0]));
+    }
+
+    for (const destination of destinations) {
+      assertConnected();
+      if (await assertWritableUploadTarget(destination.path)) {
+        const backup = `${destination.staged}.original`;
+        await rename(destination.path, backup);
+        destination.backup = backup;
+      }
+      await rename(destination.staged, destination.path);
+      destination.installed = true;
     }
 
     const entries = await Promise.all(
       [...uploadedRootPaths].sort((a, b) => a.localeCompare(b)).map((entryPath) => entryFromPath(entryPath)),
     );
 
+    assertConnected();
+    committed = true;
     res.status(201).json({ uploaded: uploadedFiles.length, entries });
   } catch (error) {
-    // The request is atomic from the user's perspective: if a later file fails,
-    // remove any files already moved out of the request-specific temp directory.
-    await Promise.all(movedDestinationPaths.map((path) => unlink(path).catch(() => undefined)));
+    if (!committed) {
+      for (const destination of [...destinations].reverse()) {
+        try {
+          if (destination.backup) {
+            await rename(destination.backup, destination.path);
+            destination.backup = undefined;
+          } else if (destination.installed) {
+            await unlink(destination.path);
+          }
+        } catch {
+          // Keep the backup in its browsable directory if restoration itself fails.
+          error = new FileRouteError(500,
+            destination.backup
+              ? `Upload failed. Restore the original file from ${destination.backup}`
+              : `Upload failed. Could not remove ${destination.path}`,
+            'UPLOAD_ROLLBACK_FAILED');
+        }
+      }
+    }
     sendFileError(res, error, 'Failed to upload files');
   } finally {
+    await Promise.all(destinations.flatMap((destination) => [
+      unlink(destination.staged).catch(() => undefined),
+      ...(committed && destination.backup ? [unlink(destination.backup).catch(() => undefined)] : []),
+    ]));
     await Promise.all(uploadedFiles.map((file) => unlink(file.path).catch(() => undefined)));
   }
 }
@@ -613,15 +658,17 @@ async function resolveUploadDestination(targetDirectory: string, segments: strin
   return join(currentDirectory, segments.at(-1)!);
 }
 
-async function assertWritableUploadTarget(destinationPath: string): Promise<void> {
+async function assertWritableUploadTarget(destinationPath: string): Promise<boolean> {
   try {
     const destinationStats = await lstat(destinationPath);
-    if (destinationStats.isDirectory() || destinationStats.isSymbolicLink()) {
+    if (!destinationStats.isFile() || destinationStats.isSymbolicLink()) {
       throw new FileRouteError(409, 'A non-file entry already exists at the upload target', 'EEXIST');
     }
+    return true;
   } catch (error) {
     if (error instanceof FileRouteError) throw error;
     if (errorCode(error) !== 'ENOENT') throw error;
+    return false;
   }
 }
 

@@ -6,11 +6,15 @@ import express from 'express';
 import { once } from 'node:events';
 import { request } from 'node:http';
 import { testLocalPathProbe, parseLinuxMounts, detectStorageMount } from '../server/storage-probe.js';
-import { createStorageRouter } from '../server/routes/storage.js';
 import type { StorageProbeResult } from '../server/storage-probe.js';
 
 // 1. Direct function tests
 const tempDir = await mkdtemp(join(tmpdir(), 'olympus-probe-test-'));
+process.env.OLYMPUS_DISPATCH_HOME = join(tempDir, 'state');
+process.env.HERMES_HOME = join(tempDir, 'hermes');
+process.env.DB_PATH = join(tempDir, 'test.db');
+const { createStorageRouter } = await import('../server/routes/storage.js');
+const { default: db } = await import('../server/db/index.js');
 
 try {
   // Test valid directory
@@ -135,6 +139,7 @@ user@remote:/pool /mnt/remote fuse.sshfs rw 0 0
     server.close();
   }
 } finally {
+  db.close();
   await rm(tempDir, { recursive: true, force: true });
 }
 

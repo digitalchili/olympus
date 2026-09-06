@@ -36,7 +36,7 @@ import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
 import { createDrainRouter, maintenanceGuard } from './drain-http.js';
 import { createActiveRequestTracker } from './active-requests.js';
-import { getActiveTaskRunCount } from './task-run-lifecycle.js';
+import { getActiveOperationCount, getActiveTaskRunCount } from './task-run-lifecycle.js';
 import { profileTaskRequestGate, requestProfile, sendProfileError, taskBelongsToProfile } from './profile-context.js';
 import { createRuntimeLiveness } from './runtime-liveness.js';
 import { operationalLog } from './observability.js';
@@ -66,7 +66,10 @@ adapter.onDelegationReset((profileId) => {
   }
 });
 const activeRequests = createActiveRequestTracker();
-const drainController = new DrainController(() => getActiveTaskRunCount() + activeRequests.count());
+const drainController = new DrainController(() => getActiveTaskRunCount() + getActiveOperationCount() + activeRequests.count(), {
+  setDraining: (draining) => adapter.setScheduledTasksDraining(draining),
+  activeRuns: async () => (await adapter.getScheduledTaskDrainStatus()).activeRuns,
+});
 const workerLiveness = createRuntimeLiveness({
   checkWorker: () => adapter.healthCheck(),
   onFailure: (status) => {
@@ -83,7 +86,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/ready', async (_req, res) => {
-  const status = drainController.status();
+  const status = await drainController.refreshStatus();
   const probe = status.ready ? await workerLiveness.probe() : { ready: false, checked: false };
   res.status(status.ready && probe.ready ? 200 : 503).json({
     ...status,
@@ -144,7 +147,7 @@ app.use('/api/tasks', codingVerificationRouter);
 app.use('/api/tasks', chatRouter);
 app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
-app.use('/api/storage', createStorageRouter());
+app.use('/api/storage', createStorageRouter(() => drainController.status().ready));
 app.use('/api/updates', createUpdatesRouter());
 app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp }));
 app.use('/api/studio', createStudioRouter({

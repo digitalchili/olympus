@@ -23,8 +23,8 @@ export function createDrainRouter(
     }
     next();
   });
-  router.get('/status', (_req, res) => res.json(controller.status()));
-  router.post('/drain', (_req, res) => {
+  router.get('/status', async (_req, res) => res.json(await controller.refreshStatus()));
+  router.post('/drain', async (_req, res) => {
     const changed = controller.begin();
     if (changed && onIdle) {
       const generation = ++drainGeneration;
@@ -32,12 +32,12 @@ export function createDrainRouter(
         if (idle && generation === drainGeneration && controller.status().draining) onIdle();
       });
     }
-    res.json({ changed, ...controller.status() });
+    res.json({ changed, ...await controller.refreshStatus() });
   });
-  router.post('/cancel', (_req, res) => {
+  router.post('/cancel', async (_req, res) => {
     const changed = controller.cancel();
     if (changed) drainGeneration += 1;
-    res.json({ changed, ...controller.status() });
+    res.json({ changed, ...await controller.refreshStatus() });
   });
   return router;
 }

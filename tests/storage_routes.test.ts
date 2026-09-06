@@ -2,8 +2,18 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { once } from 'node:events';
 import { request } from 'node:http';
-import { createStorageRouter } from '../server/routes/storage.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { StorageStatus } from '../shared/types.js';
+
+const root = await mkdtemp(join(tmpdir(), 'olympus-storage-routes-'));
+process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
+process.env.HERMES_HOME = join(root, 'hermes');
+process.env.DB_PATH = join(root, 'test.db');
+const { createStorageRouter } = await import('../server/routes/storage.js');
+const { default: db } = await import('../server/db/index.js');
+const { pollDiskSpaceAndAlert } = await import('../server/disk-alert.js');
 
 const app = express();
 app.use('/api/storage', createStorageRouter());
@@ -58,6 +68,9 @@ try {
   server.close();
 } finally {
   server.close();
+  await pollDiskSpaceAndAlert();
+  db.close();
+  await rm(root, { recursive: true, force: true });
 }
 
 console.log('Storage route tests passed');

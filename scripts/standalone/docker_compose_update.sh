@@ -140,7 +140,9 @@ backup_name="olympus-dispatch-before-$version-$stamp.db"
 container_backup="/opt/data/olympus-dispatch/data/.$backup_name"
 host_backup_tmp="$BACKUP_DIR/.$backup_name.tmp.$$"
 host_backup="$BACKUP_DIR/$backup_name"
-docker exec -i "$current_container" node - "$container_backup" <<'NODE'
+docker exec -i "$current_container" sh -c \
+  'if [ -x /opt/olympus-node/bin/node ]; then exec /opt/olympus-node/bin/node "$@"; else exec node "$@"; fi' \
+  olympus-node - "$container_backup" <<'NODE'
 const Database = require("better-sqlite3");
 const destination = process.argv[2];
 const path = process.env.DB_PATH || "/opt/data/olympus-dispatch/data/olympus-dispatch.db";

@@ -16,7 +16,7 @@ import type {
   SessionMetadata,
   TaskMessage,
 } from '../../shared/types.js';
-import type { AgentAdapter, AgentRunOptions, AgentRunSettings, InteractionRespondRequest, StreamEvent, TaskBackgroundWork } from './types.js';
+import type { AgentAdapter, AgentRunOptions, AgentRunSettings, InteractionRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
 import { operationalLog, redactOperationalReason } from '../observability.js';
@@ -203,6 +203,7 @@ export class HermesWorkerClient {
   private pending = new Map<string, Pending>();
   private ready = false;
   private readyPromise: Promise<void> | null = null;
+  private scheduledTasksDraining = false;
   private delegationListeners = new Set<(event: AdapterDelegationEvent) => void>();
   private delegationResetListeners = new Set<(profileId?: string) => void>();
 
@@ -225,8 +226,15 @@ export class HermesWorkerClient {
     if (!this.readyPromise) {
       const request = { id: randomUUID(), type: 'health' } as WorkerRequest;
       this.readyPromise = this.sendRequest<{ ok: boolean }>(request, WORKER_READY_TIMEOUT_MS)
-        .then((result) => {
+        .then(async (result) => {
           if (!result.ok) throw new Error('Hermes worker healthcheck failed');
+          // The Python ticker starts paused. Apply the latest maintenance state
+          // before readiness, including when drain changes during cold startup.
+          let desired: boolean;
+          do {
+            desired = this.scheduledTasksDraining;
+            await this.syncScheduledTaskDrain(desired);
+          } while (desired !== this.scheduledTasksDraining);
           this.ready = true;
         })
         .catch((error) => {
@@ -240,6 +248,29 @@ export class HermesWorkerClient {
     }
 
     await this.readyPromise;
+  }
+
+  setScheduledTasksDraining(draining: boolean): void {
+    this.scheduledTasksDraining = draining;
+    if (this.ready) void this.getScheduledTaskDrainStatus().catch(() => undefined);
+  }
+
+  async getScheduledTaskDrainStatus(): Promise<ScheduledTaskDrainStatus> {
+    await this.start();
+    const desired = this.scheduledTasksDraining;
+    const status = await this.syncScheduledTaskDrain(desired);
+    if (desired !== this.scheduledTasksDraining) throw new Error('Scheduled task maintenance state changed');
+    return status;
+  }
+
+  private async syncScheduledTaskDrain(draining: boolean): Promise<ScheduledTaskDrainStatus> {
+    const status = await this.sendRequest<ScheduledTaskDrainStatus>({
+      id: randomUUID(), type: 'scheduledTasks.drain', draining,
+    }, WORKER_INTERRUPT_TIMEOUT_MS);
+    if (status.draining !== draining || !Number.isSafeInteger(status.activeRuns) || status.activeRuns < 0) {
+      throw new Error('Scheduled task maintenance state is unavailable');
+    }
+    return status;
   }
 
   async healthCheck(timeoutMs = 10_000): Promise<boolean> {
@@ -489,6 +520,14 @@ export class HermesWorkerAdapter implements AgentAdapter {
 
   async stop(): Promise<void> {
     await this.client.stop();
+  }
+
+  setScheduledTasksDraining(draining: boolean): void {
+    this.client.setScheduledTasksDraining(draining);
+  }
+
+  getScheduledTaskDrainStatus(): Promise<ScheduledTaskDrainStatus> {
+    return this.client.getScheduledTaskDrainStatus();
   }
 
   onDelegationEvent(listener: (event: AdapterDelegationEvent) => void): () => void {

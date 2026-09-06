@@ -185,6 +185,13 @@ export interface TransferProjectEditorInput extends AcquireProjectEditorInput {
   previousTaskId: string;
 }
 
+/** Advance only the lease whose published baseline was checked before synchronization. */
+export function advanceProjectEditorBaseline(leaseId: string, expectedBaseSha: string | null, baseSha: string, now = Date.now()): boolean {
+  return db.prepare(`UPDATE project_editor_leases SET base_sha = ?, updated_at = ?
+    WHERE id = ? AND status = 'active' AND base_sha IS ?`)
+    .run(optionalSha(baseSha, 'baseSha'), now, leaseId, expectedBaseSha).changes === 1;
+}
+
 export function transferProjectEditor(input: TransferProjectEditorInput): ProjectEditorLease {
   const now = input.now ?? Date.now();
   const id = uuid();

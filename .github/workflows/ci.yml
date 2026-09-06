@@ -16,3 +16,5 @@ jobs:
       - run: HERMES_DATA_VOLUME=ci-hermes docker compose config --quiet
       - run: HERMES_DATA_VOLUME=ci-hermes docker compose -f docker-compose.ha.yml config --quiet
       - run: docker build -t olympus-dispatch:test .
+      - name: Verify Docker backup, restore, update and rollback
+        run: npm run test:docker-e2e

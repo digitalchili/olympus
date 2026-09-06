@@ -13,7 +13,7 @@ import type {
   DelegationWorkerEvent,
 } from '../../shared/types.js';
 import type { InteractionResponse, NativeInteraction } from '../../shared/interactions.js';
-import type { AgentRunSettings, TaskBackgroundWork } from './types.js';
+import type { AgentRunSettings, ScheduledTaskDrainStatus, TaskBackgroundWork } from './types.js';
 
 export type WorkerRequest =
   | { id: string; type: 'health' }
@@ -29,6 +29,7 @@ export type WorkerRequest =
   | { id: string; type: 'scheduledTasks.run'; scheduledTaskId: string }
   | { id: string; type: 'scheduledTasks.remove'; scheduledTaskId: string }
   | { id: string; type: 'scheduledTasks.tick' }
+  | { id: string; type: 'scheduledTasks.drain'; draining: boolean }
   | { id: string; type: 'session.messages.get'; sessionId: string; taskId?: string; limit?: number; before?: string | null }
   | { id: string; type: 'session.get'; sessionId: string }
   | { id: string; type: 'session.backgroundWork.get'; sessionId: string }
@@ -82,6 +83,7 @@ export interface WorkerErrorPayload {
 }
 
 export type WorkerResult =
+  | ScheduledTaskDrainStatus
   | TaskBackgroundWork
   | { ok: boolean; agentDir?: string | null; python?: string | null }
   | AgentDefaults

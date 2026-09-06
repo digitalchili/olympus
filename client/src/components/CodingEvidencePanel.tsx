@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CodingEvidence } from '@shared/coding-evidence';
-import { fetchCodingEvidence, fetchTaskRecovery, pauseTaskRecovery, runCodingVerification, type TaskRecoveryStatus } from '../lib/api';
+import { fetchCodingEvidence, fetchTaskRecovery, interruptTask, pauseTaskRecovery, runCodingVerification, type TaskRecoveryStatus } from '../lib/api';
 
 export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; isStreaming: boolean }) {
   const [evidence, setEvidence] = useState<CodingEvidence | null>(null);
   const [recovery, setRecovery] = useState<TaskRecoveryStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
   const refresh = useCallback(async () => {
     const [checks, continuation] = await Promise.all([fetchCodingEvidence(taskId), fetchTaskRecovery(taskId)]);
@@ -36,6 +37,10 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
       <button disabled={busy || isStreaming || evidence.status === 'running'} className="mt-3 rounded bg-zinc-900 px-3 py-2 text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900" onClick={() => {
         setBusy(true); setError(''); void runCodingVerification(taskId).then(result => setEvidence(result.evidence)).catch(e => setError(String(e))).finally(() => setBusy(false));
       }}>{busy ? 'Running checks…' : 'Run checks'}</button>
+      {(busy || evidence.status === 'running') && <button disabled={stopping} className="ml-2 mt-3 rounded border border-zinc-300 px-3 py-2 disabled:opacity-40 dark:border-zinc-600" onClick={() => {
+        setStopping(true); setError('');
+        void interruptTask(taskId, 'Verification stopped by user').then(refresh).catch(e => setError(String(e))).finally(() => setStopping(false));
+      }}>{stopping ? 'Stopping…' : 'Stop checks'}</button>}
     </details>}
     {error && <p role="alert" className="mt-2 text-red-600">{error}</p>}
   </section>;

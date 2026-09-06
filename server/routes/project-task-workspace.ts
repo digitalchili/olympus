@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import type { ProjectCpService } from '../project-cp.js';
-import { ProjectRepositoryBusyError } from '../project-cp.js';
+import { ProjectRepositoryBusyError, ProjectRepositoryMergeConflictError, ProjectRepositoryCheckpointError } from '../project-cp.js';
 import { consumeQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { getProjectRepositoryLink } from '../db/projects.js';
 import { getTask, updateTask } from '../db/queries.js';
 import { broadcast } from '../events.js';
 import { getRunStatus } from '../live-chat.js';
+import { hasActiveTaskRun } from '../task-run-lifecycle.js';
 import { requireTaskForProfile } from '../profile-context.js';
 import type { StudioGitHubGateway } from './studio.js';
 import { DEFAULT_PROFILE_NAME, type QueuedTaskMessage, type Task } from '../../shared/types.js';
@@ -43,7 +44,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
     const command = commitPushRequest(content);
     const queuedMessageId = req.body?.queuedMessageId;
     const runStatus = getRunStatus(task.id)?.status;
-    if (runStatus === 'streaming' || runStatus === 'compacting') {
+    if (hasActiveTaskRun(task.id) || runStatus === 'streaming' || runStatus === 'compacting') {
       return res.status(409).json({ error: 'This task already has a message in progress' });
     }
 
@@ -68,6 +69,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       res.locals.claimedQueuedTaskMessage = consumedQueue;
     }
 
+    res.locals.preparingProjectTask = true;
     try {
       await options.projectCp.prepareTask({
         projectId: task.project_id,
@@ -78,6 +80,12 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       });
     } catch (error) {
       restoreConsumedQueue();
+      if (error instanceof ProjectRepositoryCheckpointError) {
+        return res.status(409).json({ error: error.message, code: 'PROJECT_CHECKPOINT_PENDING', activeTaskId: error.activeTaskId });
+      }
+      if (error instanceof ProjectRepositoryMergeConflictError) {
+        return res.status(409).json({ error: error.message, code: 'PROJECT_MERGE_CONFLICT', conflictingFiles: error.conflictingFiles, activeTaskId: error.activeTaskId });
+      }
       if (error instanceof ProjectRepositoryBusyError) {
         return res.status(423).json({
           error: `${error.activeTaskTitle} is currently using this Project repository. Finish or release it before starting this task.`,
@@ -90,10 +98,18 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
         error: `Olympus could not prepare this Project repository: ${message}`,
         code: 'PROJECT_REPOSITORY_PREPARE_FAILED',
       });
+    } finally {
+      res.locals.preparingProjectTask = false;
+      if (res.destroyed) {
+        restoreConsumedQueue();
+        res.locals.releaseTaskOperation?.();
+      }
     }
 
+    if (res.destroyed) return;
     if (!command) return next();
 
+    res.locals.preparingProjectTask = true;
     try {
       const version = await options.projectCp.commitPush({
         projectId: task.project_id,
@@ -123,6 +139,9 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
         error: expectedConflict ? message : `Olympus could not commit and push this Project repository: ${message}`,
         code: expectedConflict ? 'PROJECT_COMMIT_PUSH_BLOCKED' : 'PROJECT_COMMIT_PUSH_FAILED',
       });
+    } finally {
+      res.locals.preparingProjectTask = false;
+      if (res.destroyed) res.locals.releaseTaskOperation?.();
     }
   });
 

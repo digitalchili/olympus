@@ -56,19 +56,21 @@ try {
     import('../server/db/index.js'),
   ]);
 
+  adapter.getScheduledTaskDrainStatus = async () => ({ draining: false, activeRuns: 0 });
+
   let releaseTrackedRun!: () => void;
   const trackedRun = taskRunLifecycle.trackTaskRun('drain-count-test', new Promise<void>((resolve) => {
     releaseTrackedRun = resolve;
   }));
   assert.equal(taskRunLifecycle.getActiveTaskRunCount(), 1);
-  assert.equal(drainController.status().activeRuns, 1, 'drain must count tracked background work');
+  assert.equal((await drainController.refreshStatus()).activeRuns, 1, 'drain must count tracked background work');
   releaseTrackedRun();
   await trackedRun;
   assert.equal(taskRunLifecycle.getActiveTaskRunCount(), 0);
 
   liveChat.startRun('stale-live-run', 'stale-live-run', 'orphaned UI snapshot');
   assert.equal(liveChat.getRunStatus('stale-live-run')?.status, 'streaming');
-  assert.equal(drainController.status().activeRuns, 0, 'stale live snapshots must not block update drain');
+  assert.equal((await drainController.refreshStatus()).activeRuns, 0, 'stale live snapshots must not block update drain');
   liveChat.discardRun('stale-live-run');
 
   const server = app.listen(0, '127.0.0.1');

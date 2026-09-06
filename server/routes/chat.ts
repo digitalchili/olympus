@@ -1,4 +1,4 @@
-import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed } from '../coding-verification.js';
+import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying } from '../coding-verification.js';
 import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
@@ -63,7 +63,7 @@ import {
   type AgentRunBudget,
   type RunWatchdogReason,
 } from '../run-watchdog.js';
-import { activeCollaborations, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
+import { activeCollaborations, hasActiveTaskRun, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
@@ -314,6 +314,33 @@ function taskRunBudget(taskId: string): AgentRunBudget {
   return budget;
 }
 
+async function captureBaselineWithinBudget(task: Task, runId: string, budget: AgentRunBudget): Promise<void> {
+  const controller = new AbortController();
+  let pending: Promise<void> | undefined;
+  try {
+    await withinRunDeadline(() => pending = captureCodingBaseline(task, runId, controller.signal), budget,
+      () => getRunStatus(task.id)?.status === 'stopped');
+  } catch (error) {
+    controller.abort(error);
+    await pending?.catch(() => {});
+    throw error;
+  }
+}
+
+async function verifyBeforeReview(task: Task, runId: string, budget: AgentRunBudget): Promise<boolean> {
+  try {
+    return await withinRunDeadline(
+      () => verifyCodingRun(task, runId),
+      budget,
+      () => getRunStatus(task.id)?.status === 'stopped',
+    );
+  } catch (error) {
+    // A deadline must not release run ownership while checks or snapshots survive.
+    await cancelCodingVerification(task.id, error instanceof Error ? error.message : 'Verification stopped');
+    throw error;
+  }
+}
+
 async function streamChatTurn(
   runTask: Task,
   sessionId: string,
@@ -341,7 +368,7 @@ async function streamChatTurn(
   const humanWaits = new Map<string, number>();
 
   try {
-    if (interactionRunId) await withinRunDeadline(() => captureCodingBaseline(runTask, interactionRunId), runBudget);
+    if (interactionRunId) await captureBaselineWithinBudget(runTask, interactionRunId, runBudget);
     const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
       systemMessage: taskSystemMessage(runTask, `${options.supplementalSystemMessage ?? ''}${deadlineMessage}`),
       settings: taskRunSettings(runTask),
@@ -369,7 +396,7 @@ async function streamChatTurn(
         continue;
       }
       if (rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
-        const passed = await withinRunDeadline(() => verifyCodingRun(runTask, interactionRunId, Math.min(5 * 60_000, runBudget.hardDeadlineAtMs - Date.now())), runBudget);
+        const passed = await verifyBeforeReview(runTask, interactionRunId, runBudget);
         if (!passed) {
           appendSystemMessage(runTask.id, 'Code verification did not pass. Review the saved checks and remaining work.');
         }
@@ -678,7 +705,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
 
       turnContent = decision.continuationPrompt?.trim() ? decision.continuationPrompt : null;
     }
-    if (goalCompleted && !hadError && !wasInterrupted) await withinRunDeadline(() => verifyCodingRun(runTask, runId, Math.min(5 * 60_000, runBudget.hardDeadlineAtMs - Date.now())), runBudget);
+    if (goalCompleted && !hadError && !wasInterrupted) await verifyBeforeReview(runTask, runId, runBudget);
     if (!goalCompleted && !hadError && !wasInterrupted) throw Object.assign(new Error('Goal remains unfinished'), { code: 'goal_incomplete' });
   } catch (error) {
     if (getRunStatus(runTask.id)?.status === 'stopped') {
@@ -836,7 +863,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
   let content = requestContent;
 
   const activeRun = getRunStatus(task.id);
-  if (isTaskRunActive(activeRun)) {
+  if (hasActiveTaskRun(task.id) || isTaskRunActive(activeRun)) {
     const preclaimed = res.locals.claimedQueuedTaskMessage as QueuedTaskMessage | undefined;
     if (preclaimed) restoreQueuedTaskMessage(preclaimed);
     delete res.locals.claimedQueuedTaskMessage;
@@ -933,6 +960,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     return res.status(400).json({ error: toErrorMessage(error, 'Invalid run settings') });
   }
 
+  if (res.destroyed) return;
   // Project preparation can await I/O after the first preflight. Pause must win
   // until this synchronous startup section creates the replacement run.
   if (res.locals.recoveryContinuation === true) {
@@ -1065,6 +1093,14 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim()
     ? req.body.reason.trim()
     : undefined;
+  if (isVerifying(task.id)) {
+    if (getRunStatus(task.id)?.status === 'streaming') {
+      updateRunStatus(task.id, 'stopped');
+      broadcastRunSnapshot(task.id);
+    }
+    await cancelCodingVerification(task.id, reason);
+    return res.json({ interrupted: true });
+  }
   const collaboration = activeCollaborations.get(task.id);
   if (collaboration && !collaboration.cancelled && collaboration.phase !== 'synthesizing') {
     const live = getRunStatus(task.id);
@@ -1098,13 +1134,11 @@ chatRouter.post('/:id/interrupt', async (req, res) => {
     cancelCollaborationRun(collaboration.runId, reason ?? 'Stopped by user');
   }
 
+  // Record the user's stop before awaiting Hermes: terminal delivery may race it.
+  updateRunStatus(task.id, 'stopped');
+  broadcastRunSnapshot(task.id);
   try {
-    const interrupted = await adapter.interruptChat(task.id, reason);
-    if (!interrupted && getRunStatus(task.id)?.kind !== 'goal') {
-      return res.status(409).json({ error: 'Hermes had no active agent to stop for this task' });
-    }
-    updateRunStatus(task.id, 'stopped');
-    broadcastRunSnapshot(task.id);
+    await adapter.interruptChat(task.id, reason);
     res.json({ interrupted: true });
   } catch (error) {
     sendAdapterError(res, error, 'Could not stop Hermes run');
@@ -1141,7 +1175,7 @@ chatRouter.post('/:id/compact', async (req, res) => {
   const task = res.locals.task as Task;
 
   const activeRun = getRunStatus(task.id);
-  if (isTaskRunActive(activeRun)) {
+  if (hasActiveTaskRun(task.id) || isTaskRunActive(activeRun)) {
     return res.status(409).json({
       error: activeRun?.status === 'compacting'
         ? 'This task is already compacting'

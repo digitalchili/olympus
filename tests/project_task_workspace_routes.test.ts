@@ -61,7 +61,7 @@ try {
     accountType: 'User',
     permissionMode: 'read_write',
   });
-  upsertProjectRepositoryLink(project.id, 77, {
+  const repositoryLink = upsertProjectRepositoryLink(project.id, 77, {
     id: 9001,
     name: 'thaweephan',
     fullName: 'leakim69/thaweephan',
@@ -202,6 +202,12 @@ try {
 
   await git(workdir, ['remote', 'set-url', 'origin', remote]);
 
+  const pendingMerge = await postMessage(secondTask.id);
+  assert.equal(pendingMerge.status, 409, JSON.stringify(pendingMerge.body));
+  assert.equal(pendingMerge.body.code, 'PROJECT_CHECKPOINT_PENDING');
+  assert.equal(getProjectEditor(project.id)?.taskId, firstTask.id);
+  assert.equal((await projectCp.status({ projectId: project.id, taskId: firstTask.id })).clean, false);
+  await projectCp.commitPush({ projectId: project.id, taskId: firstTask.id, repositoryLink, message: 'Publish synchronized checkpoint' });
   const handedOff = await postMessage(secondTask.id);
   assert.equal(handedOff.status, 200, JSON.stringify(handedOff.body));
   assert.equal(handedOff.body.workdir, workdir);

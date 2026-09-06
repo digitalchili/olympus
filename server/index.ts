@@ -12,7 +12,8 @@ import { getTask } from './db/queries.js';
 import { getLatestTaskAgentRun, recoverInterruptedTaskAgentRuns } from './db/task-agent-runs.js';
 import { getQueuedTaskMessage, listQueuedTaskMessages } from './db/task-message-queue.js';
 import { assertQueuedMessageDeliveryResponse, configureQueuedMessageDispatcher, createQueuedMessageDispatcher } from './queued-message-dispatcher.js';
-import { checkDiskSpaceAndAlert } from './disk-alert.js';
+import { pollDiskSpaceAndAlert } from './disk-alert.js';
+import { cancelAllCodingVerifications } from './coding-verification.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -137,10 +138,10 @@ async function main() {
 
   const diskAlertTimer = setInterval(() => {
     if (shuttingDown) return;
-    void checkDiskSpaceAndAlert();
+    void pollDiskSpaceAndAlert({ canWrite: () => drainController.status().ready });
   }, 60_000);
   diskAlertTimer.unref();
-  void checkDiskSpaceAndAlert();
+  void pollDiskSpaceAndAlert({ canWrite: () => drainController.status().ready });
 
   const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;
@@ -176,15 +177,16 @@ async function shutdown(reason: ShutdownReason, exitCode = 0): Promise<void> {
   const drainTimeoutMs = Number.parseInt(process.env.OLYMPUS_DRAIN_TIMEOUT_MS || '120000', 10);
   const idle = await drainController.waitForIdle(drainTimeoutMs);
   if (!idle) console.error(`Drain timed out after ${drainTimeoutMs}ms; stopping with active work.`);
-  closeClientsForRestart();
-  closeSubscribersForRestart();
-
   const forceExit = setTimeout(() => {
     console.error(`Forced shutdown after ${reason}`);
     httpServer.closeAllConnections();
     process.exit(1);
   }, 10_000);
   forceExit.unref();
+
+  await cancelAllCodingVerifications();
+  closeClientsForRestart();
+  closeSubscribersForRestart();
 
   const results = await Promise.allSettled([
     closeHttpServer(),

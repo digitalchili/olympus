@@ -5,10 +5,14 @@ import { insertTask, updateTask } from './db/queries.js';
 import { broadcast } from './events.js';
 import db from './db/index.js';
 import { DEFAULT_PROFILE_NAME, type Task } from '../shared/types.js';
+import { errorCode } from './errors.js';
+import { operationalLog } from './observability.js';
 
 export const DISK_ALERT_THRESHOLD_PERCENT = 90;
 export const DISK_RECOVERY_THRESHOLD_PERCENT = 85;
 export const DISK_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours cooldown after dismissal
+const RECOVERED_ALERT_KEY = 'disk_alert_recovered_task';
+let checkQueue: Promise<unknown> = Promise.resolve();
 
 export interface DiskAlertCheckOptions {
   customStats?: {
@@ -18,6 +22,7 @@ export interface DiskAlertCheckOptions {
   customHome?: string;
   thresholdPercent?: number;
   recoveryPercent?: number;
+  canWrite?: () => boolean;
 }
 
 export interface DiskAlertResult {
@@ -38,7 +43,7 @@ export function getActiveDiskAlertTask(): Task | null {
 
 export function getRecentDiskAlertTask(sinceMs: number): Task | null {
   const stmt = db.prepare<[string, number], Task>(
-    "SELECT * FROM tasks WHERE routing_source = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1"
+    "SELECT * FROM tasks WHERE routing_source = ? AND updated_at > ? ORDER BY updated_at DESC, rowid DESC LIMIT 1"
   );
   return stmt.get('system_alert', sinceMs) ?? null;
 }
@@ -47,7 +52,24 @@ function formatGb(bytes: number): string {
   return (bytes / 1024 ** 3).toFixed(1);
 }
 
-export async function checkDiskSpaceAndAlert(
+/** Preserve observation order when timer and Settings requests overlap. */
+export function checkDiskSpaceAndAlert(options?: DiskAlertCheckOptions): Promise<DiskAlertResult> {
+  const check = checkQueue.then(() => runDiskSpaceCheck(options));
+  checkQueue = check.catch(() => undefined);
+  return check;
+}
+
+/** Background callers must settle even when the monitored disk cannot accept writes. */
+export async function pollDiskSpaceAndAlert(options?: DiskAlertCheckOptions): Promise<DiskAlertResult | null> {
+  try {
+    return await checkDiskSpaceAndAlert(options);
+  } catch (error) {
+    operationalLog('disk_alert_failed', { code: errorCode(error) ?? 'DISK_ALERT_FAILED' });
+    return null;
+  }
+}
+
+async function runDiskSpaceCheck(
   options?: DiskAlertCheckOptions
 ): Promise<DiskAlertResult> {
   const threshold = options?.thresholdPercent ?? DISK_ALERT_THRESHOLD_PERCENT;
@@ -76,6 +98,10 @@ export async function checkDiskSpaceAndAlert(
 
   const usedBytes = Math.max(0, totalBytes - freeBytes);
   const usedPercent = Math.round((usedBytes / totalBytes) * 100);
+  const skipped = { alerted: false, resolved: false, usedPercent, totalBytes, freeBytes };
+  // Read-only requests and queued timer polls must stop writing as soon as
+  // maintenance begins, including if they were admitted before the drain.
+  if (options?.canWrite?.() === false) return skipped;
 
   // 1. High Disk Usage Alert Condition (>= 90%)
   if (usedPercent >= threshold) {
@@ -91,9 +117,10 @@ export async function checkDiskSpaceAndAlert(
       };
     }
 
-    // Cooldown check: if an alert was already created recently (e.g. user moved to done), don't recreate immediately
+    // A user dismissal pauses the current incident; an observed recovery ends it.
     const recentAlert = getRecentDiskAlertTask(Date.now() - DISK_ALERT_COOLDOWN_MS);
-    if (recentAlert) {
+    const recoveredAlert = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(RECOVERED_ALERT_KEY) as { value: string } | undefined;
+    if (recentAlert && recentAlert.id !== recoveredAlert?.value) {
       return {
         alerted: true,
         resolved: false,
@@ -105,6 +132,7 @@ export async function checkDiskSpaceAndAlert(
     }
 
     const mount = await detectStorageMount(olympusHome);
+    if (options?.canWrite?.() === false) return skipped;
     const deviceName = mount?.device || 'Attached Storage';
 
     const title = `⚠️ Storage Alert: High Disk Usage on ${deviceName} (${usedPercent}%)`;
@@ -135,6 +163,14 @@ export async function checkDiskSpaceAndAlert(
   // 2. Recovery Condition (< 85%)
   if (usedPercent < recovery) {
     const activeAlert = getActiveDiskAlertTask();
+    const recoveredAlert = activeAlert ?? getRecentDiskAlertTask(Date.now() - DISK_ALERT_COOLDOWN_MS);
+    if (recoveredAlert) {
+      db.prepare(`
+        INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        WHERE value != excluded.value
+      `).run(RECOVERED_ALERT_KEY, recoveredAlert.id, Date.now());
+    }
     if (activeAlert && (activeAlert.status === 'in_review' || activeAlert.status === 'in_progress')) {
       const resolutionNote = `Storage space recovered to ${usedPercent}% (${formatGb(freeBytes)} GB free of ${formatGb(totalBytes)} GB). Alert resolved automatically.`;
       const updated = updateTask(activeAlert.id, {

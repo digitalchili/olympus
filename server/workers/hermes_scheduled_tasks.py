@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 from typing import Any
 
 from hermes_worker_utils import (
@@ -20,6 +19,26 @@ from hermes_worker_utils import (
 
 _SCHEDULED_TASKS_TICKER_STARTED = False
 _SCHEDULED_TASKS_TICKER_LOCK = threading.Lock()
+_SCHEDULED_TASKS_DISPATCH_LOCK = threading.RLock()
+_SCHEDULED_TASKS_WAKE = threading.Event()
+# Node acknowledges the desired state before worker readiness. A cold/restarted
+# worker must not start jobs before its owning profile receives maintenance state.
+_SCHEDULED_TASKS_DRAINING = True
+
+
+def set_scheduled_task_drain(draining: bool) -> dict[str, Any]:
+    global _SCHEDULED_TASKS_DRAINING
+    with _SCHEDULED_TASKS_DISPATCH_LOCK:
+        changed = draining != _SCHEDULED_TASKS_DRAINING
+        _SCHEDULED_TASKS_DRAINING = draining
+        scheduler = sys.modules.get("cron.scheduler")
+        # An unloaded scheduler cannot have dispatched work. Once loaded, require
+        # Hermes's native inventory rather than interpreting an error as idle.
+        active = len(scheduler.get_running_job_ids()) if scheduler is not None else 0
+        result = {"draining": draining, "activeRuns": active}
+    if changed and not draining:
+        _SCHEDULED_TASKS_WAKE.set()
+    return result
 
 
 def _ensure_imports() -> None:
@@ -215,9 +234,12 @@ def trigger_scheduled_task(job_id: Any) -> dict[str, Any]:
     from cron.jobs import trigger_job
 
     scheduled_task_id = _validate_path_segment(job_id, "Scheduled task ID")
-    job = _normalize_scheduled_task(trigger_job(scheduled_task_id))
-    if job is not None:
-        _kick_immediate_tick()
+    with _SCHEDULED_TASKS_DISPATCH_LOCK:
+        if _SCHEDULED_TASKS_DRAINING:
+            raise WorkerError("Scheduled tasks are paused while Olympus drains", code="maintenance_drain")
+        job = _normalize_scheduled_task(trigger_job(scheduled_task_id))
+        if job is not None:
+            _kick_immediate_tick()
     return {"scheduledTask": job}
 
 
@@ -246,21 +268,30 @@ def remove_scheduled_task(job_id: Any) -> dict[str, Any]:
 
 
 def tick_scheduled_tasks() -> int:
+    with _SCHEDULED_TASKS_DISPATCH_LOCK:
+        if _SCHEDULED_TASKS_DRAINING:
+            return 0
     _ensure_imports()
     from cron.scheduler import tick
 
-    return int(tick(verbose=False) or 0)
+    # Hold admission through native dispatch, not job execution. Hermes keeps
+    # queued and running jobs in get_running_job_ids until their full run settles.
+    with _SCHEDULED_TASKS_DISPATCH_LOCK:
+        if _SCHEDULED_TASKS_DRAINING:
+            return 0
+        return int(tick(verbose=False, sync=False, can_dispatch=lambda: not _SCHEDULED_TASKS_DRAINING) or 0)
 
 
 def _scheduled_tasks_ticker_loop() -> None:
     while True:
+        _SCHEDULED_TASKS_WAKE.wait(60)
+        _SCHEDULED_TASKS_WAKE.clear()
         try:
             executed = tick_scheduled_tasks()
             if executed:
                 print(f"[hermes-worker] scheduled task tick executed {executed} job(s)", file=sys.stderr, flush=True)
         except Exception as exc:
             print(f"[hermes-worker] scheduled task tick failed: {exc}", file=sys.stderr, flush=True)
-        time.sleep(60)
 
 
 def start_scheduled_task_ticker() -> None:

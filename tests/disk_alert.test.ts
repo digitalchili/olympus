@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
-import {
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Task } from '../shared/types.js';
+
+const root = await mkdtemp(join(tmpdir(), 'olympus-disk-alert-test-'));
+process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
+process.env.HERMES_HOME = join(root, 'hermes');
+process.env.DB_PATH = join(root, 'test.db');
+const {
   checkDiskSpaceAndAlert,
   getActiveDiskAlertTask,
-  DISK_ALERT_THRESHOLD_PERCENT,
-  DISK_RECOVERY_THRESHOLD_PERCENT,
-} from '../server/disk-alert.js';
-import { deleteTask, getTask } from '../server/db/queries.js';
-import type { Task, TaskStatus } from '../shared/types.js';
-
-// Clean up any existing alert task
-const existing = getActiveDiskAlertTask();
-if (existing) {
-  deleteTask(existing.id);
-}
+} = await import('../server/disk-alert.js');
+const { getTask } = await import('../server/db/queries.js');
+const { default: db } = await import('../server/db/index.js');
 
 let createdTaskId: string | null = null;
 
@@ -137,13 +138,8 @@ try {
   assert.equal(list[1].id, 'task-2');
   assert.equal(list[2].id, 'task-1');
 } finally {
-  if (createdTaskId) {
-    try {
-      deleteTask(createdTaskId);
-    } catch {
-      // Ignore
-    }
-  }
+  db.close();
+  await rm(root, { recursive: true, force: true });
 }
 
 console.log('Disk alert tests passed');

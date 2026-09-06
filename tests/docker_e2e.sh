@@ -7,6 +7,8 @@ suffix="$$"
 project="olympus-e2e-$suffix"
 hermes_volume="$project-hermes"
 state_volume="$project-state"
+restore_volume="$project-restored-state"
+restore_container="$project-restored"
 image_v1=${OLYMPUS_E2E_IMAGE_V1:-olympus-dispatch:e2e-v1}
 image_v2=${OLYMPUS_E2E_IMAGE_V2:-olympus-dispatch:e2e-v2}
 sandbox=$(mktemp -d "${TMPDIR:-/tmp}/olympus-e2e.XXXXXX")
@@ -15,7 +17,8 @@ cleanup() {
   status=$?
   if [ "${KEEP_OLYMPUS_E2E:-0}" != 1 ]; then
     (cd "$sandbox" && COMPOSE_PROJECT_NAME="$project" docker compose -f docker-compose.ha.yml --profile blue --profile green down --remove-orphans >/dev/null 2>&1) || true
-    docker volume rm "$state_volume" "$hermes_volume" >/dev/null 2>&1 || true
+    docker rm -f "$restore_container" >/dev/null 2>&1 || true
+    docker volume rm "$state_volume" "$hermes_volume" "$restore_volume" >/dev/null 2>&1 || true
     rm -rf "$sandbox"
   else
     printf 'Retained E2E sandbox: %s\n' "$sandbox" >&2
@@ -76,7 +79,8 @@ curl --fail --silent "http://127.0.0.1:$port/api/ready" >/dev/null
 [ -n "$(find backups -name '*.integrity' -print -quit)" ]
 [ "$(cat "$(find backups -name '*.integrity' -print -quit)")" = ok ]
 backup_file=$(find backups -name '*.sqlite' -print -quit)
-docker run --rm --network none -v "$sandbox/backups:/backups:ro" --entrypoint node "$image_v2" -e \
+docker run --rm --network none -v "$sandbox/backups:/backups:ro" --entrypoint sh "$image_v2" \
+  -c 'if [ -x /opt/olympus-node/bin/node ]; then exec /opt/olympus-node/bin/node "$@"; else exec node "$@"; fi' olympus-node -e \
   'const Database=require("better-sqlite3"); const db=new Database(process.argv[1],{readonly:true}); const row=db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = ?").get("E2E persistence sentinel"); if(row.n !== 1) process.exit(1)' \
   "/backups/$(basename "$backup_file")"
 
@@ -102,4 +106,31 @@ curl --fail --silent "http://127.0.0.1:$port/api/ready" >/dev/null
 [ -n "$(find backups -name '*.sqlite' -print -quit)" ]
 [ -n "$(find backups -name '*-state.tgz' -print -quit)" ]
 
-printf 'Docker E2E passed: fresh install, drain guard, verified backup, promotion, failed-promotion recovery, and immutable rollback.\n'
+# Restore a matching archive/database pair into a fresh volume and boot it.
+# The active installation and its Hermes state are never used by this container.
+backup_file=$(find backups -name '*.sqlite' -print | sort | tail -1)
+backup_stem=$(basename "$backup_file" .sqlite)
+docker volume create "$restore_volume" >/dev/null
+docker run --rm --network none --user 0:0 -v "$restore_volume:/restore" \
+  -v "$sandbox/backups:/backups:ro" -e BACKUP_STEM="$backup_stem" --entrypoint sh "$image_v1" \
+  -c 'cd /restore && tar -xzf "/backups/$BACKUP_STEM-state.tgz" && mkdir -p data && cp "/backups/$BACKUP_STEM.sqlite" data/olympus-dispatch.db && chown -R 10000:10000 /restore'
+docker run -d --name "$restore_container" --network none \
+  --tmpfs /opt/data:uid=10000,gid=10000,mode=700 \
+  -e HOME=/opt/data/home -e HERMES_HOME=/opt/data \
+  -e HERMES_DISABLE_LAZY_INSTALLS=1 -e HERMES_WRITE_SAFE_ROOT=/opt/data \
+  -e OLYMPUS_DISPATCH_HOME=/opt/data/olympus-dispatch \
+  -e DB_PATH=/opt/data/olympus-dispatch/data/olympus-dispatch.db \
+  -v "$restore_volume:/opt/data/olympus-dispatch" "$image_v1" >/dev/null
+restore_ready=0
+for attempt in $(seq 1 60); do
+  if docker exec "$restore_container" /opt/olympus-node/bin/node -e \
+    'fetch("http://127.0.0.1:6969/api/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'; then
+    restore_ready=1; break
+  fi
+  sleep 1
+done
+[ "$restore_ready" = 1 ] || { printf 'Restored server did not become ready.\n' >&2; exit 1; }
+docker exec "$restore_container" /opt/olympus-node/bin/node -e \
+  'fetch("http://127.0.0.1:6969/api/tasks").then(r=>r.json()).then(b=>{if(!b.tasks.some(t=>t.title==="E2E persistence sentinel"))process.exit(1)}).catch(()=>process.exit(1))'
+
+printf 'Docker E2E passed: fresh install, drain guard, verified backup, restored server/data, promotion, failed-promotion recovery, and immutable rollback.\n'

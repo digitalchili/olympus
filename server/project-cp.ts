@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import type { ProjectEditorLease, ProjectRepositoryLink, ProjectVersion } from '../shared/types.js';
 import {
   acquireProjectEditor,
+  advanceProjectEditorBaseline,
   getProjectEditor,
   getProjectEditorForTask,
   getProjectVersion,
@@ -45,6 +46,19 @@ export class ProjectRepositoryBusyError extends Error {
     public readonly activeTaskTitle: string,
   ) {
     super(`${activeTaskTitle} is currently using this Project repository`);
+  }
+}
+
+export class ProjectRepositoryMergeConflictError extends Error {
+  constructor(public readonly conflictingFiles: string[], public readonly activeTaskId?: string) {
+    const files = conflictingFiles.slice(0, 8).map(file => JSON.stringify(file)).join(', ');
+    super(`This Project branch conflicts with the latest GitHub changes in ${files}${conflictingFiles.length > 8 ? ', …' : ''}. Existing work is preserved. ${activeTaskId ? 'Open the previous editor task to resolve the conflicting changes, then retry this task.' : 'Resolve the conflicting changes in the Project checkout, then sync again.'}`);
+  }
+}
+
+export class ProjectRepositoryCheckpointError extends Error {
+  constructor(public readonly activeTaskId: string) {
+    super('Synchronizing this Project created a local merge checkpoint. Open the previous editor task and use Commit & Push, then retry this task. Existing work and editor ownership are preserved.');
   }
 }
 
@@ -246,6 +260,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     workdir: string,
     repositoryLink: ProjectRepositoryLink,
     tokenProvider?: InstallationTokenProvider,
+    lease?: ProjectEditorLease,
   ): Promise<void> {
     const token = await tokenFor(repositoryLink, tokenProvider);
     const auth = { env: gitHubAuthEnv(token) };
@@ -253,21 +268,43 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     if (!protectedBranch || protectedBranch === repositoryLink.defaultBranch) {
       throw new Error('Managed Project checkout is not on a safe Olympus branch');
     }
+    if (lease && lease.branchName !== protectedBranch) throw new Error('Project editor branch changed; inspect the checkout before syncing');
+    await ensureIdentity(git, workdir);
+    const recordProgress = async (publishedRef: string) => {
+      if (!lease) return;
+      const head = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+      const published = (await git(workdir, ['rev-parse', publishedRef])).stdout.trim();
+      if (head !== published) return;
+      if (!advanceProjectEditorBaseline(lease.id, lease.baseSha, head, now())) throw new Error('Project editor changed during synchronization');
+      lease.baseSha = head;
+    };
     const remoteProtected = await git(workdir, ['ls-remote', '--heads', 'origin', `refs/heads/${protectedBranch}`], auth);
     if (remoteProtected.stdout.trim()) {
       await git(workdir, ['fetch', 'origin', `refs/heads/${protectedBranch}:refs/remotes/origin/${protectedBranch}`], auth);
       await git(workdir, ['merge', '--ff-only', `origin/${protectedBranch}`]);
+      await recordProgress(`origin/${protectedBranch}`);
     }
     await git(workdir, ['fetch', 'origin', `refs/heads/${repositoryLink.defaultBranch}:refs/remotes/origin/${repositoryLink.defaultBranch}`], auth);
     try {
       await git(workdir, ['merge', '--no-edit', `origin/${repositoryLink.defaultBranch}`]);
     } catch (error) {
+      let conflictingFiles: string[] = [];
+      try {
+        const result = await git(workdir, ['diff', '--name-only', '--diff-filter=U', '-z']);
+        conflictingFiles = result.stdout.split('\0').filter(Boolean).slice(0, MAX_CHANGED_FILES).map(file => file.slice(0, 500));
+      } catch { /* Preserve the original error when Git cannot inspect its index. */ }
       try {
         await git(workdir, ['merge', '--abort']);
       } catch {
-        // A failed merge can exit before MERGE_HEAD exists; preserve the original error.
+        // Never imply restoration succeeded if Git still has an unresolved operation.
+        if (conflictingFiles.length) throw new Error('Git could not restore this Project after a merge conflict. Inspect the checkout before retrying; existing editor ownership was preserved.');
       }
+      if (conflictingFiles.length) throw new ProjectRepositoryMergeConflictError(conflictingFiles, lease?.taskId);
       throw error;
+    }
+    await recordProgress(`origin/${repositoryLink.defaultBranch}`);
+    if (lease && !(await readStatus(lease.projectId, lease.taskId)).clean) {
+      throw new ProjectRepositoryCheckpointError(lease.taskId);
     }
   }
 
@@ -351,7 +388,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
           if (!canHandOff) {
             throw new ProjectRepositoryBusyError(existing.taskId, owner?.title ?? 'Another task');
           }
-          await syncManagedCheckout(existing.workdir, input.repositoryLink, input.tokenProvider);
+          await syncManagedCheckout(existing.workdir, input.repositoryLink, input.tokenProvider, existing);
           const branchName = (await git(existing.workdir, ['branch', '--show-current'])).stdout.trim();
           const baseSha = (await git(existing.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
           return transferProjectEditor({
@@ -509,7 +546,11 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         }
 
         const headBefore = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-        await syncManagedCheckout(workdir, input.repositoryLink, input.tokenProvider);
+        const editor = getProjectEditor(input.projectId);
+        if (editor && !(await readStatus(input.projectId, editor.taskId)).clean) {
+          throw new Error('Project has a local checkpoint waiting to be pushed; publish it before syncing.');
+        }
+        await syncManagedCheckout(workdir, input.repositoryLink, input.tokenProvider, editor ?? undefined);
         const headAfter = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
 
         const updated = headBefore !== headAfter;

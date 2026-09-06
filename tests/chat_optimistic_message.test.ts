@@ -5,8 +5,14 @@ import {
   reconcileOptimisticChatSnapshot,
   rollbackOptimisticChatRun,
   shouldCreateOptimisticChatRun,
+  shouldShowChatSendError,
 } from '../client/src/hooks/useChat.js';
 import type { LiveChatRun } from '../shared/types.js';
+
+assert.equal(shouldShowChatSendError(409, 'PROJECT_MERGE_CONFLICT'), true, 'Git conflicts must show recovery guidance');
+assert.equal(shouldShowChatSendError(409, 'PROJECT_CHECKPOINT_PENDING'), true, 'unpublished merges must show the required action');
+assert.equal(shouldShowChatSendError(409), false, 'concurrent sends retain the quiet reconnect path');
+assert.equal(shouldShowChatSendError(503, 'PROJECT_REPOSITORY_PREPARE_FAILED'), true);
 
 const optimistic = createOptimisticChatRun('task-a', 'Follow-up question', 'chat', 100);
 assert.deepEqual(

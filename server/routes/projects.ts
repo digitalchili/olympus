@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { ProjectRepositoryCheckpointError, ProjectRepositoryMergeConflictError } from '../project-cp.js';
 import multer from 'multer';
 import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -23,7 +24,9 @@ import {
 } from '../db/projects.js';
 import { getTask, getTasksForProject } from '../db/queries.js';
 import { addProjectClient, initSSE, sendEvent } from '../events.js';
-import { getRunStatuses } from '../live-chat.js';
+import { getRunStatus, getRunStatuses } from '../live-chat.js';
+import { isVerifying } from '../coding-verification.js';
+import { claimProjectOperation, hasActiveTaskRun } from '../task-run-lifecycle.js';
 import {
   LocalProfileError,
   localProfileRegistry,
@@ -109,6 +112,15 @@ async function verifiedRepositoryLink(
 }
 
 function sendError(res: Response, error: unknown): Response {
+  if (error instanceof ProjectOperationActiveError) {
+    return res.status(409).json({ error: error.message, code: 'PROJECT_OPERATION_ACTIVE' });
+  }
+  if (error instanceof ProjectRepositoryCheckpointError) {
+    return res.status(409).json({ error: error.message, code: 'PROJECT_CHECKPOINT_PENDING', activeTaskId: error.activeTaskId });
+  }
+  if (error instanceof ProjectRepositoryMergeConflictError) {
+    return res.status(409).json({ error: error.message, code: 'PROJECT_MERGE_CONFLICT', conflictingFiles: error.conflictingFiles, activeTaskId: error.activeTaskId });
+  }
   if (error instanceof ProjectAccessError) {
     return res.status(error.status).json({ error: error.message, code: error.code });
   }
@@ -191,6 +203,26 @@ function requireWriteRepository(projectId: string): ProjectRepositoryLink {
     throw Object.assign(new Error('Connect a write-ready GitHub repository before using Commit & Push'), { statusCode: 409 });
   }
   return repositoryLink;
+}
+
+class ProjectOperationActiveError extends Error {
+  constructor() { super('This Project has work in progress. Wait for its task or checks to finish before changing the repository.'); }
+}
+
+async function withProjectMutation<T>(projectId: string, mutate: () => Promise<T>): Promise<T> {
+  const release = claimProjectOperation(projectId);
+  if (!release) throw new ProjectOperationActiveError();
+  try {
+    const busy = getTasksForProject(projectId).some(task => {
+      const status = getRunStatus(task.id)?.status;
+      return hasActiveTaskRun(task.id) || status === 'streaming' || status === 'compacting' || isVerifying(task.id);
+    });
+    if (busy) throw new ProjectOperationActiveError();
+    return await mutate();
+  } finally {
+    // Git must settle before another caller can own this checkout, even after disconnect.
+    release();
+  }
 }
 
 function tokenProvider(github: StudioGitHubGateway | undefined) {
@@ -496,13 +528,13 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       const task = requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
-      const editor = await projectCp.acquireEditor({
+      const editor = await withProjectMutation(projectId, () => projectCp.acquireEditor({
         projectId,
         taskId,
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
         repositoryLink,
         tokenProvider: tokenProvider(github),
-      });
+      }));
       return res.json({ editor: publicEditor(editor) });
     } catch (error) {
       return sendError(res, error);
@@ -516,13 +548,13 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       const task = requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
-      const editor = await projectCp.prepareTask({
+      const editor = await withProjectMutation(projectId, () => projectCp.prepareTask({
         projectId,
         taskId,
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
         repositoryLink,
         tokenProvider: tokenProvider(github),
-      });
+      }));
       return res.json({ editor: publicEditor(editor) });
     } catch (error) {
       if (error instanceof ProjectRepositoryBusyError) {
@@ -567,7 +599,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = taskIdFromBody(req.body);
       requireProjectEditorTask(req, registry, projectId, taskId);
-      const editor = await projectCp.releaseEditor({ projectId, taskId });
+      const editor = await withProjectMutation(projectId, () => projectCp.releaseEditor({ projectId, taskId }));
       return res.json({ editor: publicEditor(editor) });
     } catch (error) {
       return sendError(res, error);
@@ -625,11 +657,11 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const repositoryLink = requireWriteRepository(projectId);
-      const result = await projectCp.sync({
+      const result = await withProjectMutation(projectId, () => projectCp.sync({
         projectId,
         repositoryLink,
         tokenProvider: tokenProvider(github),
-      });
+      }));
       return res.json(result);
     } catch (error) {
       return sendError(res, error);
@@ -644,14 +676,14 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
       const message = typeof req.body?.message === 'string' ? req.body.message : '';
-      const version = await projectCp.commitPush({
+      const version = await withProjectMutation(projectId, () => projectCp.commitPush({
         projectId,
         taskId,
         repositoryLink,
         message,
         tokenProvider: tokenProvider(github),
         deployToDefaultBranch: Boolean(req.body?.deployToDefaultBranch),
-      });
+      }));
       return res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) });
     } catch (error) {
       return sendError(res, error);
@@ -675,13 +707,13 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
-      const version = await projectCp.revert({
+      const version = await withProjectMutation(projectId, () => projectCp.revert({
         projectId,
         taskId,
         repositoryLink,
         versionId: routeId(req.params.versionId),
         tokenProvider: tokenProvider(github),
-      });
+      }));
       return res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) });
     } catch (error) {
       return sendError(res, error);

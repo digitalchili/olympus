@@ -30,7 +30,8 @@ host_uid=$(id -u); host_gid=$(id -g)
 # the UID-10000 state volume and return host-owned backup files through the bind mount.
 docker run --rm --network none --user 0:0 \
   -e BACKUP_STAMP="$stamp" -e BACKUP_UID="$host_uid" -e BACKUP_GID="$host_gid" \
-  -v "$state_volume:/state" -v "$absolute_destination:/backup" "$image" \
+  -v "$state_volume:/state" -v "$absolute_destination:/backup" --entrypoint sh "$image" \
+  -c 'if [ -x /opt/olympus-node/bin/node ]; then exec /opt/olympus-node/bin/node "$@"; else exec node "$@"; fi' \
   node -e 'const Database=require("better-sqlite3"),fs=require("fs");const stamp=process.env.BACKUP_STAMP;const src="/state/data/olympus-dispatch.db",dst=`/backup/olympus-${stamp}.sqlite`;const db=new Database(src);db.pragma("busy_timeout=5000");db.pragma("wal_checkpoint(TRUNCATE)");db.backup(dst).then(()=>{db.close();const copy=new Database(dst,{readonly:true});const check=copy.pragma("integrity_check",{simple:true});copy.close();if(check!=="ok")throw Error("integrity_check: "+check);const marker=`/backup/olympus-${stamp}.integrity`;fs.writeFileSync(marker,"ok\n");fs.chownSync(dst,+process.env.BACKUP_UID,+process.env.BACKUP_GID);fs.chownSync(marker,+process.env.BACKUP_UID,+process.env.BACKUP_GID)}).catch(e=>{console.error(e.message);process.exit(1)})'
 
 docker run --rm --network none --user 0:0 \

@@ -10,6 +10,7 @@ const root = await mkdtemp(join(tmpdir(), 'olympus-060-browser-'));
 process.env.HERMES_HOME = join(root, 'hermes');
 process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
 process.env.DB_PATH = join(root, 'state.db');
+process.env.OLYMPUS_DISPATCH_PROJECT_ROOT = join(root, 'projects');
 await mkdir(process.env.HERMES_HOME, { recursive: true });
 await writeFile(join(process.env.HERMES_HOME, 'config.yaml'), '{}\n');
 const { default: app, adapter } = await import('../../server/app.js');
@@ -42,6 +43,7 @@ createTaskAgentRun({ taskId: reconnect.id, runId: started.snapshot.runId, kind: 
 beginRecovery(reconnect.id, started.snapshot.runId, started.snapshot.startedAt);
 adapter.getMessagePage = async (_sessionId, taskId) => ({ messages: [{ id: `${taskId}-reply`, task_id: taskId, role: 'assistant', content: taskId === task.id ? 'Implemented the source change. A required check still fails.' : 'Saved partial response before the connection was lost.', created_at: Date.now() - 1000 }], pageInfo: { hasOlder: false, olderCursor: null } });
 app.post('/qa/checks-pass', async (_req, res) => { await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'console.log("All required checks passed")']] })); res.json({ ok: true }); });
+app.post('/qa/checks-slow', async (_req, res) => { await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'console.log("Check running until stopped");setInterval(()=>{},1000)']] })); res.json({ ok: true }); });
 app.post('/qa/change-source', async (_req, res) => { await writeFile(join(cwd, 'source.txt'), 'changed after verification\n'); res.json({ ok: true }); });
 app.post('/qa/expire-stream', (_req, res) => {
   finishTaskAgentRun(started.snapshot.runId, 'error', Date.now(), 'worker_restarted');
@@ -49,8 +51,34 @@ app.post('/qa/expire-stream', (_req, res) => {
   saveRecoveryCheckpoint(reconnect.id, started.snapshot.runId, { saved: true, source: 'task-continuation-journal' });
   discardRun(reconnect.id); closeSubscribersForTasks([reconnect.id]); res.json({ ok: true });
 });
+
+// Exercise the real Project preparation error through the production chat UI.
+const { createProject, upsertProjectRepositoryLink } = await import('../../server/db/projects.js');
+const { upsertGitHubInstallation } = await import('../../server/db/studio-projects.js');
+const { createProjectCpService } = await import('../../server/project-cp.js');
+const { updateTask } = await import('../../server/db/queries.js');
+upsertGitHubInstallation({ id: 77, accountLogin: 'fixture', accountType: 'Organization', permissionMode: 'read_write' });
+const project = createProject({ name: 'Project conflict fixture', purpose: 'Preserve work during merge conflicts', managerProfileId: 'default', changedBy: 'fixture' });
+const remote = join(root, 'remote.git');
+await promisify(execFile)('git', ['clone', '--bare', cwd, remote]);
+const defaultBranch = (await git('branch', '--show-current')).stdout.trim();
+const repositoryLink = upsertProjectRepositoryLink(project.id, 77, { id: 77, name: 'fixture', fullName: 'fixture/repo', owner: 'fixture', private: false, defaultBranch, htmlUrl: 'https://example.invalid/repo', cloneUrl: remote });
+const previousEditor = insertTask({ title: 'Previous Project editor', status: 'in_progress', project_id: project.id, handling_profile_id: 'default' });
+const blocked = insertTask({ title: 'Continue after upstream changes', status: 'in_progress', project_id: project.id, handling_profile_id: 'default' });
+const projectCp = createProjectCpService({ rootDir: join(process.env.OLYMPUS_DISPATCH_HOME, 'data', 'project-checkouts') });
+const lease = await projectCp.prepareTask({ projectId: project.id, taskId: previousEditor.id, profileId: 'default', repositoryLink });
+await writeFile(join(lease.workdir, 'source.txt'), 'saved Project work\n');
+await projectCp.commitPush({ projectId: project.id, taskId: previousEditor.id, repositoryLink, message: 'Save Project work' });
+updateTask(previousEditor.id, { status: 'in_review' });
+const upstream = join(root, 'upstream');
+await promisify(execFile)('git', ['clone', remote, upstream]);
+const upstreamGit = (...args: string[]) => promisify(execFile)('git', args, { cwd: upstream });
+await upstreamGit('config', 'user.name', 'Isolated QA'); await upstreamGit('config', 'user.email', 'qa@example.invalid');
+await writeFile(join(upstream, 'source.txt'), 'conflicting upstream work\n');
+await upstreamGit('add', 'source.txt'); await upstreamGit('commit', '-m', 'Upstream change');
+await upstreamGit('push', 'origin', defaultBranch);
 const dist = resolve('dist/server/client/dist'); app.use(express.static(dist)); app.get(/.*/, (_req, res) => res.sendFile(join(dist, 'index.html')));
 const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
 const port = (server.address() as { port: number }).port;
-console.log(JSON.stringify({ coding: `http://127.0.0.1:${port}/tasks/${task.id}?profile=default`, reconnect: `http://127.0.0.1:${port}/tasks/${reconnect.id}?profile=default`, root }));
+console.log(JSON.stringify({ coding: `http://127.0.0.1:${port}/tasks/${task.id}?profile=default`, reconnect: `http://127.0.0.1:${port}/tasks/${reconnect.id}?profile=default`, conflict: `http://127.0.0.1:${port}/projects/${project.id}/tasks/${blocked.id}?profile=default`, root }));
 process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => { db.close(); void rm(root, { recursive: true, force: true }).then(() => process.exit()); }); });

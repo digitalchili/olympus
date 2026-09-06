@@ -1,6 +1,7 @@
 import type { Task } from '../shared/types.js';
 import { cancelCollaborationRun, getCollaborationRun } from './db/collaboration.js';
 import { getRunStatus } from './live-chat.js';
+import { cancelCodingVerification } from './coding-verification.js';
 
 export type ActiveCollaboration = {
   runId: string;
@@ -11,11 +12,45 @@ export type ActiveCollaboration = {
 
 export const activeCollaborations = new Map<string, ActiveCollaboration>();
 const activeTaskRuns = new Map<string, Set<Promise<void>>>();
+const taskOperations = new Set<string>();
+let activeOperations = 0;
+
+function claimOperations(keys: string[]): (() => void) | null {
+  if (keys.some(key => taskOperations.has(key))) return null;
+  keys.forEach(key => taskOperations.add(key));
+  activeOperations += 1;
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      keys.forEach(key => taskOperations.delete(key));
+      activeOperations -= 1;
+    }
+  };
+}
+
+/** Hold message preparation and manual verification across their awaited work. */
+export function claimTaskOperation(taskId: string, projectId?: string | null): (() => void) | null {
+  return claimOperations([`task:${taskId}`, ...(projectId ? [`project:${projectId}`] : [])]);
+}
+
+/** Direct Project mutations share ownership with task preparation and checks. */
+export function claimProjectOperation(projectId: string): (() => void) | null {
+  return claimOperations([`project:${projectId}`]);
+}
+
+export function getActiveOperationCount(): number {
+  return activeOperations;
+}
 
 export function getActiveTaskRunCount(): number {
   let count = 0;
   for (const runs of activeTaskRuns.values()) count += runs.size;
   return count;
+}
+
+export function hasActiveTaskRun(taskId: string): boolean {
+  return (activeTaskRuns.get(taskId)?.size ?? 0) > 0;
 }
 
 export function trackTaskRun(taskId: string, work: Promise<void>): Promise<void> {
@@ -45,6 +80,7 @@ export async function cancelTaskRunForDeletion(
   const reason = 'Task deleted';
   const collaboration = activeCollaborations.get(task.id);
   const live = getRunStatus(task.id);
+  await cancelCodingVerification(task.id, reason);
 
   if (collaboration && !collaboration.cancelled) {
     collaboration.cancelled = true;

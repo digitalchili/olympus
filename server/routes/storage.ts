@@ -8,10 +8,10 @@ import {
   resolveProjectRoot,
 } from '../paths.js';
 import { detectStorageMount } from '../storage-probe.js';
-import { checkDiskSpaceAndAlert } from '../disk-alert.js';
+import { pollDiskSpaceAndAlert } from '../disk-alert.js';
 import type { StorageStatus } from '../../shared/types.js';
 
-export function createStorageRouter(): Router {
+export function createStorageRouter(canWrite: () => boolean = () => true): Router {
   const router = Router();
 
   router.get('/', async (_req, res) => {
@@ -44,7 +44,8 @@ export function createStorageRouter(): Router {
     }
 
     if (disk) {
-      void checkDiskSpaceAndAlert({
+      void pollDiskSpaceAndAlert({
+        canWrite,
         customStats: { totalBytes: disk.totalBytes, freeBytes: disk.freeBytes },
       });
     }

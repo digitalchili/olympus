@@ -16,6 +16,11 @@ import type { InteractionResponse, NativeInteraction } from '../../shared/intera
 
 export type { AgentRunSettings, ContextUsage };
 
+export interface ScheduledTaskDrainStatus {
+  draining: boolean;
+  activeRuns: number;
+}
+
 export interface TaskBackgroundWork {
   available: boolean;
   continuation?: { status: 'pending' | 'blocked' | 'none'; reason?: string };
@@ -151,4 +156,8 @@ export interface AgentAdapter {
   removeScheduledTask(scheduledTaskId: string, profileId?: string | null): Promise<boolean>;
 
   tickScheduledTasks(profileId?: string | null): Promise<number>;
+
+  setScheduledTasksDraining?(draining: boolean): void;
+
+  getScheduledTaskDrainStatus?(): Promise<ScheduledTaskDrainStatus>;
 }

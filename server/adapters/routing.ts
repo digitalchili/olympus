@@ -1,6 +1,6 @@
 import { getTask } from '../db/queries.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
-import type { AgentAdapter, AgentRunOptions, StreamEvent, TaskBackgroundWork } from './types.js';
+import type { AgentAdapter, AgentRunOptions, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
 import type { AdapterDelegationEvent, AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
 import { acquireProfileWork } from '../profile-deletion.js';
@@ -26,6 +26,7 @@ export class ProfileAgentAdapter implements AgentAdapter {
   private delegationListeners = new Set<(event: AdapterDelegationEvent) => void>();
   private delegationResetListeners = new Set<(profileId?: string) => void>();
   private delegationUnsubscribers = new Map<LifecycleAdapter, () => void>();
+  private scheduledTasksDraining = false;
 
   constructor(private defaultAdapter: LifecycleAdapter, options: ProfileAdapterOptions = {}) {
     this.registry = options.registry ?? localProfileRegistry;
@@ -67,6 +68,36 @@ export class ProfileAgentAdapter implements AgentAdapter {
     await this.defaultAdapter.start?.();
   }
 
+  setScheduledTasksDraining(draining: boolean): void {
+    this.scheduledTasksDraining = draining;
+    for (const worker of [this.defaultAdapter, ...this.workers.values()]) {
+      worker.setScheduledTasksDraining?.(draining);
+    }
+  }
+
+  async getScheduledTaskDrainStatus(): Promise<ScheduledTaskDrainStatus> {
+    if (this.starting.size) throw new Error('A profile worker is still starting');
+    if ([...this.workers.entries()].some(([id, worker]) => worker.start && !this.started.has(id))) {
+      throw new Error('A profile worker is not ready');
+    }
+    const workers = [this.defaultAdapter, ...this.workers.values()];
+    const desired = this.scheduledTasksDraining;
+    const statuses = await Promise.all(workers.map(async (worker) => {
+      if (!worker.getScheduledTaskDrainStatus) throw new Error('Scheduled task inventory is unavailable');
+      return worker.getScheduledTaskDrainStatus();
+    }));
+    if (this.starting.size || desired !== this.scheduledTasksDraining
+      || this.workers.size + 1 !== workers.length
+      || [...this.workers.values()].some((worker) => !workers.includes(worker))) {
+      throw new Error('Profile workers changed during maintenance inspection');
+    }
+    if (statuses.some((status) => status.draining !== desired
+      || !Number.isSafeInteger(status.activeRuns) || status.activeRuns < 0)) {
+      throw new Error('Scheduled task inventory is unavailable');
+    }
+    return { draining: desired, activeRuns: statuses.reduce((sum, status) => sum + status.activeRuns, 0) };
+  }
+
   async stop(): Promise<void> {
     const workers = [this.defaultAdapter, ...this.workers.values()];
     this.workers.clear();
@@ -96,6 +127,7 @@ export class ProfileAgentAdapter implements AgentAdapter {
     let worker = this.workers.get(profile.id);
     if (!worker) {
       worker = this.createAdapter(profile) as LifecycleAdapter;
+      worker.setScheduledTasksDraining?.(this.scheduledTasksDraining);
       this.workers.set(profile.id, worker);
       this.bindDelegationEvents(worker, profile.id);
     }
@@ -105,10 +137,8 @@ export class ProfileAgentAdapter implements AgentAdapter {
       if (!start) {
         start = worker.start()
           .then(() => { this.started.add(profile.id); })
-          .catch((error) => {
-            if (this.workers.get(profile.id) === worker) this.workers.delete(profile.id);
-            throw error;
-          })
+          // Retain failed workers so maintenance cannot omit unknown work.
+          // A later request can retry startup on the same lifecycle adapter.
           .finally(() => {
             if (this.starting.get(profile.id) === start) this.starting.delete(profile.id);
           });

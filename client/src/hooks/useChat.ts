@@ -24,6 +24,11 @@ export type SendMessageResult =
   | { ok: true; runId?: string }
   | { ok: false; conflict?: boolean; error: string };
 
+export function shouldShowChatSendError(status: number, code?: string): boolean {
+  // A repository conflict needs user action; an already-running send can reconnect silently.
+  return status !== 409 || code?.startsWith('PROJECT_') === true;
+}
+
 interface SendMessageOptions {
   appendLocalError?: boolean;
   queuedMessageId?: string;
@@ -714,14 +719,14 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
+        const body = await res.json().catch(() => ({})) as { error?: string; code?: string };
         const error = body.error || `HTTP ${res.status}`;
         finishOptimisticSendError(
           taskId,
           optimisticRun?.runId,
           content,
           error,
-          res.status !== 409 && options?.appendLocalError !== false,
+          shouldShowChatSendError(res.status, body.code) && options?.appendLocalError !== false,
         );
         return { ok: false, conflict: res.status === 409, error };
       }

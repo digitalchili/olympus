@@ -1,4 +1,5 @@
 import { isVerifying } from '../coding-verification.js';
+import { claimTaskOperation, hasActiveTaskRun } from '../task-run-lifecycle.js';
 import { getRecovery, cancelRecovery } from '../run-recovery.js';
 import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
 import { Router } from 'express';
@@ -11,7 +12,6 @@ import type { Task } from '../../shared/types.js';
 /** Before queue claims, checkout changes or agent startup; never stops existing work. */
 export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgroundWork'>): Router {
   const router = Router();
-  const starting = new Set<string>();
   router.post('/:id/recovery/stop', requireTaskForProfile(getTask), (_req, res) => { cancelRecovery((res.locals.task as Task).id); res.json({ paused: true }); });
   router.get('/:id/recovery', requireTaskForProfile(getTask), (_req, res) => {
     const row = getRecovery((res.locals.task as Task).id);
@@ -21,14 +21,15 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
     const task = res.locals.task as Task;
     if (typeof req.body?.content !== 'string' || !req.body.content.trim()) return next();
     const live = getRunStatus(task.id);
-    if (isVerifying(task.id) || starting.has(task.id) || live?.status === 'streaming' || live?.status === 'compacting') {
+    if (hasActiveTaskRun(task.id) || isVerifying(task.id) || live?.status === 'streaming' || live?.status === 'compacting') {
       return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has a message in progress.' });
     }
     // Hold through downstream startup so two tabs cannot both pass an async probe.
-    starting.add(task.id);
-    const release = () => starting.delete(task.id);
+    const release = claimTaskOperation(task.id, task.project_id);
+    if (!release) return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has work in progress.' });
+    res.locals.releaseTaskOperation = release;
     res.once('finish', release);
-    res.once('close', release);
+    res.once('close', () => { if (!res.locals.preparingProjectTask) release(); });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const inventory = await Promise.race([
