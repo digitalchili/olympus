@@ -280,6 +280,7 @@ export function TaskChat({
     olderMessagesError,
     sendMessage,
     connectionState,
+    historyRefreshError,
     loadMessages,
     loadOlderMessages,
   } = useChat(reconcilePersistedTaskRun);
@@ -1099,6 +1100,7 @@ export function TaskChat({
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
+        {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
         <RunFailureBanner notice={runFailureNotice} />
         {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />

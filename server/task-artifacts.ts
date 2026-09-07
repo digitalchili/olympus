@@ -1,4 +1,3 @@
-import { createReadStream } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
@@ -164,10 +163,7 @@ export function createTaskArtifactsRouter(options: TaskArtifactsRouterOptions): 
       res.type(artifact.name);
       res.setHeader('Content-Length', String(artifact.size));
 
-      const stream = createReadStream(artifact.realPath, {
-        fd: artifact.handle.fd,
-        autoClose: true,
-      });
+      const stream = artifact.handle.createReadStream();
       artifact = null;
       stream.on('error', (error) => {
         if (res.headersSent) res.destroy(error);

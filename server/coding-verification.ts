@@ -6,7 +6,7 @@ import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import db from './db/index.js';
 import type { Task } from '../shared/types.js';
-import type { CodingEvidence, CodingCheck, SourceSnapshot } from '../shared/coding-evidence.js';
+import type { CodingEvidence, CodingCheck, RunningCodingCheck, SourceSnapshot } from '../shared/coding-evidence.js';
 
 const exec = promisify(execFile);
 const active = new Map<string, { controller: AbortController; done: Promise<void> }>();
@@ -84,14 +84,14 @@ async function commands(cwd: string): Promise<string[][]> {
     return ['test', 'typecheck', 'build'].filter(name => typeof pkg.scripts?.[name] === 'string').map(name => ['npm', 'run', name]);
   } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
 }
-async function runCheck(cwd: string, command: string[], timeoutMs: number, signal: AbortSignal): Promise<CodingCheck> {
+async function runCheck(cwd: string, command: string[], timeoutMs: number, signal: AbortSignal, onProgress: (check: RunningCodingCheck) => void): Promise<CodingCheck> {
   signal.throwIfAborted();
   const start = Date.now();
   return await new Promise(resolve => {
     let output = ''; let timedOut = false; let finished = false;
     const child = spawn(command[0], command.slice(1), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['ignore','pipe','pipe'] });
     const finish = (exitCode: number | null) => {
-      if (finished) return; finished = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+      if (finished) return; finished = true; clearTimeout(timer); clearInterval(progressTimer); signal.removeEventListener('abort', abort);
       resolve({ command, exitCode, output: redact(output), durationMs: Date.now() - start, timedOut });
     };
     const kill = () => {
@@ -104,13 +104,25 @@ async function runCheck(cwd: string, command: string[], timeoutMs: number, signa
       output += '\nVerification command exceeded its time budget.';
       kill();
     }, Math.max(1, timeoutMs));
-    const append = (chunk: Buffer) => { if (output.length < 64_000) output += chunk.toString().slice(0, 64_000 - output.length); };
+    let lastProgress = 0;
+    const publishProgress = () => {
+      lastProgress = Date.now();
+      onProgress({ command, output: redact(output), startedAt: start, durationMs: lastProgress - start });
+    };
+    // Persist bounded output while the process runs, plus a heartbeat for quiet
+    // commands. Throttle noisy processes so output cannot flood SQLite.
+    const progressTimer = setInterval(publishProgress, 1000);
+    publishProgress();
+    const append = (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-64_000);
+      if (Date.now() - lastProgress >= 250) publishProgress();
+    };
     child.stdout.on('data', append); child.stderr.on('data', append);
     child.on('error', error => { output += error.message; finish(null); });
     child.on('close', code => finish(code));
   });
 }
-export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 * 60_000): Promise<boolean> {
+export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 * 60_000, options: { skipUnchanged?: boolean } = {}): Promise<boolean> {
   if (active.has(task.id) || shuttingDown) return false;
   const controller = new AbortController();
   const signal = controller.signal;
@@ -121,19 +133,31 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
   const timer = setTimeout(() => controller.abort(new DOMException('Verification budget exhausted', 'TimeoutError')), Math.max(1, timeoutMs));
   try {
     evidence = read(task.id, runId);
+    const hadBaseline = evidence !== null;
     // A run may have created its repository after the initial baseline probe.
     if (!evidence) { await captureCodingBaseline(task, runId, signal); evidence = read(task.id, runId); }
     signal.throwIfAborted();
     if (!evidence || !task.workdir) return true;
     const workdir = evidence.workdir ?? task.workdir;
+    evidence.currentCheck = null;
     evidence.source = await sourceSnapshot(workdir, evidence.baseline.head, signal);
+    // Only automatic, non-coding turns can skip. A repository created during
+    // the turn has no starting snapshot and must still be verified.
+    if (options.skipUnchanged && hadBaseline && evidence.source.fingerprint === evidence.baseline.fingerprint) {
+      evidence.status = 'skipped'; evidence.checks = [];
+      evidence.reason = 'No repository changes or verification request in this turn. Checks were not run.';
+      return true;
+    }
     evidence.status = 'running'; evidence.checks = []; evidence.reason = null; evidence.updatedAt = Date.now(); save(evidence);
     const required = await commands(workdir);
     if (!required.length) { evidence.status = 'unconfigured'; evidence.reason = 'Configure .olympus/verification.json with the checks required for this project.'; return false; }
     for (const command of required) {
       signal.throwIfAborted();
       if (Date.now() >= deadline) { evidence.status = 'failed'; evidence.reason = 'Verification budget exhausted'; return false; }
-      const result = await runCheck(workdir, command, deadline - Date.now(), signal);
+      const result = await runCheck(workdir, command, deadline - Date.now(), signal, check => {
+        evidence!.currentCheck = check; evidence!.updatedAt = Date.now(); save(evidence!);
+      });
+      evidence.currentCheck = null;
       evidence.checks.push(result); evidence.updatedAt = Date.now(); save(evidence);
       signal.throwIfAborted();
       if (result.exitCode !== 0 || result.timedOut) { evidence.status = 'failed'; evidence.reason = 'A required verification command failed'; return false; }
@@ -145,7 +169,7 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
     evidence.status = 'failed'; evidence.reason = redact(error instanceof Error ? error.message : 'Verification failed'); return false;
   } finally {
     clearTimeout(timer);
-    try { if (evidence) { evidence.updatedAt = Date.now(); save(evidence); } }
+    try { if (evidence) { evidence.currentCheck = null; evidence.updatedAt = Date.now(); save(evidence); } }
     finally { active.delete(task.id); settled(); }
   }
 }
@@ -154,11 +178,21 @@ export async function readCodingEvidence(task: Task): Promise<CodingEvidence | n
   if (evidence?.source && evidence.status === 'passed' && task.workdir) {
     try { if ((await sourceSnapshot(evidence.workdir ?? task.workdir)).fingerprint !== evidence.source.fingerprint) evidence.status = 'stale'; }
     catch { evidence.status = 'stale'; }
+    if (evidence.status === 'stale') {
+      // Do not overwrite a newer manual verification that started during the scan.
+      const current = read(task.id);
+      if (current?.runId === evidence.runId && current.status === 'passed' && current.updatedAt === evidence.updatedAt) {
+        evidence.reason = 'Source changed or is unavailable. Run checks again.';
+        evidence.updatedAt = Date.now(); save(evidence);
+      }
+    }
   }
   return evidence;
 }
 
 export function codingReviewAllowed(taskId: string, runId: string): boolean {
   const evidence = read(taskId, runId);
-  return !evidence || evidence.status === 'passed';
+  // verifyCodingRun checks source freshness under its deadline before emitting
+  // done. Do not start another, uncancellable source scan after terminal delivery.
+  return !evidence || (evidence.status === 'passed' && evidence.source !== null);
 }

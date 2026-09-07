@@ -8,6 +8,7 @@ import type {
   TaskAgentRun,
   TaskMessage,
   TaskMessagePageInfo,
+  TaskRunState,
   ToolProgressEvent,
 } from '@shared/types';
 import { BASE, fetchMessages } from '../lib/api';
@@ -336,7 +337,7 @@ export function prependOlderMessages(current: ChatMessage[], older: ChatMessage[
   return [...uniqueOlder, ...current];
 }
 
-export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
+export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [stopped, setStopped] = useState(false);
@@ -353,6 +354,7 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
   const sourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionState, setConnectionState] = useState<'connected' | 'reconnecting'>('connected');
+  const [historyRefreshError, setHistoryRefreshError] = useState<string | null>(null);
   const taskIdRef = useRef<string | null>(null);
   const committedMessagesRef = useRef<ChatMessage[]>([]);
   const liveRunRef = useRef<LiveChatRun | null>(null);
@@ -385,6 +387,8 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
     const liveRun = currentLiveRun(liveRunRef.current, persistedLatestAgentRunRef.current);
 
     if (liveRun) {
+      // The board stream may miss completion even while the chat stream recovers.
+      if (['done', 'error', 'stopped'].includes(liveRun.status)) onRunStatus?.(liveRun);
       const isMessageRun = liveRun.kind === 'chat' || liveRun.kind === 'goal';
       const merged = isMessageRun ? messagesWithLiveRun(committed, liveRun) : committed;
       const assistant = isMessageRun ? findLastAssistant(liveRun.messages) : undefined;
@@ -409,7 +413,7 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
     setContext(liveContextRef.current);
     setModelResolution(persistedModelResolutionRef.current);
     setRunFailureNotice(runFailureNoticeForState({ liveRun: null, latestAgentRun: persistedLatestAgentRunRef.current }));
-  }, []);
+  }, [onRunStatus]);
 
   const schedulePublish = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -538,44 +542,60 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
 
     const source = new EventSource(`${BASE}${apiPathWithProfile(`/tasks/${encodeURIComponent(taskId)}/live`)}`);
     source.onmessage = (message) => {
-      if (taskIdRef.current !== taskId) return;
+      if (sourceRef.current !== source || taskIdRef.current !== taskId) return;
       try {
         applyLiveEvent(JSON.parse(message.data) as LiveEvent);
       } catch (err) {
         console.warn('Failed to parse live chat event:', message.data, err);
       }
     };
+    let historyRequest = 0;
     const refreshOnReconnect = () => {
       if (sourceRef.current !== source || source.readyState !== EventSource.OPEN) return;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      const request = ++historyRequest;
+      const isCurrentRequest = () => sourceRef.current === source
+        && taskIdRef.current === taskId
+        && source.readyState === EventSource.OPEN
+        && historyRequest === request;
       // Snapshot TTL/restarts can leave the server with no live snapshot to send.
       // Refresh durable history on every reconnect, without losing a newer run.
       void fetchMessages(taskId).then(({ messages, pageInfo, context, latestAgentRun }) => {
-        if (sourceRef.current !== source || taskIdRef.current !== taskId) return;
-        setConnectionState('connected');
+        if (!isCurrentRequest()) return;
+        setHistoryRefreshError(null);
         const live = liveRunRef.current;
         if (live && latestAgentRun && latestAgentRun.runId !== live.runId && latestAgentRun.startedAt < live.startedAt) return;
         committedMessagesRef.current = messages as ChatMessage[];
         messagePageInfoRef.current = pageInfo;
+        setMessagePageInfo(pageInfo);
         persistedLatestAgentRunRef.current = latestAgentRun ?? null;
-        onHistoryRun?.(latestAgentRun ?? null);
+        onRunStatus?.(latestAgentRun ?? null);
         persistedModelResolutionRef.current = latestAgentRun?.modelResolution ?? null;
         liveContextRef.current = context ?? null;
         liveRunRef.current = currentLiveRun(live, latestAgentRun ?? null);
         publishState();
       }).catch(() => {
-        if (sourceRef.current === source) {
-          setConnectionState('reconnecting');
+        if (isCurrentRequest()) {
+          setHistoryRefreshError('Chat history could not refresh. Retrying.');
           reconnectTimerRef.current = setTimeout(refreshOnReconnect, 2_000);
         }
       });
     };
-    source.onopen = refreshOnReconnect;
+    source.onopen = () => {
+      if (sourceRef.current !== source) return;
+      setConnectionState('connected');
+      refreshOnReconnect();
+    };
     source.onerror = () => {
-      if (sourceRef.current === source) setConnectionState('reconnecting');
+      if (sourceRef.current !== source) return;
+      ++historyRequest;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      setConnectionState('reconnecting');
     };
     sourceRef.current = source;
-  }, [applyLiveEvent, closeLiveSource, publishState, onHistoryRun]);
+  }, [applyLiveEvent, closeLiveSource, publishState, onRunStatus]);
 
   const clearAllState = useCallback(() => {
     teardown();
@@ -598,6 +618,8 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
     setMessagePageInfo(messagePageInfoRef.current);
     setIsLoadingOlderMessages(false);
     setOlderMessagesError(null);
+    setConnectionState('connected');
+    setHistoryRefreshError(null);
   }, [teardown]);
 
   const loadMessages = useCallback(async (taskId: string) => {
@@ -612,12 +634,12 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
     liveContextRef.current = persistedContext ?? null;
     persistedModelResolutionRef.current = latestAgentRun?.modelResolution ?? null;
     persistedLatestAgentRunRef.current = latestAgentRun ?? null;
-    onHistoryRun?.(latestAgentRun ?? null);
+    onRunStatus?.(latestAgentRun ?? null);
     setMessagePageInfo(pageInfo);
     publishState();
     openLiveSubscription(taskId);
     return msgs;
-  }, [clearAllState, openLiveSubscription, publishState, onHistoryRun]);
+  }, [clearAllState, openLiveSubscription, publishState, onRunStatus]);
 
   const loadOlderMessages = useCallback(async (taskId: string) => {
     const cursor = messagePageInfoRef.current.olderCursor;
@@ -798,6 +820,7 @@ export function useChat(onHistoryRun?: (run: TaskAgentRun | null) => void) {
     olderMessagesError,
     sendMessage,
     connectionState,
+    historyRefreshError,
     loadMessages,
     loadOlderMessages,
     reset: clearAllState,

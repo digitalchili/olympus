@@ -64,6 +64,81 @@ async function slowCheck(cwd: string, name: string) {
 }
 
 try {
+  await test('a greeting finishes without launching repository checks or claiming they passed', async () => {
+    const { task, cwd } = await fixture('greeting');
+    const { ready } = await slowCheck(cwd, 'greeting');
+    await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+    adapter.getBackgroundWork = idle;
+    adapter.chatStream = async function* (sessionId) {
+      yield { type: 'text_delta', content: 'Hello! How can I help?' };
+      yield { type: 'done', sessionId };
+    };
+    assert.equal((await post(task.id, { content: 'hi' })).status, 202);
+    await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+    assert.equal(existsSync(ready), false, 'a conversational turn must not start npm tests');
+    const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
+    assert.equal(evidence.status, 'skipped');
+    assert.deepEqual(evidence.checks, []);
+    assert.equal(evidence.baseline.fingerprint, evidence.source.fingerprint);
+    assert.deepEqual(evidence.source.changedFiles, []);
+    assert.equal(getTask(task.id)?.status, 'in_progress', 'skipping is not passing code review evidence');
+
+    const manual = await (await post(task.id, {}, 'verification')).json();
+    assert.equal(existsSync(ready), true, 'manual Run checks must still execute on the same source');
+    assert.equal(manual.evidence.status, 'passed');
+  });
+
+  for (const activity of ['source edit', 'terminal tool']) {
+    await test(`automatic verification detects ${activity} without a coding keyword in the prompt`, async () => {
+      const { task, cwd } = await fixture(activity.replaceAll(' ', '-'));
+      await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'console.log("verified")']] }));
+      await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+      adapter.getBackgroundWork = idle;
+      adapter.chatStream = async function* (sessionId) {
+        if (activity === 'source edit') await writeFile(join(cwd, 'source'), 'after');
+        else yield { type: 'tool_progress', tool: 'terminal', status: 'completed' };
+        yield { type: 'text_delta', content: 'Finished.' }; yield { type: 'done', sessionId };
+      };
+      await post(task.id, { content: 'Continue' });
+      await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+      const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
+      assert.equal(evidence.status, 'passed');
+      assert.equal(evidence.checks.length, 1);
+    });
+  }
+
+  for (const content of ['Run the tests', 'Verify', 'Fix the bug in source']) {
+    await test(`unchanged source still gets checks for: ${content}`, async () => {
+      const { task, cwd } = await fixture(`request-${content.replaceAll(' ', '-')}`);
+      const marker = join(root, `${task.id}-checked`);
+      await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'checked')`]] }));
+      await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+      adapter.getBackgroundWork = idle;
+      adapter.chatStream = async function* (sessionId) { yield { type: 'text_delta', content: 'Finished.' }; yield { type: 'done', sessionId }; };
+      await post(task.id, { content });
+      await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+      assert.equal(existsSync(marker), true);
+      assert.equal((await (await fetch(`${api}/${task.id}/verification`)).json()).evidence.status, 'passed');
+    });
+  }
+
+  await test('a revision-only change gets checked even with a clean working tree and no file diff', async () => {
+    const { task, cwd } = await fixture('revision-only');
+    await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'console.log("checked new revision")']] }));
+    await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+    adapter.getBackgroundWork = idle;
+    adapter.chatStream = async function* (sessionId) {
+      await git(cwd, 'commit', '--allow-empty', '-m', 'New revision');
+      yield { type: 'text_delta', content: 'Finished.' }; yield { type: 'done', sessionId };
+    };
+    await post(task.id, { content: 'Continue' });
+    await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+    const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
+    assert.equal(evidence.status, 'passed');
+    assert.notEqual(evidence.baseline.head, evidence.source.head);
+    assert.deepEqual(evidence.source.changedFiles, []);
+  });
+
   await test('new repositories require passing checks before review', async () => {
     const cwd = join(root, 'new-repository'); await mkdir(cwd);
     const task = insertTask({ title: 'Create repository', status: 'in_progress', workdir: cwd, profile_name: 'default' }); tasks.push(task.id);

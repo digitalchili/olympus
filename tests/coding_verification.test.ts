@@ -8,7 +8,7 @@ const root = await mkdtemp(join(tmpdir(), 'coding-evidence-'));
 process.env.DB_PATH = join(root, 'db.sqlite'); process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
 const { default: db } = await import('../server/db/index.js');
 const { insertTask } = await import('../server/db/queries.js');
-const { captureCodingBaseline, verifyCodingRun, readCodingEvidence } = await import('../server/coding-verification.js');
+const { captureCodingBaseline, verifyCodingRun, readCodingEvidence, codingReviewAllowed } = await import('../server/coding-verification.js');
 const cwd = join(root, 'repo'); await mkdir(join(cwd, '.olympus'), { recursive: true });
 const git = (...args: string[]) => promisify(execFile)('git', args, { cwd });
 try {
@@ -23,6 +23,7 @@ try {
  assert.equal(evidence?.status, 'passed'); assert.equal(evidence?.checks[0]?.exitCode, 0); assert.match(evidence?.checks[0]?.output ?? '', /checked/);
  await writeFile(join(cwd, 'source.txt'), 'after more edits');
  evidence = await readCodingEvidence(task); assert.equal(evidence?.status, 'stale', 'same HEAD does not mean same source');
+ assert.equal(codingReviewAllowed(task.id, 'run'), false, 'a detected stale result must not remain passed in the review gate');
  await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'process.exit(1)']] }));
  assert.equal(await verifyCodingRun(task, 'run', 2000), false);
  assert.equal((await readCodingEvidence(task))?.status, 'failed');

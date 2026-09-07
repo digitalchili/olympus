@@ -6,7 +6,7 @@ import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
 import { requireTaskForProfile } from '../profile-context.js';
 import { getRunStatus } from '../live-chat.js';
 import { getProjectEditor } from '../db/project-cp.js';
-import { isVerifying, readCodingEvidence, verifyCodingRun } from '../coding-verification.js';
+import { codingReviewAllowed, isVerifying, readCodingEvidence, verifyCodingRun } from '../coding-verification.js';
 import { broadcast } from '../events.js';
 import type { Task } from '../../shared/types.js';
 
@@ -30,7 +30,7 @@ codingVerificationRouter.post('/:id/verification', async (_req, res) => {
     const release = acquireProfileWork(task.handling_profile_id ?? task.profile_name ?? 'default');
     let passed = false;
     try { await trackTaskRun(task.id, verifyCodingRun(task, run.runId).then(result => { passed = result; })); } finally { release(); }
-    if (passed && getLatestTaskAgentRun(task.id)?.runId === run.runId && run.status === 'done') {
+    if (passed && codingReviewAllowed(task.id, run.runId) && getLatestTaskAgentRun(task.id)?.runId === run.runId && run.status === 'done') {
       const updated = updateTask(task.id, { status: 'in_review' });
       if (updated) broadcast({ type: 'task_updated', task: updated });
     }
