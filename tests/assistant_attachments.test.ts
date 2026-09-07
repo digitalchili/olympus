@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -49,6 +49,8 @@ try {
   await writeFile(fixturePath, pdfBytes);
   await writeFile(emptyPath, Buffer.alloc(0));
   await writeFile(outsidePath, Buffer.from('not approved'));
+  await symlink(outsidePath, join(projectWorkdir, 'outside-link.pdf'));
+  await writeFile(join(workspace, fixtureName), pdfBytes);
 
   const registry = new LocalProfileRegistry(hermesHome);
   const content = `Your document is ready.\n\nMEDIA:${fixturePath}`;
@@ -91,6 +93,24 @@ try {
     assert.match(response.headers.get('content-type') ?? '', /^application\/pdf\b/);
     assert.match(response.headers.get('content-disposition') ?? '', /generated review brief\.pdf/);
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), pdfBytes);
+
+    const relativeResponse = await fetch(`${base}?path=${encodeURIComponent(`./${fixtureName}`)}&profile=${encodeURIComponent(profileId)}`);
+    assert.equal(relativeResponse.status, 200, 'relative answer links resolve against the task working directory');
+    assert.deepEqual(Buffer.from(await relativeResponse.arrayBuffer()), pdfBytes);
+
+    task.workdir = null;
+    const workspaceResponse = await fetch(`${base}?path=${encodeURIComponent(fixtureName)}&profile=${encodeURIComponent(profileId)}`);
+    assert.equal(workspaceResponse.status, 200, 'tasks without a workdir resolve links in their profile workspace');
+    assert.deepEqual(Buffer.from(await workspaceResponse.arrayBuffer()), pdfBytes);
+    task.workdir = projectWorkdir;
+
+    const wrongProfileResponse = await fetch(`${base}?path=${encodeURIComponent(fixturePath)}&profile=default`);
+    assert.equal(wrongProfileResponse.status, 404);
+
+    for (const path of ['../outside.pdf', './outside-link.pdf']) {
+      const escaped = await fetch(`${base}?path=${encodeURIComponent(path)}&profile=${encodeURIComponent(profileId)}`);
+      assert.equal(escaped.status, 403, 'relative paths and symlinks cannot escape approved roots');
+    }
 
     const emptyResponse = await fetch(`${base}?path=${encodeURIComponent(emptyPath)}&profile=${encodeURIComponent(profileId)}`);
     assert.equal(emptyResponse.status, 422);

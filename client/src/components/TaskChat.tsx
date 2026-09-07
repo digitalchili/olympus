@@ -1030,7 +1030,7 @@ export function TaskChat({
                       )}
                       <div className="min-w-0 max-w-full overflow-hidden text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
                         {assistantText ? (
-                          <MarkdownContent content={assistantText} isStreaming={isLastAssistant && isStreaming} />
+                          <MarkdownContent content={assistantText} taskId={taskId} isStreaming={isLastAssistant && isStreaming} />
                         ) : (
                           showSpinner && (
                             <span className="inline-flex items-center gap-2 text-zinc-400 dark:text-zinc-500">

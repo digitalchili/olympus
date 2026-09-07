@@ -70,7 +70,8 @@ async function openTaskArtifact(
   const profile = taskProfile(task, registry);
   let realPath: string;
   try {
-    realPath = await realpath(resolve(expandHomePrefix(candidatePath)));
+    const workdir = expandHomePrefix(task.workdir || profile.workspaceDir);
+    realPath = await realpath(resolve(workdir, expandHomePrefix(candidatePath)));
   } catch {
     throw new TaskArtifactError(404, 'Artifact does not exist', 'ARTIFACT_NOT_FOUND');
   }

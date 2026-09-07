@@ -1,6 +1,7 @@
-import { memo } from 'react';
-import { Streamdown, type Components, type ControlsConfig } from 'streamdown';
+import { memo, useMemo } from 'react';
+import { Streamdown, defaultRehypePlugins, type Components, type ControlsConfig, type StreamdownProps } from 'streamdown';
 import { codeHighlighter } from '../lib/highlighter';
+import { isArtifactDownloadUrl, rewriteArtifactLinks } from '../lib/markdownArtifactLinks';
 import 'streamdown/styles.css';
 
 const plugins = { code: codeHighlighter };
@@ -14,11 +15,12 @@ const controls: ControlsConfig = {
 const components: Components = {
   a: ({ href, children, node: _node, ...props }) => (
     <a
+      {...props}
       href={href}
-      target="_blank"
+      target={isArtifactDownloadUrl(href) ? undefined : '_blank'}
+      download={isArtifactDownloadUrl(href) ? true : undefined}
       rel="noopener noreferrer"
       className="underline underline-offset-2 decoration-zinc-300 dark:decoration-zinc-600 hover:decoration-zinc-500 dark:hover:decoration-zinc-400 transition-colors"
-      {...props}
     >
       {children}
     </a>
@@ -40,10 +42,18 @@ const compactMarkdownClassName = [
 export const MarkdownContent = memo(function MarkdownContent({
   content,
   isStreaming = false,
+  taskId,
 }: {
   content: string;
   isStreaming?: boolean;
+  taskId?: string;
 }) {
+  const rehypePlugins = useMemo<StreamdownProps['rehypePlugins']>(() => [
+    defaultRehypePlugins.raw,
+    [rewriteArtifactLinks, { taskId }],
+    defaultRehypePlugins.sanitize,
+    defaultRehypePlugins.harden,
+  ], [taskId]);
   return (
     <Streamdown
       animated={isStreaming}
@@ -53,6 +63,7 @@ export const MarkdownContent = memo(function MarkdownContent({
       controls={controls}
       isAnimating={isStreaming}
       plugins={plugins}
+      rehypePlugins={rehypePlugins}
     >
       {content}
     </Streamdown>
