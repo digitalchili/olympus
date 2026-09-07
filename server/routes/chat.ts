@@ -1,4 +1,5 @@
 import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying } from '../coding-verification.js';
+import { requestsCodingVerification } from '../verification-request.js';
 import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
@@ -344,11 +345,8 @@ async function captureBaselineWithinBudget(task: Task, runId: string, budget: Ag
 
 async function verifyBeforeReview(task: Task, runId: string, budget: AgentRunBudget): Promise<boolean> {
   const run = getRun(task.id);
-  // Be conservative for coding/check requests and execution tools, even when
-  // the agent leaves a clean, unchanged checkout. Goals always require checks.
-  const requested = run?.kind === 'goal' || run?.messages.some(message =>
-    (message.role === 'user' && /\b(test|tests|check|checks|verify|verification|validate|validation|lint|typecheck|build|compile|fix|implement|refactor|debug|code|coding|patch|edit|modify|change|add|remove|delete|create|update|upgrade|install|run|execute)\b/i.test(message.content))
-    || message.tools?.some(tool => /terminal|execute|exec|bash|shell|write|edit|patch|code/i.test(tool.tool)),
+  const requested = run?.messages.some(message =>
+    message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {
     return await withinRunDeadline(

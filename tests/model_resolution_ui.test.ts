@@ -24,5 +24,4 @@ const direct = renderToStaticMarkup(createElement(RunModelResolution, {
     fallbackReason: null,
   },
 }));
-assert.match(direct, /Model:/);
-assert.doesNotMatch(direct, /Requested:/);
+assert.equal(direct, '', 'the selected model should not be repeated in a separate status panel');

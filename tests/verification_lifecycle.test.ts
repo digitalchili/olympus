@@ -88,7 +88,37 @@ try {
     assert.equal(manual.evidence.status, 'passed');
   });
 
-  for (const activity of ['source edit', 'terminal tool']) {
+  for (const mode of ['chat', 'goal'] as const) {
+    for (const content of ['Is the latest version of the repo downloaded?', 'Check whether the repository is up to date', 'Explain what the build command does']) {
+      await test(`read-only repository question (${mode}) does not start checks: ${content}`, async () => {
+        const { task, cwd } = await fixture(`readonly-${mode}-${tasks.length}`);
+        const { ready } = await slowCheck(cwd, task.id);
+        await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+        // Existing user work must not make a read-only turn count as an edit.
+        await writeFile(join(cwd, 'source'), 'user work already present');
+        adapter.getBackgroundWork = idle;
+        adapter.setGoal = async () => ({ goal: content, status: 'active', turnsUsed: 0, maxTurns: 20 });
+        adapter.evaluateGoal = async () => ({ status: 'done', shouldContinue: false, verdict: 'done', reason: 'Answered', message: '' });
+        adapter.chatStream = async function* (sessionId) {
+          await git(cwd, 'log', '-1'); await git(cwd, 'status', '--short');
+          yield { type: 'tool_progress', tool: 'terminal', status: 'completed' };
+          yield { type: 'text_delta', content: 'The repo is downloaded, but I could not check GitHub because authentication is missing.' };
+          yield { type: 'done', sessionId };
+        };
+        assert.equal((await post(task.id, { content, ...(mode === 'goal' ? { settings: { mode } } : {}) })).status, 202);
+        await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+        assert.equal(existsSync(ready), false, 'read-only terminal activity must not launch project checks');
+        const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
+        assert.equal(evidence.status, 'skipped');
+        assert.deepEqual(evidence.checks, []);
+        assert.equal(evidence.baseline.fingerprint, evidence.source.fingerprint);
+        assert.equal(readFileSync(join(cwd, 'source'), 'utf8'), 'user work already present');
+        assert.equal(getTask(task.id)?.status, 'in_progress', 'unverified existing work cannot enter review');
+      });
+    }
+  }
+
+  for (const activity of ['source edit', 'terminal edit']) {
     await test(`automatic verification detects ${activity} without a coding keyword in the prompt`, async () => {
       const { task, cwd } = await fixture(activity.replaceAll(' ', '-'));
       await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'console.log("verified")']] }));
@@ -96,7 +126,10 @@ try {
       adapter.getBackgroundWork = idle;
       adapter.chatStream = async function* (sessionId) {
         if (activity === 'source edit') await writeFile(join(cwd, 'source'), 'after');
-        else yield { type: 'tool_progress', tool: 'terminal', status: 'completed' };
+        else {
+          await promisify(execFile)(process.execPath, ['-e', 'require("fs").writeFileSync("source", "after")'], { cwd });
+          yield { type: 'tool_progress', tool: 'terminal', status: 'completed' };
+        }
         yield { type: 'text_delta', content: 'Finished.' }; yield { type: 'done', sessionId };
       };
       await post(task.id, { content: 'Continue' });
