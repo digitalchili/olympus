@@ -130,7 +130,7 @@ export function MessageAttachmentCards({
   attachments?: TaskAttachment[];
 }) {
   const items = attachments.length > 0
-    ? attachments
+    ? attachments.filter((attachment) => !attachment.preview)
     : paths.map((path) => ({ path, name: attachmentName(path), size: 0 }));
   if (items.length === 0) return null;
 

@@ -1,9 +1,12 @@
 import { CodingEvidencePanel } from './CodingEvidencePanel';
+import { BackgroundWorkNotice } from './BackgroundWorkNotice';
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo, Fragment } from 'react';
 import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText, FilePenLine, Globe, Code, Wrench, X, Target, Square } from 'lucide-react';
 import { InputToolbar, ContextRing } from './InputToolbar';
 import { AttachButton, AttachDropOverlay, AttachmentTray, MessageAttachmentCards, UploadErrorBar } from './ChatAttachments';
 import { MarkdownContent } from './MarkdownContent';
+import { TaskInlinePreviews } from './TaskInlinePreviews';
+import { stripPublishedPreviewManifests } from '../lib/inlinePreviews';
 import { ReplyCopyButton, shouldShowReplyCopyButton } from './ReplyCopyButton';
 import { useChat, ToolProgressEvent } from '../hooks/useChat';
 import { useAgentConfig } from '../hooks/useAgentConfig';
@@ -310,6 +313,11 @@ export function TaskChat({
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const prepareDraftFollowup = useCallback((prompt: string) => {
+    setInput((current) => current.trim() ? `${current}\n\n${prompt}` : prompt);
+    setActiveMention(null);
+    inputRef.current?.focus();
+  }, []);
   const {
     pendingFiles,
     dragOver,
@@ -728,12 +736,12 @@ export function TaskChat({
       confirmPersistentCollaboration: confirmationAtSend,
     });
     if (result.ok && scopeAtSend !== 'discussion') await refreshPersistentGrants();
-    if (!result.ok && result.conflict) {
+    if (!result.ok) {
       pendingRevealRef.current = false;
       setOutgoingRevealActive(false);
       // submitWithAttachments already cleared the tray, so restore the full
       // message (incl. attachment paths) rather than just the typed text —
-      // otherwise attachments are silently dropped on a busy-task conflict.
+      // otherwise attachments are silently dropped when admission fails.
       setInput(messageText);
       setSelectedProfiles(selectedAtSend);
       setCollaborationScope(scopeAtSend);
@@ -1008,7 +1016,8 @@ export function TaskChat({
                 : isLastAssistant && isStreaming ? activeTools : (msg.tools ?? []);
               const visibleTools = visibleToolProgress(toolsToShow);
               const showSpinner = isLastAssistant && isStreaming && !msg.content && !thinkingContent && !activeTools.some(t => t.status === 'running');
-              const { text: assistantText } = splitAttachmentMessage(msg.content);
+              const { text: rawAssistantText } = splitAttachmentMessage(msg.content);
+              const assistantText = stripPublishedPreviewManifests(rawAssistantText, msg.attachments ?? []);
               const timestampLabel = messageTimestampTitle(msg);
 
               return (
@@ -1049,6 +1058,7 @@ export function TaskChat({
                           )
                         )}
                         <MessageAttachmentCards taskId={taskId} attachments={msg.attachments ?? []} />
+                        <TaskInlinePreviews taskId={taskId} attachments={msg.attachments ?? []} onDraftPrompt={prepareDraftFollowup} />
                       </div>
                       <div className="mt-1 flex min-h-6 items-center gap-2">
                         {shouldShowReplyCopyButton(assistantText, isLastAssistant && isStreaming) && (
@@ -1102,6 +1112,7 @@ export function TaskChat({
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
         <RunFailureBanner notice={runFailureNotice} />
+        <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
         {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}

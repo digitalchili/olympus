@@ -192,6 +192,11 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return worker.getBackgroundWork ? await worker.getBackgroundWork(sessionId) : { available: false, work: [] };
   }
 
+  async stopBackgroundWork(sessionId: string, processIds: string[]): Promise<TaskBackgroundWork> {
+    const worker = await this.adapterForSession(sessionId);
+    return worker.stopBackgroundWork ? await worker.stopBackgroundWork(sessionId, processIds) : { available: false, work: [] };
+  }
+
   async steerChat(sessionId: string, message: string) {
     return await (await this.adapterForSession(sessionId)).steerChat(sessionId, message);
   }

@@ -7,6 +7,7 @@ import shlex
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -201,6 +202,61 @@ class BackgroundWorkNativeTests(unittest.TestCase):
                 {"available": False, "work": []},
             )
 
+    def test_inventory_overflow_cannot_hide_active_delegation_from_cleanup(self):
+        registry = FakeProcessRegistry({"task-1": [
+            {"session_id": f"proc-{i}", "status": "running"} for i in range(100)]})
+        delegates = FakeAsyncDelegation()
+        with isolated_hermes_home():
+            result = hermes_background_work.get_background_work(
+                {"sessionId": "task-1"}, process_registry=registry, async_delegation=delegates)
+            self.assertFalse(result["available"], "truncated inventory is not safe authorization to stop work")
+            stopped = hermes_background_work.stop_background_work(
+                {"sessionId": "task-1", "processIds": [f"proc-{i}" for i in range(100)]},
+                process_registry=registry, async_delegation=delegates)
+            self.assertFalse(stopped["available"])
+
+    def test_reconciles_exited_process_before_blocking_a_new_message(self):
+        registry = FakeProcessRegistry()
+        registry.poll = lambda process_id: {"status": "exited"}
+        delegates = FakeAsyncDelegation()
+        delegates._records = {}
+        with isolated_hermes_home():
+            result = hermes_background_work.get_background_work(
+                {"sessionId": "task-1"}, process_registry=registry, async_delegation=delegates)
+        self.assertEqual(result["work"], [], "an exited process must not keep chat blocked")
+
+    def test_stop_requires_exact_owned_processes_and_no_active_delegation(self):
+        registry = FakeProcessRegistry({"task-1": [{"session_id": "proc-owned", "status": "running"}]})
+        owned = types.SimpleNamespace(id="proc-owned", task_id="task-1", session_key="task-1")
+        registry.get = lambda process_id: owned
+        stopped = []
+        def kill(process_id, **kwargs):
+            stopped.append(process_id)
+            registry.by_scope["task-1"] = []
+            return {"status": "killed", "output": "SECRET"}
+        registry.kill_process = kill
+        delegates = FakeAsyncDelegation()
+        delegates._records = {}
+        with isolated_hermes_home():
+            def stop(ids):
+                return hermes_background_work.stop_background_work(
+                    {"sessionId": "task-1", "processIds": ids}, process_registry=registry, async_delegation=delegates)
+            self.assertEqual(stop(["proc-other"])["errorCode"], "BACKGROUND_WORK_CHANGED")
+            self.assertEqual(stopped, [])
+            # Native get supports prefixes; recovery must not.
+            self.assertEqual(stop(["proc-own"])["errorCode"], "BACKGROUND_WORK_CHANGED")
+            owned.task_id = "other-task"
+            self.assertEqual(stop(["proc-owned"])["errorCode"], "BACKGROUND_WORK_CHANGED")
+            owned.task_id = "task-1"
+            delegates._records = {"child": {"delegation_id": "child", "session_key": "task-1", "status": "running"}}
+            self.assertEqual(stop(["proc-owned"])["errorCode"], "BACKGROUND_WORK_ACTIVE")
+            self.assertEqual(stopped, [])
+            delegates._records = {}
+            result = stop(["proc-owned"])
+            self.assertEqual(result["work"], [])
+            self.assertEqual(stopped, ["proc-owned"])
+            self.assertNotIn("SECRET", json.dumps(result))
+
     @unittest.skipUnless(NATIVE_SOURCE, "native Hermes source not selected")
     def test_cold_worker_jsonl_inventory_rpc_without_model_calls(self):
         import subprocess
@@ -247,6 +303,14 @@ class BackgroundWorkNativeTests(unittest.TestCase):
                 self.assertIn(own.id, process_ids)
                 self.assertNotIn(other.id, process_ids)
                 self.assertNotIn("SECRET_NATIVE_COMMAND", json.dumps(result))
+                recovered = hermes_background_work.stop_background_work(
+                    {"sessionId": "task-native", "processIds": [own.id]},
+                    process_registry=process_registry, async_delegation=async_delegation)
+                self.assertTrue(recovered["available"])
+                self.assertEqual(recovered["work"], [])
+                self.assertEqual(process_registry.poll(other.id)["status"], "running",
+                                 "recovering one task must preserve another task's process")
+
             finally:
                 for session in (own, other):
                     process_registry.kill_process(

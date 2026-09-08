@@ -21,11 +21,8 @@ export interface ScheduledTaskDrainStatus {
   activeRuns: number;
 }
 
-export interface TaskBackgroundWork {
-  available: boolean;
-  continuation?: { status: 'pending' | 'blocked' | 'none'; reason?: string };
-  work: Array<{ id: string; kind: 'process' | 'delegation' | 'operation'; status: string }>;
-}
+import type { TaskBackgroundWork } from '../../shared/background-work.js';
+export type { TaskBackgroundWork } from '../../shared/background-work.js';
 
 export interface BotMessageRequest {
   requestId: string;
@@ -106,6 +103,7 @@ export interface AgentAdapter {
   interruptChat(sessionId: string, reason?: string): Promise<boolean>;
 
   getBackgroundWork?(sessionId: string): Promise<TaskBackgroundWork>;
+  stopBackgroundWork?(sessionId: string, processIds: string[]): Promise<TaskBackgroundWork>;
 
   steerChat(sessionId: string, message: string): Promise<boolean>;
 

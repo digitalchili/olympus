@@ -150,6 +150,13 @@ def _process_work(registry: Any, session_ids: list[str]) -> list[dict[str, str]]
             process_id = _safe_identifier(entry.get("session_id") or entry.get("id"))
             if not process_id:
                 continue
+            # Native list_sessions can retain a running row after its child exits
+            # (for example an orphaned output pipe). Poll reconciles real liveness.
+            poll = getattr(registry, "poll", None)
+            if callable(poll):
+                current = poll(process_id)
+                if current.get("status") in {"exited", "not_found"}:
+                    continue
             key = ("process", process_id)
             if key in seen:
                 continue
@@ -223,7 +230,9 @@ def get_background_work(
         journal.reconcile(delegation_registry)
         work = _process_work(registry, session_ids)
         work.extend(_delegation_work(delegation_registry, session_ids))
-        result = {"available": True, "work": work[:100]}
+        if len(work) > 100:
+            raise RuntimeError("background inventory exceeds bounded response")
+        result = {"available": True, "work": work}
     except Exception:
         result = {"available": False, "work": []}
         if journal is not None and journal.rows():
@@ -231,3 +240,44 @@ def get_background_work(
     if journal is not None and journal.path.exists():
         result.update(continuation=journal.status(), checkpoint=journal.receipt())
     return result
+
+
+def stop_background_work(
+    request: dict[str, Any], *, process_registry: Any = None, async_delegation: Any = None,
+) -> dict[str, Any]:
+    """Explicit user cleanup of an exact, freshly checked set of owned processes.
+
+    The worker holds task ownership for this whole RPC, including after an HTTP
+    timeout. Native Hermes owns process identity, termination and output history.
+    """
+    try:
+        registry = process_registry if process_registry is not None else _native_process_registry()
+        delegates = async_delegation if async_delegation is not None else _native_async_delegation()
+        inventory = get_background_work(request, process_registry=registry, async_delegation=delegates)
+        if not inventory["available"]:
+            return inventory
+        if any(item["kind"] != "process" for item in inventory["work"]):
+            return {**inventory, "errorCode": "BACKGROUND_WORK_ACTIVE"}
+        ids = request.get("processIds")
+        current = {item["id"] for item in inventory["work"]}
+        if (not isinstance(ids, list) or not 0 < len(ids) <= 100
+                or any(not _safe_identifier(value) for value in ids)
+                or len(set(ids)) != len(ids) or set(ids) != current):
+            return {**inventory, "errorCode": "BACKGROUND_WORK_CHANGED"}
+        owners = set(_scoped_session_ids(request))
+        # list_sessions also includes gateway-session matches. Never kill another
+        # task's process just because it shares a session, or resolve an ID prefix.
+        for process_id in ids:
+            session = registry.get(process_id)
+            task_owner = getattr(session, "task_id", None)
+            owner = task_owner or getattr(session, "session_key", None)
+            if getattr(session, "id", None) != process_id or owner not in owners:
+                return {**inventory, "errorCode": "BACKGROUND_WORK_CHANGED"}
+        for process_id in ids:
+            outcome = registry.kill_process(process_id)
+            if outcome.get("status") not in {"killed", "already_exited", "not_found"}:
+                return {**get_background_work(request, process_registry=registry, async_delegation=delegates),
+                        "errorCode": "BACKGROUND_WORK_STOP_FAILED"}
+        return get_background_work(request, process_registry=registry, async_delegation=delegates)
+    except Exception:
+        return {"available": False, "work": [], "errorCode": "BACKGROUND_WORK_UNAVAILABLE"}

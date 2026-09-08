@@ -37,6 +37,44 @@ class FakeProcessRegistry:
 
 
 class BackgroundWorkRpcTests(unittest.TestCase):
+    def test_stop_rpc_keeps_task_busy_until_cleanup_finishes(self) -> None:
+        entered = threading.Event()
+        finish = threading.Event()
+        delivered = threading.Event()
+        sent = []
+        def stop(_request):
+            entered.set()
+            finish.wait(3)
+            return {"available": True, "work": []}
+        with (
+            patch.object(hermes_worker, "_native_stop_background_work", side_effect=stop),
+            patch.object(hermes_worker, "AGENT_SEMAPHORE", threading.Semaphore(0)) as slots,
+            patch.object(hermes_worker, "_scoped_session_ids", return_value=["cleanup-task"]),
+            patch.object(hermes_worker, "_native_session_background_work", return_value={"available": True, "work": []}),
+            patch.object(hermes_worker, "_result", side_effect=lambda rid, data: (sent.append(data), delivered.set())),
+        ):
+            try:
+                hermes_worker._handle_request({"id": "cleanup", "type": "session.backgroundWork.stop", "sessionId": "cleanup-task", "processIds": ["proc-1"]})
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(hermes_worker._try_mark_task_active("cleanup-task", "overlap"))
+                inventory = hermes_worker._session_background_work({"sessionId": "cleanup-task"})
+                self.assertEqual(inventory["work"][0]["kind"], "operation")
+            finally:
+                slots.release()
+                finish.set()
+                self.assertTrue(delivered.wait(2))
+        self.assertEqual(sent, [{"available": True, "work": []}])
+        self.assertNotIn("cleanup-task", hermes_worker.ACTIVE_TASKS)
+
+    def test_stop_rpc_refuses_active_descendant(self) -> None:
+        with (
+            patch.object(hermes_worker, "_scoped_session_ids", return_value=["root", "child"]),
+            patch.dict(hermes_worker.ACTIVE_TASKS, {"root": "cleanup", "child": "live-child"}),
+            patch.object(hermes_worker, "_native_stop_background_work", side_effect=AssertionError("must not stop active work")),
+        ):
+            result = hermes_worker._session_stop_background_work({"sessionId": "root"})
+            self.assertEqual(result["errorCode"], "BACKGROUND_WORK_ACTIVE")
+
     def test_reports_only_task_owned_active_work_with_safe_identifiers(self) -> None:
         async_delegation = types.SimpleNamespace(
             _records_lock=threading.RLock(),

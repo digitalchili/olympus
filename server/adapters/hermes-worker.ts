@@ -637,6 +637,12 @@ export class HermesWorkerAdapter implements AgentAdapter {
     return await this.client.request<TaskBackgroundWork>({ type: 'session.backgroundWork.get', sessionId }, 4_000);
   }
 
+  async stopBackgroundWork(sessionId: string, processIds: string[]): Promise<TaskBackgroundWork> {
+    // Keep the task/Project claim until native termination actually settles.
+    // Worker exit rejects pending requests; a UI disconnect must not release it.
+    return await this.client.request<TaskBackgroundWork>({ type: 'session.backgroundWork.stop', sessionId, processIds });
+  }
+
   async steerChat(sessionId: string, message: string): Promise<boolean> {
     const result = await this.client.request<{ steered: boolean }>({
       type: 'chat.steer',

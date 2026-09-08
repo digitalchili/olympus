@@ -33,6 +33,7 @@ export type WorkerRequest =
   | { id: string; type: 'session.messages.get'; sessionId: string; taskId?: string; limit?: number; before?: string | null }
   | { id: string; type: 'session.get'; sessionId: string }
   | { id: string; type: 'session.backgroundWork.get'; sessionId: string }
+  | { id: string; type: 'session.backgroundWork.stop'; sessionId: string; processIds: string[] }
   | { id: string; type: 'goal.status'; sessionId: string }
   | { id: string; type: 'goal.set'; sessionId: string; goal: string; maxTurns?: number | null }
   | { id: string; type: 'goal.pause'; sessionId: string; reason?: string }

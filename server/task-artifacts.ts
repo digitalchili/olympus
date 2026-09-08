@@ -1,11 +1,12 @@
 import { open, realpath } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
-import { Router, type Response } from 'express';
+import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
+import { Router, type Request, type Response } from 'express';
 import type { Task, TaskAttachment, TaskMessage } from '../shared/types.js';
 import { expandHomePrefix } from './paths.js';
 import { LocalProfileError, LocalProfileRegistry, localProfileRegistry, type LocalProfileTarget } from './local-profiles.js';
 import { requestProfile, taskBelongsToProfile } from './profile-context.js';
+import { listTaskDraftSelections, openPublishedTaskPreview, parseTaskPreviewManifests, publishTaskArtifactPreview, restoreTaskArtifactPreview, saveTaskDraftSelection, TASK_PREVIEW_HTML_CSP, TaskPreviewError } from './task-previews.js';
 
 class TaskArtifactError extends Error {
   constructor(
@@ -107,16 +108,27 @@ export async function publishTaskAttachments(
   content: string,
   registry: LocalProfileRegistry = localProfileRegistry,
 ): Promise<TaskAttachment[]> {
-  const attachments = await Promise.all(artifactPaths(content).map(async (path) => {
+  const manifests = parseTaskPreviewManifests(content);
+  const draftPaths = new Set(manifests.map((draft) => draft.path));
+  const candidates = [
+    ...artifactPaths(content).filter((path) => !draftPaths.has(path)).slice(0, 100).map((path) => ({ path, hint: undefined })),
+    ...manifests.map((hint) => ({ path: hint.path, hint })),
+  ];
+  const attachments: TaskAttachment[] = [];
+  for (const { path, hint } of candidates) {
     try {
+      const saved = await restoreTaskArtifactPreview(task.id, path, hint);
+      if (saved) { attachments.push(saved); continue; }
       const artifact = await openTaskArtifact(task, path, registry);
-      await artifact.handle.close();
-      return { path: artifact.path, name: artifact.name, size: artifact.size };
+      try {
+        const preview = await publishTaskArtifactPreview(task, artifact, hint);
+        attachments.push({ path: artifact.path, name: artifact.name, size: artifact.size, ...(preview ? { preview } : {}) });
+      } finally { await artifact.handle.close(); }
     } catch {
-      return null;
+      // A bad source never widens artifact access or prevents other deliverables.
     }
-  }));
-  return attachments.filter((attachment): attachment is TaskAttachment => attachment !== null);
+  }
+  return attachments;
 }
 
 export async function publishMessageAttachments(
@@ -132,7 +144,7 @@ export async function publishMessageAttachments(
 }
 
 function sendArtifactError(res: Response, error: unknown): void {
-  if (error instanceof TaskArtifactError || error instanceof LocalProfileError) {
+  if (error instanceof TaskArtifactError || error instanceof LocalProfileError || error instanceof TaskPreviewError) {
     res.status(error.status).json({ error: error.message, code: error.code });
     return;
   }
@@ -142,6 +154,55 @@ function sendArtifactError(res: Response, error: unknown): void {
 export function createTaskArtifactsRouter(options: TaskArtifactsRouterOptions): Router {
   const router = Router();
   const registry = options.registry ?? localProfileRegistry;
+
+  function requireTask(req: Request): Task {
+    const task = options.getTask(String(req.params.id));
+    if (!task || !taskBelongsToProfile(task, requestProfile(req, registry))) {
+      throw new TaskArtifactError(404, 'Task not found', 'TASK_NOT_FOUND');
+    }
+    return task;
+  }
+
+  router.get('/:id/artifacts/preview/:previewId', async (req, res) => {
+    let handle: FileHandle | null = null;
+    try {
+      const task = requireTask(req);
+      const artifact = await openPublishedTaskPreview(task.id, String(req.params.previewId));
+      handle = artifact.handle;
+      await handle.close();
+      handle = null;
+      const download = req.query.download === '1';
+      let body = artifact.bytes;
+      if (artifact.preview.kind === 'html' && !download) {
+        // The outer document's frame-src blocks the prototype navigating itself.
+        const srcdoc = body.toString('utf8').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        body = Buffer.from(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,iframe{margin:0;width:100%;height:100%;border:0}body{overflow:hidden}</style></head><body><iframe title="Interactive prototype" sandbox="allow-scripts" srcdoc="${srcdoc}"></iframe></body></html>`);
+      }
+      if (download) {
+        const extension = extname(artifact.realPath);
+        res.attachment(artifact.preview.title.endsWith(extension) ? artifact.preview.title : artifact.preview.title + extension);
+      }
+      res.setHeader('Content-Type', artifact.mimeType);
+      res.setHeader('Content-Length', String(body.length));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Security-Policy', artifact.preview.kind === 'html' ? TASK_PREVIEW_HTML_CSP : "sandbox; default-src 'none'");
+      res.end(body);
+    } catch (error) {
+      if (handle) await handle.close().catch(() => undefined);
+      sendArtifactError(res, error);
+    }
+  });
+
+  router.get('/:id/artifacts/selections', async (req, res) => {
+    try { res.json({ selections: await listTaskDraftSelections(requireTask(req).id) }); }
+    catch (error) { sendArtifactError(res, error); }
+  });
+  router.post('/:id/artifacts/selections', async (req, res) => {
+    try { res.json({ selection: await saveTaskDraftSelection(requireTask(req).id, req.body) }); }
+    catch (error) { sendArtifactError(res, error); }
+  });
 
   router.get('/:id/artifacts/download', async (req, res) => {
     let artifact: OpenTaskArtifact | null = null;

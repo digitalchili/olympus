@@ -35,6 +35,7 @@ from hermes_worker_utils import (
 from hermes_bot_messaging import BotMessageBroker, BotMessageError, configure_bot_agent, install_native_guard
 from hermes_recovery import ContinuationJournal, RecoveryBlocked
 from hermes_background_work import get_background_work as _native_session_background_work
+from hermes_background_work import stop_background_work as _native_stop_background_work, _scoped_session_ids
 from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
 from hermes_sessions import (
     load_agent_history,
@@ -1068,6 +1069,15 @@ def _session_background_work(request: dict[str, Any], **kwargs) -> dict[str, Any
             *result.get("work", []),
         ][:100]}
     return result
+
+
+def _session_stop_background_work(request: dict[str, Any]) -> dict[str, Any]:
+    # This RPC already owns the root task. Do not interrupt a live descendant.
+    owners = _scoped_session_ids(request)
+    with ACTIVE_TASKS_LOCK:
+        if any(owner != _task_key_for(request) and owner in ACTIVE_TASKS for owner in owners):
+            return {"available": False, "work": [], "errorCode": "BACKGROUND_WORK_ACTIVE"}
+    return _native_stop_background_work(request)
 
 
 OLYMPUS_WORKDIR_KEYS: set[str] = set()
@@ -2609,6 +2619,7 @@ def _submit_background_agent_request(
     name_prefix: str,
     handler: Callable[[dict[str, Any]], dict[str, Any]],
     task_key: str | None = None,
+    uses_agent_slot: bool = True,
 ) -> None:
     if task_key and not _try_mark_task_active(task_key, request_id):
         _send_error(
@@ -2624,8 +2635,9 @@ def _submit_background_agent_request(
         acquired = False
         failure = None
         try:
-            AGENT_SEMAPHORE.acquire()
-            acquired = True
+            if uses_agent_slot:
+                AGENT_SEMAPHORE.acquire()
+                acquired = True
             result = handler(request)
         except Exception as exc:
             failure = exc
@@ -2832,6 +2844,12 @@ def _handle_request(request: dict[str, Any]) -> None:
                 ))
         elif request_type == "session.backgroundWork.get":
             _result(request_id, _session_background_work(request))
+        elif request_type == "session.backgroundWork.stop":
+            _submit_background_agent_request(
+                request_id, request, name_prefix="background-stop",
+                handler=_session_stop_background_work, task_key=_task_key_for(request),
+                uses_agent_slot=False,
+            )
         elif request_type == "session.get":
             _result(request_id, project_session_metadata(request.get("sessionId")))
         elif request_type == "goal.status":

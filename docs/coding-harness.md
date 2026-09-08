@@ -55,3 +55,12 @@ Olympus builds and runs its server with separately pinned Node 22.22.3 under `/o
 The integration depends on native durable delegation lookup, delivery claim/release/acknowledgement and the async-delegation ledger. Incompatible or unavailable native recovery remains an explicit blocker for known unfinished results. Local Hermes installations are not automatically upgraded by this code change. Use the installation dry-run and approval flow before updating a running installation.
 
 See [v0.6.0 validation](testing/v0.6.0.md) for executed checks and limits.
+
+
+## Recovering a task blocked by background work
+
+When a finished or interrupted turn leaves a command or preview server alive, the chat shows **Task recovery** above the message box. **Check again** refreshes real process status; exited processes are reconciled automatically. **Stop background work** asks for confirmation, stops only the task's currently listed terminal processes, and then lets the user send the preserved draft. It never sends a message or marks checks passed by itself.
+
+Cleanup requires the same latest run and exact process IDs shown to the user. The server holds task and Project ownership until the worker settles, including after a browser disconnect. The profile-scoped worker independently checks session lineage and exact native process ownership; active agents, delegated work, unavailable or oversized inventories prevent cleanup. Native process APIs retain their PID identity checks and output history. Cleanup does not need a model-run slot and never uses a blanket OS process kill, Git reset, checkout, or application restart.
+
+Disposable browser fixtures should be stopped when verification ends or fails. A stopped fixture is not evidence that verification passed; existing failed-run and coding-evidence rules still apply.

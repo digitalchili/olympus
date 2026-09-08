@@ -18,6 +18,7 @@ import type {
   Task,
   TaskAgentSettings,
   TaskMessage,
+  TaskDraftSelection,
   TaskMessagesPage,
   TaskStatus,
   ReasoningEffort,
@@ -104,6 +105,20 @@ async function request<T>(path: string, init?: RequestInit, profileScoped = true
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function taskArtifactPreviewUrl(taskId: string, previewId: string) {
+  return `${BASE}${apiPathWithProfile(`/tasks/${encodeURIComponent(taskId)}/artifacts/preview/${encodeURIComponent(previewId)}`)}`;
+}
+
+export function fetchTaskDraftSelections(taskId: string) {
+  return request<{ selections: TaskDraftSelection[] }>(`/tasks/${encodeURIComponent(taskId)}/artifacts/selections`);
+}
+
+export function saveTaskDraftSelection(taskId: string, input: { groupId: string; previewId: string; feedback?: string }) {
+  return request<{ selection: TaskDraftSelection }>(`/tasks/${encodeURIComponent(taskId)}/artifacts/selections`, {
+    method: 'POST', body: JSON.stringify(input),
+  });
 }
 
 export function fetchTasks() {
@@ -990,3 +1005,7 @@ export interface TaskRecoveryStatus {
 }
 export const fetchTaskRecovery = (taskId: string) => request<{ recovery: TaskRecoveryStatus | null }>(`/tasks/${encodeURIComponent(taskId)}/recovery`);
 export const pauseTaskRecovery = (taskId: string) => request(`/tasks/${encodeURIComponent(taskId)}/recovery/stop`, { method: 'POST' });
+export const fetchTaskBackgroundWork = (taskId: string) => request<import('@shared/background-work').TaskBackgroundWorkStatus>(`/tasks/${encodeURIComponent(taskId)}/background-work`);
+export const stopTaskBackgroundWork = (taskId: string, runId: string | null, processIds: string[]) => request<{ cleared: true }>(`/tasks/${encodeURIComponent(taskId)}/background-work/stop`, {
+  method: 'POST', body: JSON.stringify({ runId, processIds }),
+});

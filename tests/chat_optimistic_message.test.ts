@@ -9,9 +9,14 @@ import {
 } from '../client/src/hooks/useChat.js';
 import type { LiveChatRun } from '../shared/types.js';
 
+assert.equal(shouldShowChatSendError(409, 'BACKGROUND_WORK_ACTIVE'), true, 'background blockers must not disappear silently');
+assert.equal(shouldShowChatSendError(409, 'TASK_RUN_ACTIVE'), false);
 assert.equal(shouldShowChatSendError(409, 'PROJECT_MERGE_CONFLICT'), true, 'Git conflicts must show recovery guidance');
 assert.equal(shouldShowChatSendError(409, 'PROJECT_CHECKPOINT_PENDING'), true, 'unpublished merges must show the required action');
 assert.equal(shouldShowChatSendError(409), false, 'concurrent sends retain the quiet reconnect path');
+assert.equal(shouldShowChatSendError(409, 'BACKGROUND_WORK_ACTIVE'), true, 'leftover background work must explain why a follow-up was rejected');
+assert.equal(shouldShowChatSendError(409, 'TASK_RUN_ACTIVE'), false, 'an active run can reconnect without duplicating the reply');
+assert.equal(shouldShowChatSendError(409, 'RECOVERY_ACTION_REQUIRED'), true, 'other named blockers must not silently discard send errors');
 assert.equal(shouldShowChatSendError(503, 'PROJECT_REPOSITORY_PREPARE_FAILED'), true);
 
 const optimistic = createOptimisticChatRun('task-a', 'Follow-up question', 'chat', 100);

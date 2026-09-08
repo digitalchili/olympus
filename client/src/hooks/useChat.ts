@@ -26,8 +26,8 @@ export type SendMessageResult =
   | { ok: false; conflict?: boolean; error: string };
 
 export function shouldShowChatSendError(status: number, code?: string): boolean {
-  // A repository conflict needs user action; an already-running send can reconnect silently.
-  return status !== 409 || code?.startsWith('PROJECT_') === true;
+  // Only an already-running send can reconnect silently; named blockers need user action.
+  return status !== 409 || Boolean(code && code !== 'TASK_RUN_ACTIVE');
 }
 
 interface SendMessageOptions {

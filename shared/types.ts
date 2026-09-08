@@ -495,10 +495,30 @@ export interface TaskMessagesPage {
   latestAgentRun?: TaskAgentRun | null;
 }
 
+export interface TaskArtifactPreview {
+  id: string;
+  kind: 'image' | 'html';
+  title: string;
+  description?: string;
+  groupId?: string;
+  groupTitle?: string;
+  draftId?: string;
+}
+
+export interface TaskDraftSelection {
+  groupId: string;
+  previewId: string;
+  title: string;
+  feedback: string;
+  selectedAt: number;
+  prompt: string;
+}
+
 export interface TaskAttachment {
   path: string;
   name: string;
   size: number;
+  preview?: TaskArtifactPreview;
 }
 
 export const COLLABORATION_RUN_STATUSES = [

@@ -19,7 +19,7 @@ const { discardRun, getRun } = await import('../server/live-chat.js');
 const server=app.listen(0,'127.0.0.1'); await once(server,'listening');
 const port=(server.address() as {port:number}).port;
 const api=`http://127.0.0.1:${port}/api/tasks`;
-const originals={chat:adapter.chatStream,background:adapter.getBackgroundWork,page:adapter.getMessagePage};
+const originals={chat:adapter.chatStream,background:adapter.getBackgroundWork,stop:adapter.stopBackgroundWork,page:adapter.getMessagePage};
 adapter.getMessagePage=async()=>({messages:[],pageInfo:{hasOlder:false,olderCursor:null}});
 let started=0;
 adapter.chatStream=async function*(sessionId):AsyncIterable<StreamEvent>{started++;yield {type:'text_delta',content:'Partial work'};yield {type:'error',error:'Runtime cap',code:'run_runtime_timeout'};yield {type:'done',sessionId};};
@@ -38,6 +38,54 @@ try {
  assert.equal(response.status,409,'surviving task-owned work prevents duplicate execution');
  assert.equal((await response.json()).code,'BACKGROUND_WORK_ACTIVE');assert.equal(started,0);
  assert.equal(getQueuedTaskMessage(task.id)?.id,queued.id,'preflight rejection does not consume queued input');
+
+ // An idle task exposes recovery, but only for the exact work the user saw.
+ const inspect=()=>fetch(`${api}/${task.id}/background-work?profile=default`);
+ const stop=(body:unknown)=>fetch(`${api}/${task.id}/background-work/stop?profile=default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ let stopped=0;
+ adapter.stopBackgroundWork=async(id,ids)=>{assert.equal(id,task.id);assert.deepEqual(ids,['proc-owned']);stopped++;return {available:true,work:[]};};
+ let background=await inspect();
+ assert.equal(background.status,200,'idle background work must be recoverable in the UI');
+ const snapshot=await background.json();
+ assert.equal(snapshot.canStop,true);assert.equal(snapshot.runId,'prior');
+ assert.equal((await stop({runId:'stale',processIds:['proc-owned']})).status,409);
+ assert.equal((await stop({runId:'prior',processIds:['other-process']})).status,409);
+ assert.equal(stopped,0,'stale tabs and arbitrary process IDs must never stop work');
+ adapter.getBackgroundWork=async()=>({available:true,work:[{id:'proc-owned',kind:'process',status:'running'},{id:'child',kind:'delegation',status:'running'}]});
+ assert.equal((await (await inspect()).json()).canStop,false);
+ assert.equal((await stop({runId:'prior',processIds:['proc-owned']})).status,409);
+ assert.equal(stopped,0,'active delegated work must not be interrupted');
+ const { claimTaskOperation }=await import('../server/task-run-lifecycle.js');
+ const release=claimTaskOperation(task.id)!;
+ try {assert.equal((await stop({runId:'prior',processIds:['proc-owned']})).status,409);} finally {release();}
+ adapter.getBackgroundWork=async()=>({available:true,work:[{id:'proc-owned',kind:'process',status:'running'}]});
+ assert.equal((await stop({runId:'prior',processIds:['proc-owned']})).status,200);
+ assert.equal(stopped,1);
+ assert.equal(getTask(task.id)?.status,'in_progress','cleanup must not mark unfinished work as reviewed');
+ assert.equal(getQueuedTaskMessage(task.id)?.id,queued.id,'cleanup preserves the queued follow-up');
+ // A disconnected browser cannot release the Project while cleanup still runs.
+ const { createProject }=await import('../server/db/projects.js');
+ const { claimProjectOperation, hasTaskOperation }=await import('../server/task-run-lifecycle.js');
+ const project=createProject({name:'Cleanup ownership',purpose:'Test cleanup',managerProfileId:'default',changedBy:'test'});
+ db.prepare('UPDATE tasks SET project_id = ? WHERE id = ?').run(project.id,task.id);
+ assert.equal(getTask(task.id)?.project_id,project.id);
+ let entered!:()=>void; let finish!:()=>void;
+ const enteredPromise=new Promise<void>(resolve=>{entered=resolve;});
+ const pendingCleanup=new Promise<void>(resolve=>{finish=resolve;});
+ adapter.stopBackgroundWork=async()=>{entered();await pendingCleanup;return {available:true,work:[]};};
+ const abort=new AbortController();
+ const disconnected=fetch(`${api}/${task.id}/background-work/stop?profile=default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'prior',processIds:['proc-owned']}),signal:abort.signal}).catch(()=>undefined);
+ try {
+  await enteredPromise;abort.abort();await disconnected;
+  const competing=claimProjectOperation(project.id);
+  try {assert.equal(competing,null,'Project cannot transfer while cleanup is still running');} finally {competing?.();}
+ } finally {finish();}
+ for(let i=0;i<100 && hasTaskOperation(task.id);i++) await new Promise(resolve=>setTimeout(resolve,5));
+ assert.equal(hasTaskOperation(task.id),false,'cleanup completion releases ownership');
+ db.prepare('UPDATE tasks SET project_id = NULL WHERE id = ?').run(task.id);
+ const foreign=insertTask({title:'Other profile',status:'in_progress',profile_name:'other'});tasks.push(foreign.id);
+ assert.equal((await fetch(`${api}/${foreign.id}/background-work?profile=default`)).status,404);
+ assert.equal((await fetch(`${api}/${foreign.id}/background-work/stop?profile=default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:null,processIds:['proc-owned']})})).status,404);
  adapter.getBackgroundWork=async()=>({available:false,work:[]});
  response=await post(task.id,{content:queued.content,queuedMessageId:queued.id});
  assert.equal(response.status,503,'unavailable inventory fails closed');assert.equal(started,0);
@@ -58,5 +106,5 @@ try {
  for(let i=0;i<30 && getLatestTaskAgentRun(partial.id)?.status==='streaming';i++) await new Promise(r=>setTimeout(r,5));
  assert.equal(getTask(partial.id)?.status,'in_progress');assert.equal(getLatestTaskAgentRun(partial.id)?.status,'error');
  assert.equal(getLatestTaskAgentRun(partial.id)?.errorCode,'stream_incomplete');
-} finally {adapter.chatStream=originals.chat;adapter.getBackgroundWork=originals.background;adapter.getMessagePage=originals.page;for(const id of tasks)discardRun(id);server.close();await once(server,'close');db.close();await rm(root,{recursive:true,force:true});}
+} finally {adapter.chatStream=originals.chat;adapter.getBackgroundWork=originals.background;adapter.stopBackgroundWork=originals.stop;adapter.getMessagePage=originals.page;for(const id of tasks)discardRun(id);server.close();await once(server,'close');db.close();await rm(root,{recursive:true,force:true});}
 console.log('Task recovery route tests passed');
