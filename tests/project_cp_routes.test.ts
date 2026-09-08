@@ -43,8 +43,8 @@ try {
   await execFile('git', ['clone', '--bare', seed, remote]);
 
   const { LocalProfileRegistry } = await import('../server/local-profiles.js');
-  const { createProjectCpService } = await import('../server/project-cp.js');
-  const { grantProjectProfileAccess } = await import('../server/db/projects.js');
+  const { createProjectCpService, projectBaselineWorkdir } = await import('../server/project-cp.js');
+  const { grantProjectProfileAccess, getProjectRepositoryLink } = await import('../server/db/projects.js');
   const { createProjectsRouter } = await import('../server/routes/projects.js');
   const { upsertGitHubInstallation } = await import('../server/db/studio-projects.js');
   const { insertTask } = await import('../server/db/queries.js');
@@ -80,6 +80,7 @@ try {
     github,
     adapter: {
       generateTitle: async () => ({ title: 'feat: update README' }),
+      getBackgroundWork: async () => ({ available:true, work:[] }),
     } as any,
     now: () => now,
     projectCp: createProjectCpService({ rootDir: managedRoot, now: () => now }),
@@ -134,6 +135,15 @@ try {
 
   const acquired = await call(`/api/projects/${projectId}/editor/acquire`, 'POST', { taskId: task.id });
   assert.equal(acquired.status, 200);
+  const unchangedRepository = getProjectRepositoryLink(projectId);
+  const renamed = await call(`/api/projects/${projectId}`, 'PATCH', {
+    name: 'Renamed Project', purpose: 'Updated purpose',
+    repositoryLink: { installationId: 77, repositoryId: 9001 },
+  });
+  assert.equal(renamed.status, 200, 'ordinary Project edits accept the unchanged repository selected by the UI');
+  assert.equal((renamed.body.project as Record<string, unknown>).name, 'Renamed Project');
+  assert.equal((renamed.body.project as Record<string, unknown>).purpose, 'Updated purpose');
+  assert.deepEqual(getProjectRepositoryLink(projectId), unchangedRepository, 'metadata edits leave all repository binding fields unchanged');
   for (const [path, method, body] of [
     [`/api/projects/${projectId}/editor/status?taskId=${task.id}&profile=writer`, 'GET', undefined],
     [`/api/projects/${projectId}/editor/release?profile=writer`, 'POST', { taskId: task.id }],
@@ -150,7 +160,7 @@ try {
   assert.equal(editor.taskId, task.id);
   assert.notEqual(editor.branchName, 'main', 'Olympus must never Commit & Push to the default branch');
   assert.equal('workdir' in editor, false, 'managed VPS paths stay private');
-  const workdir = join(managedRoot, projectId);
+  const workdir = getProjectEditor(projectId)!.workdir;
   assert.equal(await readFile(join(workdir, 'README.md'), 'utf8'), 'initial\n');
   assert.equal(getProjectEditor(projectId)?.taskId, task.id, 'editor lease is durable in SQLite');
 
@@ -234,12 +244,14 @@ try {
   const updatedSync = await call(`/api/projects/${projectId}/sync`, 'POST');
   assert.equal(updatedSync.status, 200, JSON.stringify(updatedSync.body));
   assert.equal((updatedSync.body as Record<string, unknown>).updated, true);
-  assert.equal(await readFile(join(workdir, 'EXTERNAL.md'), 'utf8'), 'updated from outside\n');
+  assert.equal(await readFile(join(projectBaselineWorkdir(managedRoot, projectId, getProjectRepositoryLink(projectId)!), 'EXTERNAL.md'), 'utf8'), 'updated from outside\n');
+  await assert.rejects(readFile(join(workdir, 'EXTERNAL.md')), /ENOENT/, 'baseline sync does not rewrite a retained task workspace');
 
   // Test dirty working tree protection
   await writeFile(join(workdir, 'uncommitted.txt'), 'local uncommitted file\n');
   const dirtySync = await call(`/api/projects/${projectId}/sync`, 'POST');
-  assert.equal(dirtySync.status, 409, 'sync must fail if working tree has uncommitted changes');
+  assert.equal(dirtySync.status, 200, 'task working tree changes do not block independent baseline sync');
+  assert.equal(await readFile(join(workdir, 'uncommitted.txt'), 'utf8'), 'local uncommitted file\n');
   await rm(join(workdir, 'uncommitted.txt'));
 
   const rawRows = JSON.stringify(db.prepare('SELECT * FROM project_editor_leases').all())

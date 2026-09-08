@@ -19,12 +19,12 @@ for (const profile of ['', 'profiles/writer', 'profiles/viewer']) {
   if (profile) await writeFile(join(process.env.HERMES_HOME, profile, 'profile.yaml'), 'display_name: Test profile\n');
 }
 const { createProjectsRouter } = await import('../server/routes/projects.js');
-const { createProjectCpService } = await import('../server/project-cp.js');
+const { createProjectCpService, projectBaselineWorkdir } = await import('../server/project-cp.js');
 const { createProject, getProjectRepositoryLink, upsertProjectRepositoryLink, grantProjectProfileAccess } = await import('../server/db/projects.js');
 const { upsertGitHubInstallation } = await import('../server/db/studio-projects.js');
 const { insertTask, getTask } = await import('../server/db/queries.js');
-const { getProjectEditor } = await import('../server/db/project-cp.js');
-const { claimTaskOperation } = await import('../server/task-run-lifecycle.js');
+const { getProjectEditor, getProjectEditorForTask } = await import('../server/db/project-cp.js');
+const { claimTaskOperation, claimProjectOperation } = await import('../server/task-run-lifecycle.js');
 const { startRun, discardRun, startCompactionRun } = await import('../server/live-chat.js');
 const { default: db } = await import('../server/db/index.js');
 const git = async (cwd: string, ...args: string[]) => (await promisify(execFile)('git', args, { cwd })).stdout.trim();
@@ -91,7 +91,7 @@ const acquire = async () => {
   assert.equal(response.status, 200);
   return response.body.editor;
 };
-const workdir = join(root, 'checkouts', project.id);
+const workdir = projectBaselineWorkdir(join(root, 'checkouts'), project.id, getProjectRepositoryLink(project.id)!);
 
 try {
   await test('sync records verified time and commit, survives reload, and distinguishes updates', async () => {
@@ -113,112 +113,37 @@ try {
     assert.equal(await readFile(join(workdir, 'EXTERNAL.md'), 'utf8'), 'From GitHub\n');
   });
 
-  await test('idle editor is named; recovery releases only the reviewed lease after successful sync', async () => {
+  await test('sync preserves dirty and active task workspaces, including legacy release requests', async () => {
     const editor = await acquire();
-    const blocked = await call('POST');
-    assert.equal(blocked.status, 409);
-    assert.equal(blocked.body.blocker.task.id, owner.id);
-    assert.equal(blocked.body.blocker.task.title, 'Website update');
-    assert.equal(blocked.body.blocker.releaseEditorLeaseId, editor.id);
-    const stale = await call('POST', { releaseEditorLeaseId: 'old-editor-lease' });
-    assert.equal(stale.status, 409);
-    assert.equal(getProjectEditor(project.id)?.id, editor.id);
-    const released = await call('POST', { releaseEditorLeaseId: editor.id });
-    assert.equal(released.status, 200);
-    assert.equal(getProjectEditor(project.id), null);
-    assert.equal(getTask(owner.id)?.workdir, null);
-  });
-
-  await test('active tasks and compaction identify their owner and cannot be interrupted by recovery', async () => {
-    const editor = await acquire();
-    for (const mode of ['streaming', 'compacting', 'preparing']) {
-      const release = mode === 'preparing' ? claimTaskOperation(other.id, project.id) : null;
-      if (mode === 'streaming') startRun(other.id, other.id, 'Working');
-      if (mode === 'compacting') startCompactionRun(other.id, other.id);
+    const taskWorkdir = getTask(owner.id)!.workdir!;
+    await writeFile(join(taskWorkdir, 'WIP.md'), 'Keep this unpublished work\n');
+    const before = await git(taskWorkdir, 'rev-parse', 'HEAD');
+    for (const phase of ['streaming', 'compacting', 'preparing']) {
+      const release = phase === 'preparing' ? claimTaskOperation(owner.id, project.id) : null;
+      if (phase === 'streaming') startRun(owner.id, owner.id, 'Working');
+      if (phase === 'compacting') startCompactionRun(owner.id, owner.id);
       try {
-        for (const method of ['GET', 'POST']) {
-          const result = await call(method, method === 'POST' ? { releaseEditorLeaseId: editor.id } : undefined);
-          assert.equal(result.status, method === 'GET' ? 200 : 409);
-          assert.equal(result.body.blocker.task.id, other.id);
-          assert.equal(result.body.blocker.releaseEditorLeaseId, null);
-          assert.equal(getProjectEditor(project.id)?.id, editor.id);
-        }
-      } finally { release?.(); discardRun(other.id); }
+        assert.equal((await call()).body.blocker, null);
+        const synced = await call('POST', { releaseEditorLeaseId: editor.id });
+        assert.equal(synced.status, 200);
+        assert.equal(getProjectEditorForTask(project.id, owner.id)?.id, editor.id, 'sync never releases an independent workspace');
+        assert.equal(await git(taskWorkdir, 'rev-parse', 'HEAD'), before);
+        assert.equal(await readFile(join(taskWorkdir, 'WIP.md'), 'utf8'), 'Keep this unpublished work\n');
+      } finally { release?.(); discardRun(owner.id); }
     }
   });
 
-  await test('native background work and unavailable inventory block recovery without changing the checkout', async () => {
-    const editor = getProjectEditor(project.id)!;
-    const head = await git(workdir, 'rev-parse', 'HEAD');
-    const priorEvidence = (await call()).body.lastSync;
-    try {
-      for (const inventory of [
-        async () => ({ available: true, work: [{ id: 'child-1', kind: 'delegation' as const, status: 'running' }] }),
-        async () => ({ available: false, work: [] }),
-        async () => { throw new Error('Worker unavailable'); },
-      ]) {
-        backgroundWork = inventory;
-        const state = await call();
-        assert.equal(state.body.blocker.task.id, owner.id);
-        assert.equal(state.body.blocker.releaseEditorLeaseId, null);
-        const blocked = await call('POST', { releaseEditorLeaseId: editor.id });
-        assert.equal(blocked.status, 409);
-        assert.equal(blocked.body.blocker.releaseEditorLeaseId, null);
-        assert.equal(getProjectEditor(project.id)?.id, editor.id);
-        assert.equal(await git(workdir, 'rev-parse', 'HEAD'), head);
-        assert.deepEqual((await call()).body.lastSync, priorEvidence);
-      }
-    } finally { backgroundWork = async () => ({ available: true, work: [] }); }
+  await test('baseline sync does not depend on task background inventory', async () => {
+    backgroundWork = async () => { throw new Error('Task worker is unavailable'); };
+    try { assert.equal((await call('POST')).status, 200); }
+    finally { backgroundWork = async () => ({available:true,work:[]}); }
   });
 
-  await test('background recovery checks hold the Project lock and time out safely', async () => {
-    const editor = getProjectEditor(project.id)!;
-    let entered!: () => void;
-    let finish!: (value: TaskBackgroundWork) => void;
-    const started = new Promise<void>(resolve => { entered = resolve; });
-    backgroundWork = () => { entered(); return new Promise(resolve => { finish = resolve; }); };
-    const pending = call('POST', { releaseEditorLeaseId: editor.id });
-    try {
-      await Promise.race([started, pending.then(result => assert.fail(`Sync skipped background check: ${JSON.stringify(result)}`))]);
-      const illegal = claimTaskOperation(other.id, project.id); illegal?.();
-      assert.equal(illegal, null);
-      finish({ available: false, work: [] });
-      assert.equal((await pending).status, 409);
-      backgroundWork = () => new Promise(() => {});
-      const timedOut = await call('POST', { releaseEditorLeaseId: editor.id });
-      assert.equal(timedOut.status, 409);
-      assert.match(timedOut.body.blocker.message, /Could not verify/);
-      assert.equal(getProjectEditor(project.id)?.id, editor.id);
-      const released = claimTaskOperation(other.id, project.id);
-      assert.ok(released, 'timeout releases the operation lock without releasing the editor');
-      released();
-    } finally { finish?.({ available: false, work: [] }); backgroundWork = async () => ({ available: true, work: [] }); }
-  });
-
-  await test('uncommitted and unpublished work stay owned and untouched', async () => {
-    const editor = getProjectEditor(project.id)!;
-    await writeFile(join(workdir, 'WIP.md'), 'Keep this work\n');
-    const dirty = await call('POST', { releaseEditorLeaseId: editor.id });
-    assert.equal(dirty.status, 409);
-    assert.equal(dirty.body.blocker.releaseEditorLeaseId, null);
-    assert.equal(await readFile(join(workdir, 'WIP.md'), 'utf8'), 'Keep this work\n');
-    await git(workdir, 'add', '.'); await git(workdir, 'commit', '-m', 'Unpublished checkpoint');
-    const unpublished = await call('POST', { releaseEditorLeaseId: editor.id });
-    assert.equal(unpublished.status, 409);
-    assert.match(unpublished.body.blocker.message, /publish|push/i);
-    assert.equal(getProjectEditor(project.id)?.id, editor.id);
-    // Publish through the real CP service to leave the fixture ready for the next case.
-    assert.equal((await call('POST', { taskId: owner.id, message: 'Save WIP' }, '', 'commit-push')).status, 200);
-  });
-
-  await test('failed fetch retains editor, prior evidence, and isolates GitHub credentials', async () => {
-    const editor = getProjectEditor(project.id)!;
+  await test('failed fetch preserves prior verified evidence and isolates GitHub credentials', async () => {
     const previous = (await call()).body.lastSync;
-    beforeGit = async args => { if (args[0] === 'ls-remote') throw new Error(`Network failure ${token}`); };
+    beforeGit = async args => { if (args[0] === 'fetch') throw new Error(`Network failure ${token}`); };
     try {
-      const failed = await call('POST', { releaseEditorLeaseId: editor.id });
-      assert.equal(failed.status, 500);
-      assert.equal(getProjectEditor(project.id)?.id, editor.id);
+      assert.equal((await call('POST')).status, 500);
       assert.deepEqual((await call()).body.lastSync, previous);
     } finally { beforeGit = async () => {}; }
     assert.ok(credentialsUsed > 0);
@@ -226,30 +151,28 @@ try {
     assert.equal(JSON.stringify(db.prepare('SELECT * FROM project_editor_leases').all()).includes(token), false);
   });
 
-  await test('ACL and task-handler checks apply to release-and-sync', async () => {
-    const editor = getProjectEditor(project.id)!;
+  await test('baseline sync retains Project ACL while task mutations retain task-handler ACL', async () => {
     assert.equal((await call('POST', undefined, 'viewer')).status, 404);
-    assert.equal((await call('POST', { releaseEditorLeaseId: editor.id }, 'writer')).status, 404);
-    assert.equal((await call('GET', undefined, 'writer')).body.blocker.releaseEditorLeaseId, null);
-    assert.equal((await call('GET', undefined, 'viewer')).body.blocker.releaseEditorLeaseId, null);
-    assert.equal(getProjectEditor(project.id)?.id, editor.id);
+    assert.equal((await call('POST', undefined, 'writer')).status, 200, 'a contributor can sync the shared baseline');
+    assert.equal((await call('POST', {taskId:owner.id}, 'writer', 'editor/release')).status, 404, 'another profile cannot release the task workspace');
+    assert.equal((await call('GET', undefined, 'viewer')).body.blocker, null);
   });
 
-  await test('release-and-sync excludes a task start throughout the awaited Git operation', async () => {
-    const editor = getProjectEditor(project.id)!;
+  await test('awaited baseline Git excludes another baseline mutation but allows a task operation', async () => {
     let entered!: () => void; let finish!: () => void;
     const started = new Promise<void>(resolve => { entered = resolve; });
     const hold = new Promise<void>(resolve => { finish = resolve; });
-    beforeGit = async args => { if (args[0] === 'ls-remote') { entered(); await hold; } };
-    const pending = call('POST', { releaseEditorLeaseId: editor.id });
+    beforeGit = async args => { if (args[0] === 'fetch') { entered(); await hold; } };
+    const pending = call('POST');
     try {
       await Promise.race([started, pending.then(result => assert.fail(`Sync finished before Git: ${JSON.stringify(result)}`))]);
-      assert.equal(getProjectEditor(project.id)?.id, editor.id, 'lease remains held while Git is running');
-      const illegal = claimTaskOperation(other.id, project.id); illegal?.();
-      assert.equal(illegal, null);
+      const independent = claimTaskOperation(other.id, project.id); assert.ok(independent); independent();
+      assert.equal(claimProjectOperation(project.id), null);
+      assert.equal((await call()).body.blocker.kind, 'project_operation');
+      assert.equal((await call('POST')).status, 409);
     } finally { finish(); beforeGit = async () => {}; }
     assert.equal((await pending).status, 200);
-    assert.equal(getProjectEditor(project.id), null);
+    assert.equal((await call()).body.blocker, null);
   });
 
   await test('sync refuses a changed origin before giving Git an installation token', async () => {
@@ -275,36 +198,21 @@ try {
     assert.ok(getProjectRepositoryLink(project.id));
   });
 
-  await test('merge conflicts and new merge checkpoints retain the editor and do not claim sync success', async () => {
-    assert.equal((await call('POST')).status, 200);
-    const previous = (await call()).body.lastSync;
-    const editor = await acquire();
-    await writeFile(join(workdir, 'README.md'), 'Saved task work\n');
-    assert.equal((await call('POST', { taskId: owner.id, message: 'Save task work' }, '', 'commit-push')).status, 200);
-    const saved = await git(workdir, 'rev-parse', 'HEAD');
-    await writeFile(join(seed, 'README.md'), 'Conflicting GitHub work\n');
+  await test('upstream changes update only the baseline and leave a divergent task untouched', async () => {
+    const taskWorkdir = getTask(owner.id)!.workdir!;
+    await writeFile(join(taskWorkdir, 'README.md'), 'Saved task work\n');
+    const savedHead = await git(taskWorkdir, 'rev-parse', 'HEAD');
+    await writeFile(join(seed, 'README.md'), 'Conflicting upstream update\n');
     await git(seed, 'add', '.'); await git(seed, 'commit', '-m', 'Conflicting update'); await git(seed, 'push', remote, 'main');
-    const conflict = await call('POST', { releaseEditorLeaseId: editor.id });
-    assert.equal(conflict.status, 409);
-    assert.equal(conflict.body.code, 'PROJECT_MERGE_CONFLICT');
-    assert.equal(conflict.body.activeTaskId, owner.id);
-    assert.equal(await git(workdir, 'rev-parse', 'HEAD'), saved);
-    assert.equal(await readFile(join(workdir, 'README.md'), 'utf8'), 'Saved task work\n');
-    assert.equal(await git(workdir, 'status', '--porcelain'), '');
-    assert.equal(getProjectEditor(project.id)?.id, editor.id);
-    assert.deepEqual((await call()).body.lastSync, previous);
-
-    await writeFile(join(seed, 'README.md'), 'Saved task work\n');
-    await git(seed, 'add', '.'); await git(seed, 'commit', '-m', 'Resolve upstream content'); await git(seed, 'push', remote, 'main');
-    const checkpoint = await call('POST', { releaseEditorLeaseId: editor.id });
-    assert.equal(checkpoint.status, 409);
-    assert.equal(checkpoint.body.code, 'PROJECT_CHECKPOINT_PENDING');
-    assert.equal(getProjectEditor(project.id)?.id, editor.id);
-    assert.deepEqual((await call()).body.lastSync, previous);
-    assert.equal((await call()).body.blocker.releaseEditorLeaseId, null);
-    assert.equal((await call('POST', { taskId: owner.id, message: 'Publish synchronized checkpoint' }, '', 'commit-push')).status, 200);
-    assert.equal((await call('POST', { releaseEditorLeaseId: editor.id })).status, 200);
+    const synced = await call('POST');
+    assert.equal(synced.status, 200);
+    assert.equal(synced.body.lastSync.currentSha, await git(seed, 'rev-parse', 'HEAD'));
+    assert.equal(await readFile(join(workdir, 'README.md'), 'utf8'), 'Conflicting upstream update\n');
+    assert.equal(await readFile(join(taskWorkdir, 'README.md'), 'utf8'), 'Saved task work\n');
+    assert.equal(await git(taskWorkdir, 'rev-parse', 'HEAD'), savedHead);
+    assert.ok(getProjectEditorForTask(project.id, owner.id));
   });
+
 } finally {
   discardRun(other.id);
   server.close(); await once(server, 'close'); db.close();

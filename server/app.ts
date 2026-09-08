@@ -1,4 +1,4 @@
-import { codingVerificationRouter } from './routes/coding-verification.js';
+import { createCodingVerificationRouter } from './routes/coding-verification.js';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { tasksRouter } from './routes/tasks.js';
@@ -144,7 +144,7 @@ app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));
 app.use('/api/tasks', createTaskRecoveryRouter(adapter));
 app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway }));
 app.use('/api/tasks', createInteractionRouter(adapter));
-app.use('/api/tasks', codingVerificationRouter);
+app.use('/api/tasks', createCodingVerificationRouter(adapter));
 app.use('/api/tasks', chatRouter);
 app.use('/api/bots', createBotsRouter(adapter));
 app.use('/api/agent', createAgentRouter(adapter));

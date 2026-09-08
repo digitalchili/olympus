@@ -18,12 +18,11 @@ import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
 import { shouldAppendRunErrorToReply } from '@shared/run-errors';
 import { currentLiveRun, runFailureNoticeForState, type RunFailureNotice } from '../lib/runFailurePresentation';
+import { chatSendFailure, settleProjectChatBlocker, type ProjectChatBlocker, type SendMessageResult } from '../lib/chatSendRecovery';
 
 export type { ContextUsage, ToolProgressEvent };
 
-export type SendMessageResult =
-  | { ok: true; runId?: string }
-  | { ok: false; conflict?: boolean; error: string };
+export type { SendMessageResult } from '../lib/chatSendRecovery';
 
 export function shouldShowChatSendError(status: number, code?: string): boolean {
   // Only an already-running send can reconnect silently; named blockers need user action.
@@ -349,6 +348,7 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [olderMessagesError, setOlderMessagesError] = useState<string | null>(null);
   const [runFailureNotice, setRunFailureNotice] = useState<RunFailureNotice | null>(null);
+  const [projectBlocker, setProjectBlocker] = useState<ProjectChatBlocker | null>(null);
 
   const postAbortRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
@@ -615,6 +615,7 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
     setContext(null);
     setModelResolution(null);
     setRunFailureNotice(null);
+    setProjectBlocker(null);
     setMessagePageInfo(messagePageInfoRef.current);
     setIsLoadingOlderMessages(false);
     setOlderMessagesError(null);
@@ -677,6 +678,7 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
     content: string,
     error: string,
     appendLocalError: boolean,
+    showRecoveryNotice = false,
   ) => {
     if (taskIdRef.current !== taskId) return;
 
@@ -689,7 +691,7 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
       committedMessagesRef.current = [
         ...committedMessagesRef.current,
         { id: createUuid(), task_id: taskId, role: 'user', content, created_at: now },
-        { id: createUuid(), task_id: taskId, role: 'assistant', content: `[Error: ${error}]`, created_at: now },
+        ...(!showRecoveryNotice ? [{ id: createUuid(), task_id: taskId, role: 'assistant' as const, content: `[Error: ${error}]`, created_at: now }] : []),
       ];
     }
     publishState();
@@ -741,22 +743,26 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string; code?: string };
-        const error = body.error || `HTTP ${res.status}`;
+        const failure = chatSendFailure(res.status, await res.json().catch(() => ({})));
+        if (abort.signal.aborted) return { ok: false, error: 'Message send was cancelled.' };
+        setProjectBlocker(previous => settleProjectChatBlocker(previous, taskIdRef.current, taskId, failure));
         finishOptimisticSendError(
           taskId,
           optimisticRun?.runId,
           content,
-          error,
-          shouldShowChatSendError(res.status, body.code) && options?.appendLocalError !== false,
+          failure.error,
+          shouldShowChatSendError(res.status, failure.code) && options?.appendLocalError !== false,
+          failure.code === 'PROJECT_REPOSITORY_BUSY',
         );
-        return { ok: false, conflict: res.status === 409, error };
+        return failure;
       }
       const body = await res.json().catch(() => ({})) as {
         runId?: string;
         action?: string;
         version?: { commitSha?: string; branchName?: string; commitMessage?: string; changedFiles?: string[] };
       };
+      if (abort.signal.aborted) return { ok: false, error: 'Message send was cancelled.' };
+      setProjectBlocker(previous => settleProjectChatBlocker(previous, taskIdRef.current, taskId, { ok: true }));
       if (body.action === 'commit_push' && body.version) {
         const settled = settleCommitPushChatResult({
           currentTaskId: taskIdRef.current,
@@ -815,6 +821,7 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
     context,
     modelResolution,
     runFailureNotice,
+    projectBlocker,
     hasOlderMessages: messagePageInfo.hasOlder,
     isLoadingOlderMessages,
     olderMessagesError,

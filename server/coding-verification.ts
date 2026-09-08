@@ -5,11 +5,13 @@ import { readFile, lstat, readlink, realpath } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import db from './db/index.js';
+import { getTask } from './db/queries.js';
 import type { Task } from '../shared/types.js';
 import type { CodingEvidence, CodingCheck, RunningCodingCheck, SourceSnapshot } from '../shared/coding-evidence.js';
 
 const exec = promisify(execFile);
 const active = new Map<string, { controller: AbortController; done: Promise<void> }>();
+const WORKSPACE_CHANGED = 'This task’s workspace changed. Send a new message to establish its baseline before running checks.';
 let shuttingDown = false;
 export const isVerifying = (taskId: string): boolean => active.has(taskId);
 export async function cancelCodingVerification(taskId: string, reason = 'Verification stopped by user'): Promise<boolean> {
@@ -66,12 +68,13 @@ function read(taskId: string, runId?: string): CodingEvidence | null {
   return row ? JSON.parse(row.evidence_json) : null;
 }
 export async function captureCodingBaseline(task: Task, runId: string, signal?: AbortSignal): Promise<void> {
+  task = getTask(task.id) ?? task;
   if (!task.workdir || read(task.id, runId)) return;
   let workdir: string;
   try { workdir = await realpath((await git(task.workdir, ['rev-parse', '--show-toplevel'], signal)).trim()); }
   catch (error) { signal?.throwIfAborted(); return; }
   const baseline = await sourceSnapshot(workdir, undefined, signal);
-  save({ taskId: task.id, runId, workdir, status: 'pending', baseline, source: null, checks: [], reason: null, updatedAt: Date.now() });
+  save({ taskId: task.id, runId, workdir, taskWorkdir: task.workdir, status: 'pending', baseline, source: null, checks: [], reason: null, updatedAt: Date.now() });
 }
 async function commands(cwd: string): Promise<string[][]> {
   try {
@@ -133,12 +136,18 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
   const timer = setTimeout(() => controller.abort(new DOMException('Verification budget exhausted', 'TimeoutError')), Math.max(1, timeoutMs));
   try {
     evidence = read(task.id, runId);
+    const currentTask = getTask(task.id);
+    if (!currentTask) return false;
+    task = currentTask;
     const hadBaseline = evidence !== null;
     // A run may have created its repository after the initial baseline probe.
     if (!evidence) { await captureCodingBaseline(task, runId, signal); evidence = read(task.id, runId); }
     signal.throwIfAborted();
-    if (!evidence || !task.workdir) return true;
-    const workdir = evidence.workdir ?? task.workdir;
+    if (!evidence) return true;
+    if (!task.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; return false; }
+    const workdir = await realpath((await git(task.workdir, ['rev-parse', '--show-toplevel'], signal)).trim());
+    if (workdir !== evidence.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; return false; }
+    evidence.taskWorkdir = task.workdir;
     evidence.currentCheck = null;
     evidence.source = await sourceSnapshot(workdir, evidence.baseline.head, signal);
     // Only automatic, non-coding turns can skip. A repository created during
@@ -162,6 +171,7 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
       signal.throwIfAborted();
       if (result.exitCode !== 0 || result.timedOut) { evidence.status = 'failed'; evidence.reason = 'A required verification command failed'; return false; }
     }
+    if (getTask(task.id)?.workdir !== task.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; return false; }
     if ((await sourceSnapshot(workdir, undefined, signal)).fingerprint !== evidence.source.fingerprint) { evidence.status = 'stale'; evidence.reason = 'Source changed during verification. Run checks again.'; return false; }
     evidence.status = 'passed'; return true;
   } catch (error) {
@@ -175,14 +185,20 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
 }
 export async function readCodingEvidence(task: Task): Promise<CodingEvidence | null> {
   const evidence = read(task.id);
-  if (evidence?.source && evidence.status === 'passed' && task.workdir) {
-    try { if ((await sourceSnapshot(evidence.workdir ?? task.workdir)).fingerprint !== evidence.source.fingerprint) evidence.status = 'stale'; }
-    catch { evidence.status = 'stale'; }
+  if (evidence && evidence.status !== 'running') {
+    const previousStatus = evidence.status;
+    try {
+      const currentTask = getTask(task.id);
+      const workdir = currentTask?.workdir ? await realpath((await git(currentTask.workdir, ['rev-parse', '--show-toplevel'])).trim()) : null;
+      if (!workdir || workdir !== evidence.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; }
+      else if (evidence.source && evidence.status === 'passed' && (await sourceSnapshot(workdir)).fingerprint !== evidence.source.fingerprint) {
+        evidence.status = 'stale'; evidence.reason = 'Source changed or is unavailable. Run checks again.';
+      }
+    } catch { evidence.status = 'stale'; evidence.reason = 'The task workspace is unavailable. Restore it or send a new message before running checks.'; }
     if (evidence.status === 'stale') {
       // Do not overwrite a newer manual verification that started during the scan.
       const current = read(task.id);
-      if (current?.runId === evidence.runId && current.status === 'passed' && current.updatedAt === evidence.updatedAt) {
-        evidence.reason = 'Source changed or is unavailable. Run checks again.';
+      if (current?.runId === evidence.runId && current.status === previousStatus && current.updatedAt === evidence.updatedAt) {
         evidence.updatedAt = Date.now(); save(evidence);
       }
     }
@@ -194,5 +210,8 @@ export function codingReviewAllowed(taskId: string, runId: string): boolean {
   const evidence = read(taskId, runId);
   // verifyCodingRun checks source freshness under its deadline before emitting
   // done. Do not start another, uncancellable source scan after terminal delivery.
-  return !evidence || (evidence.status === 'passed' && evidence.source !== null);
+  if (!evidence) return true;
+  const workdir = getTask(taskId)?.workdir;
+  return evidence.status === 'passed' && evidence.source !== null && Boolean(workdir)
+    && (evidence.taskWorkdir ?? evidence.workdir) === workdir;
 }

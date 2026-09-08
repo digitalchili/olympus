@@ -26,7 +26,7 @@ import { getTask, getTasksForProject } from '../db/queries.js';
 import { addProjectClient, initSSE, sendEvent } from '../events.js';
 import { getRunStatus, getRunStatuses } from '../live-chat.js';
 import { isVerifying } from '../coding-verification.js';
-import { activeCollaborations, claimProjectOperation, hasActiveTaskRun, hasProjectOperation, hasTaskOperation } from '../task-run-lifecycle.js';
+import { activeCollaborations, claimProjectOperation, claimProjectConfigurationOperation, claimTaskOperation, hasActiveTaskRun, hasProjectOperation } from '../task-run-lifecycle.js';
 import {
   LocalProfileError,
   localProfileRegistry,
@@ -42,7 +42,7 @@ import {
 import type { StudioGitHubGateway } from './studio.js';
 import { getGitHubInstallation } from '../db/studio-projects.js';
 import { createProjectCpService, ProjectRepositoryBusyError, type ProjectCpService } from '../project-cp.js';
-import { getProjectEditor, listProjectVersions } from '../db/project-cp.js';
+import { getProjectEditor, getProjectEditorForTask, listProjectEditors, hasRetainedProjectWorkspace, listProjectVersions } from '../db/project-cp.js';
 import { getProjectSyncEvidence, recordProjectSyncEvidence } from '../db/project-sync.js';
 import {
   PROJECT_REFERENCE_MAX_BYTES,
@@ -115,9 +115,6 @@ async function verifiedRepositoryLink(
 function sendError(res: Response, error: unknown): Response {
   if (error instanceof ProjectOperationActiveError) {
     return res.status(409).json({ error: error.message, code: 'PROJECT_OPERATION_ACTIVE', blocker: error.blocker });
-  }
-  if (error instanceof ProjectSyncBlockedError) {
-    return res.status(409).json({ error: error.message, code: 'PROJECT_SYNC_BLOCKED', blocker: error.blocker });
   }
   if (error instanceof ProjectRepositoryCheckpointError) {
     return res.status(409).json({ error: error.message, code: 'PROJECT_CHECKPOINT_PENDING', activeTaskId: error.activeTaskId });
@@ -213,48 +210,43 @@ function syncTask(task: Task): NonNullable<ProjectSyncBlocker['task']> {
   return { id: task.id, title: task.title, profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME };
 }
 
-function activeProjectTask(projectId: string): Task | undefined {
-  return getTasksForProject(projectId).find(task => {
-    const status = getRunStatus(task.id)?.status;
-    const collaboration = activeCollaborations.get(task.id);
-    return hasTaskOperation(task.id) || hasActiveTaskRun(task.id) || status === 'streaming'
-      || status === 'compacting' || isVerifying(task.id) || (collaboration && !collaboration.settled);
-  });
+function taskIsActive(task: Task): boolean {
+  const status = getRunStatus(task.id)?.status;
+  const collaboration = activeCollaborations.get(task.id);
+  return hasActiveTaskRun(task.id) || status === 'streaming' || status === 'compacting'
+    || isVerifying(task.id) || Boolean(collaboration && !collaboration.settled);
 }
 
-function operationBlocker(projectId: string): ProjectSyncBlocker {
-  const task = activeProjectTask(projectId);
-  return {
-    kind: task ? 'active_task' : 'project_operation',
-    task: task ? syncTask(task) : null,
-    message: task ? 'Wait for this task and its checks to finish, then sync again.' : 'Another Project operation is running. Wait for it to finish, then sync again.',
-    releaseEditorLeaseId: null,
-  };
+function operationBlocker(_projectId: string): ProjectSyncBlocker {
+  return { kind: 'project_operation', task: null, message: 'Another Project operation is running. Wait for it to finish, then sync again.', releaseEditorLeaseId: null };
 }
 
 class ProjectOperationActiveError extends Error {
   readonly blocker: ProjectSyncBlocker;
-  constructor(projectId: string) {
-    const blocker = operationBlocker(projectId);
-    super(blocker.message);
-    this.blocker = blocker;
+  constructor(projectId: string, task?: Task) {
+    const blocker = task ? { kind: 'active_task' as const, task: syncTask(task), message: 'Wait for this task and its checks to finish, then try again.', releaseEditorLeaseId: null } : operationBlocker(projectId);
+    super(blocker.message); this.blocker = blocker;
   }
-}
-
-class ProjectSyncBlockedError extends Error {
-  constructor(readonly blocker: ProjectSyncBlocker) { super(blocker.message); }
 }
 
 async function withProjectMutation<T>(projectId: string, mutate: () => Promise<T>): Promise<T> {
   const release = claimProjectOperation(projectId);
   if (!release) throw new ProjectOperationActiveError(projectId);
-  try {
-    if (activeProjectTask(projectId)) throw new ProjectOperationActiveError(projectId);
-    return await mutate();
-  } finally {
-    // Git must settle before another caller can own this checkout, even after disconnect.
-    release();
+  try { return await mutate(); }
+  finally { release(); }
+}
+
+function assertRepositoryReplaceable(projectId: string): void {
+  if (hasRetainedProjectWorkspace(projectId) || listProjectVersions(projectId).length) {
+    throw Object.assign(new Error('This Project has saved task workspaces. Create a new Project to connect a different repository.'), { statusCode: 409 });
   }
+}
+
+async function withRepositoryConfiguration<T>(projectId: string, mutate: () => Promise<T>): Promise<T> {
+  const release = claimProjectConfigurationOperation(projectId);
+  if (!release) throw new ProjectOperationActiveError(projectId);
+  try { assertRepositoryReplaceable(projectId); return await mutate(); }
+  finally { release(); }
 }
 
 function tokenProvider(github: StudioGitHubGateway | undefined) {
@@ -346,42 +338,22 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
   const github = options.github;
   const projectCp = options.projectCp ?? createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), now });
 
-  async function syncBlocker(req: Request, projectId: string, ownsOperation = false): Promise<ProjectSyncBlocker | null> {
-    if (activeProjectTask(projectId) || (!ownsOperation && hasProjectOperation(projectId))) return operationBlocker(projectId);
-    const editor = getProjectEditor(projectId);
-    if (!editor) return null;
-    const task = getTask(editor.taskId);
-    const actor = profileActor(req, registry);
-    const canRelease = task && (!actor || (canProfileAccessProject(projectId, actor, 'contribute') && actor === syncTask(task).profileId));
-    let clean = false;
-    let message = 'Could not verify the editor’s changes. Open the task to inspect its checkout.';
+  async function withTaskMutation<T>(task: Task, mutate: () => Promise<T>): Promise<T> {
+    const projectId = task.project_id!;
+    if (taskIsActive(task)) throw new ProjectOperationActiveError(projectId, task);
+    const release = claimTaskOperation(task.id, projectId, task.workdir);
+    if (!release) throw new ProjectOperationActiveError(projectId, task);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const status = await projectCp.status({ projectId, taskId: editor.taskId });
-      clean = status.clean;
-      message = clean ? 'This idle task still holds the Project editor.' : `${status.summary}. Open the task and use Commit & Push before syncing.`;
-    } catch { /* Unknown checkout state never permits recovery. */ }
-    // A finished root stream can still own native children or shell processes.
-    // POST calls this while holding the Project operation lock, before Git runs.
-    let backgroundBlocker: string | null = null;
-    if (clean) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const inventory = await Promise.race([
-          options.adapter?.getBackgroundWork?.(editor.taskId) ?? Promise.resolve({ available: false, work: [] }),
-          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Background check timeout')), 5_000); }),
-        ]);
-        if (!inventory.available || !Array.isArray(inventory.work)) throw new Error('Background inventory unavailable');
-        if (inventory.work.length) backgroundBlocker = 'This task still has background work. Wait for it to finish, then sync again.';
-      } catch {
-        backgroundBlocker = 'Could not verify whether this task still has background work. Open the task or retry syncing.';
-      } finally { if (timer) clearTimeout(timer); }
-    }
-    if (activeProjectTask(projectId) || (!ownsOperation && hasProjectOperation(projectId)) || getProjectEditor(projectId)?.id !== editor.id) return operationBlocker(projectId);
-    return {
-      kind: backgroundBlocker ? 'active_task' : clean ? 'editor' : 'changes', message: backgroundBlocker ?? message,
-      task: task ? syncTask(task) : null,
-      releaseEditorLeaseId: clean && !backgroundBlocker && canRelease ? editor.id : null,
-    };
+      const inventory = await Promise.race([
+        options.adapter?.getBackgroundWork?.(task.id) ?? Promise.resolve({ available: false, work: [] }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Background check timed out')), 5_000); }),
+      ]).catch(() => ({ available: false, work: [] }));
+      if (!inventory.available || inventory.work.length || taskIsActive(task)) {
+        throw Object.assign(new Error(inventory.available ? 'This task still has background work. Check or stop it before changing its workspace.' : 'Could not check this task’s background work. Try again before changing its workspace.'), { statusCode: 409 });
+      }
+      return await mutate();
+    } finally { if (timer) clearTimeout(timer); release(); }
   }
 
   router.get('/', async (req, res) => {
@@ -441,32 +413,27 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
       const purpose = typeof req.body?.purpose === 'string' ? req.body.purpose : undefined;
       const hasRepositoryLink = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'repositoryLink');
-      if (hasRepositoryLink && getProjectEditor(projectId)) {
-        return res.status(409).json({
-          error: 'Release the Project editor before changing its repository',
-          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
-        });
+      const requestedLink = hasRepositoryLink && req.body.repositoryLink !== null ? linkRequest(req.body.repositoryLink) : null;
+      if (hasRepositoryLink && req.body.repositoryLink !== null && !requestedLink) {
+        return res.status(400).json({ error: 'A valid repositoryLink installationId and repositoryId are required', code: 'INVALID_PROJECT_REPOSITORY_LINK' });
       }
-      if (hasRepositoryLink && listProjectVersions(projectId).length > 0) {
-        return res.status(409).json({
-          error: 'Repository changes are blocked after Project checkpoints exist',
-          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
-        });
-      }
+      const currentLink = getProjectRepositoryLink(projectId);
+      const repositoryChanged = hasRepositoryLink && (requestedLink
+        ? requestedLink.installationId !== currentLink?.installationId || requestedLink.repositoryId !== currentLink?.providerRepositoryId
+        : currentLink !== null);
+      if (repositoryChanged) assertRepositoryReplaceable(projectId);
       if (name === undefined && purpose === undefined && !hasRepositoryLink) {
         return res.status(400).json({ error: 'name, purpose, or repositoryLink is required', code: 'INVALID_PROJECT' });
       }
       let requestedRepository: Awaited<ReturnType<typeof verifiedRepositoryLink>> | null = null;
       let requestedRepositoryInstallationId: number | null = null;
-      if (hasRepositoryLink && req.body.repositoryLink !== null) {
-        const requestedLink = linkRequest(req.body.repositoryLink);
-        if (!requestedLink) return res.status(400).json({ error: 'A valid repositoryLink installationId and repositoryId are required', code: 'INVALID_PROJECT_REPOSITORY_LINK' });
+      if (repositoryChanged && requestedLink) {
         requestedRepository = await verifiedRepositoryLink(github, requestedLink);
         requestedRepositoryInstallationId = requestedLink.installationId;
       }
       const timestamp = now();
-      const project = hasRepositoryLink
-        ? updateProjectWithRepository(
+      const project = repositoryChanged
+        ? await withRepositoryConfiguration(projectId, async () => updateProjectWithRepository(
           projectId,
           { name, purpose },
           req.body.repositoryLink === null ? null : {
@@ -474,7 +441,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
             repository: requestedRepository!,
           },
           timestamp,
-        )
+        ))
         : updateProject(projectId, { name, purpose }, timestamp);
       return res.json({ project: await projectResponse(project, registry) });
     } catch (error) {
@@ -559,32 +526,20 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const requestedLink = linkRequest(req.body);
       if (!requestedLink) return res.status(400).json({ error: 'A valid installationId and repositoryId are required', code: 'INVALID_PROJECT_REPOSITORY_LINK' });
       const repository = await verifiedRepositoryLink(github, requestedLink);
-      const repositoryLink = upsertProjectRepositoryLink(projectId, requestedLink.installationId, repository, now());
+      const repositoryLink = await withRepositoryConfiguration(projectId, async () => upsertProjectRepositoryLink(projectId, requestedLink.installationId, repository, now()));
       return res.json({ repositoryLink });
     } catch (error) {
       return sendError(res, error);
     }
   });
 
-  router.delete('/:id/repository', (req, res) => {
+  router.delete('/:id/repository', async (req, res) => {
     try {
       const projectId = routeId(req.params.id);
       if (!getProject(projectId)) return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
       const actor = profileActor(req, registry);
       if (actor) requireProfileProjectAccess(projectId, actor, 'manage');
-      if (getProjectEditor(projectId)) {
-        return res.status(409).json({
-          error: 'Release the Project editor before changing its repository',
-          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
-        });
-      }
-      if (listProjectVersions(projectId).length > 0) {
-        return res.status(409).json({
-          error: 'Repository changes are blocked after Project checkpoints exist',
-          code: 'PROJECT_COMMIT_PUSH_BLOCKED',
-        });
-      }
-      deleteProjectRepositoryLink(projectId);
+      await withRepositoryConfiguration(projectId, async () => deleteProjectRepositoryLink(projectId));
       return res.status(204).end();
     } catch (error) {
       return sendError(res, error);
@@ -598,7 +553,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       const task = requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
-      const editor = await withProjectMutation(projectId, () => projectCp.acquireEditor({
+      const editor = await withTaskMutation(getTask(taskId)!, () => projectCp.acquireEditor({
         projectId,
         taskId,
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
@@ -618,7 +573,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       const task = requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
-      const editor = await withProjectMutation(projectId, () => projectCp.prepareTask({
+      const editor = await withTaskMutation(getTask(taskId)!, () => projectCp.prepareTask({
         projectId,
         taskId,
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
@@ -629,9 +584,12 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     } catch (error) {
       if (error instanceof ProjectRepositoryBusyError) {
         return res.status(423).json({
-          error: `${error.activeTaskTitle} is currently using this Project repository. Finish or release it before starting this task.`,
+          error: error.message,
           code: 'PROJECT_REPOSITORY_BUSY',
           activeTaskId: error.activeTaskId,
+          activeTaskTitle: error.activeTaskTitle,
+          activeTaskProfileId: error.activeTaskProfileId,
+          reason: error.reason,
         });
       }
       return sendError(res, error);
@@ -642,11 +600,21 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     try {
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'view');
-      const editor = getProjectEditor(projectId);
+      const taskId = typeof req.query.taskId === 'string' ? req.query.taskId.trim() : '';
+      if (taskId) requireProjectEditorTask(req, registry, projectId, taskId);
+      const editor = taskId ? getProjectEditorForTask(projectId, taskId) : getProjectEditor(projectId);
       return res.json({ editor: editor ? publicEditor(editor) : null });
     } catch (error) {
       return sendError(res, error);
     }
+  });
+
+  router.get('/:id/editors', (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      return res.json({ editors: listProjectEditors(projectId).map(publicEditor) });
+    } catch (error) { return sendError(res, error); }
   });
 
   router.get('/:id/editor/status', async (req, res) => {
@@ -669,7 +637,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const taskId = taskIdFromBody(req.body);
       requireProjectEditorTask(req, registry, projectId, taskId);
-      const editor = await withProjectMutation(projectId, () => projectCp.releaseEditor({ projectId, taskId }));
+      const editor = await withTaskMutation(getTask(taskId)!, () => projectCp.releaseEditor({ projectId, taskId }));
       return res.json({ editor: publicEditor(editor) });
     } catch (error) {
       return sendError(res, error);
@@ -727,7 +695,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'view');
       const repositoryLink = getProjectRepositoryLink(projectId);
-      return res.json({ lastSync: repositoryLink ? getProjectSyncEvidence(repositoryLink) : null, blocker: await syncBlocker(req, projectId) });
+      return res.json({ lastSync: repositoryLink ? getProjectSyncEvidence(repositoryLink) : null, blocker: hasProjectOperation(projectId) ? operationBlocker(projectId) : null });
     } catch (error) { return sendError(res, error); }
   });
 
@@ -736,19 +704,8 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const repositoryLink = requireWriteRepository(projectId);
-      const releaseEditorLeaseId = req.body?.releaseEditorLeaseId;
-      if (releaseEditorLeaseId !== undefined && (typeof releaseEditorLeaseId !== 'string' || !releaseEditorLeaseId.trim())) {
-        return res.status(400).json({ error: 'A valid editor lease is required', code: 'INVALID_PROJECT_REQUEST' });
-      }
       const result = await withProjectMutation(projectId, async () => {
-        const editor = getProjectEditor(projectId);
-        if (releaseEditorLeaseId && editor) requireProjectEditorTask(req, registry, projectId, editor.taskId);
-        const blocker = await syncBlocker(req, projectId, true);
-        if (releaseEditorLeaseId && editor?.id !== releaseEditorLeaseId) {
-          throw new ProjectSyncBlockedError({ ...blocker, kind: 'editor', message: 'The Project editor changed. Sync again to review the current editor.', task: blocker?.task ?? null, releaseEditorLeaseId: null });
-        }
-        if (blocker && (!releaseEditorLeaseId || blocker.releaseEditorLeaseId !== releaseEditorLeaseId)) throw new ProjectSyncBlockedError(blocker);
-        const synced = await projectCp.sync({ projectId, repositoryLink, tokenProvider: tokenProvider(github), releaseEditorLeaseId });
+        const synced = await projectCp.sync({ projectId, repositoryLink, tokenProvider: tokenProvider(github) });
         const lastSync = { verifiedAt: now(), currentSha: synced.currentSha, updated: synced.updated };
         recordProjectSyncEvidence(repositoryLink, lastSync);
         return { ...synced, lastSync };
@@ -767,7 +724,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
       const message = typeof req.body?.message === 'string' ? req.body.message : '';
-      const version = await withProjectMutation(projectId, () => projectCp.commitPush({
+      const version = await withTaskMutation(getTask(taskId)!, () => projectCp.commitPush({
         projectId,
         taskId,
         repositoryLink,
@@ -798,7 +755,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
-      const version = await withProjectMutation(projectId, () => projectCp.revert({
+      const version = await withTaskMutation(getTask(taskId)!, () => projectCp.revert({
         projectId,
         taskId,
         repositoryLink,

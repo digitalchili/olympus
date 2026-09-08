@@ -118,6 +118,32 @@ export function getProjectEditor(projectId: string): ProjectEditorLease | null {
   return row ? leaseFromRow(row) : null;
 }
 
+export function listProjectEditors(projectId: string): ProjectEditorLease[] {
+  return (db.prepare(`SELECT * FROM project_editor_leases WHERE project_id = ? AND status = 'active'
+    ORDER BY created_at, id`).all(projectId) as LeaseRow[]).map(leaseFromRow);
+}
+
+export function hasRetainedProjectWorkspace(projectId: string): boolean {
+  return Boolean(db.prepare(`SELECT 1 FROM project_editor_leases lease JOIN tasks task ON task.id = lease.task_id
+    WHERE lease.project_id = ? AND (lease.status = 'active' OR task.workdir = lease.workdir) LIMIT 1`).get(projectId));
+}
+
+export function getLatestProjectEditorForTask(projectId: string, taskId: string): ProjectEditorLease | null {
+  const row = db.prepare(`SELECT * FROM project_editor_leases WHERE project_id = ? AND task_id = ?
+    ORDER BY updated_at DESC, created_at DESC, rowid DESC LIMIT 1`).get(projectId, taskId) as LeaseRow | undefined;
+  return row ? leaseFromRow(row) : null;
+}
+
+export function reactivateProjectEditor(leaseId: string, taskId: string, now = Date.now()): ProjectEditorLease | null {
+  const row = db.prepare(`UPDATE project_editor_leases SET status = 'active', released_at = NULL, updated_at = ?
+    WHERE id = ? AND task_id = ? AND status = 'released'
+      AND workdir = (SELECT workdir FROM tasks WHERE id = ?)
+      AND NOT EXISTS (SELECT 1 FROM project_editor_leases current WHERE current.status = 'active'
+        AND (current.task_id = ? OR current.workdir = project_editor_leases.workdir))
+    RETURNING *`).get(now, leaseId, taskId, taskId, taskId) as LeaseRow | undefined;
+  return row ? leaseFromRow(row) : null;
+}
+
 export function getProjectEditorForTask(projectId: string, taskId: string): ProjectEditorLease | null {
   const row = db.prepare(`
     SELECT id, project_id, task_id, profile_id, repository_full_name, base_branch,
@@ -151,10 +177,9 @@ export function getActiveProjectEditorForProfile(profileId: string): ProjectEdit
 }
 
 export function acquireProjectEditor(input: AcquireProjectEditorInput): ProjectEditorLease {
-  const existing = getProjectEditor(input.projectId);
+  const existing = getProjectEditorForTask(input.projectId, input.taskId);
   if (existing) {
-    if (existing.taskId === input.taskId) return existing;
-    throw new Error('Project already has an editor');
+    return existing;
   }
   const now = input.now ?? Date.now();
   const id = uuid();
@@ -177,7 +202,7 @@ export function acquireProjectEditor(input: AcquireProjectEditorInput): ProjectE
     now,
     now,
   );
-  return getProjectEditor(input.projectId)!;
+  return getProjectEditorForTask(input.projectId, input.taskId)!;
 }
 
 export interface TransferProjectEditorInput extends AcquireProjectEditorInput {
@@ -225,7 +250,7 @@ export function transferProjectEditor(input: TransferProjectEditorInput): Projec
     const bound = db.prepare('UPDATE tasks SET workdir = ?, updated_at = ? WHERE id = ?').run(input.workdir, now, input.taskId);
     if (bound.changes !== 1) throw new Error('Project repository handoff task was not found');
   })();
-  return getProjectEditor(input.projectId)!;
+  return getProjectEditorForTask(input.projectId, input.taskId)!;
 }
 
 export function releaseProjectEditor(input: { leaseId: string; taskId: string; now?: number }): ProjectEditorLease | null {

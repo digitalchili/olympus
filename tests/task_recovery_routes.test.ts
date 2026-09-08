@@ -65,7 +65,7 @@ try {
  assert.equal(getQueuedTaskMessage(task.id)?.id,queued.id,'cleanup preserves the queued follow-up');
  // A disconnected browser cannot release the Project while cleanup still runs.
  const { createProject }=await import('../server/db/projects.js');
- const { claimProjectOperation, hasTaskOperation }=await import('../server/task-run-lifecycle.js');
+ const { hasTaskOperation }=await import('../server/task-run-lifecycle.js');
  const project=createProject({name:'Cleanup ownership',purpose:'Test cleanup',managerProfileId:'default',changedBy:'test'});
  db.prepare('UPDATE tasks SET project_id = ? WHERE id = ?').run(project.id,task.id);
  assert.equal(getTask(task.id)?.project_id,project.id);
@@ -77,8 +77,9 @@ try {
  const disconnected=fetch(`${api}/${task.id}/background-work/stop?profile=default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'prior',processIds:['proc-owned']}),signal:abort.signal}).catch(()=>undefined);
  try {
   await enteredPromise;abort.abort();await disconnected;
-  const competing=claimProjectOperation(project.id);
-  try {assert.equal(competing,null,'Project cannot transfer while cleanup is still running');} finally {competing?.();}
+  const competing=claimTaskOperation(task.id,project.id);
+  try {assert.equal(competing,null,'The same workspace stays protected while cleanup is running');} finally {competing?.();}
+  const independent=claimTaskOperation('other-workspace',project.id);assert.ok(independent,'A different workspace can continue during cleanup');independent();
  } finally {finish();}
  for(let i=0;i<100 && hasTaskOperation(task.id);i++) await new Promise(resolve=>setTimeout(resolve,5));
  assert.equal(hasTaskOperation(task.id),false,'cleanup completion releases ownership');

@@ -6,7 +6,7 @@ import { getProjectRepositoryLink } from '../db/projects.js';
 import { getTask, updateTask } from '../db/queries.js';
 import { broadcast } from '../events.js';
 import { getRunStatus } from '../live-chat.js';
-import { hasActiveTaskRun } from '../task-run-lifecycle.js';
+import { hasActiveTaskRun, hasTaskOperation, claimPreparedTaskWorkspace } from '../task-run-lifecycle.js';
 import { requireTaskForProfile } from '../profile-context.js';
 import type { StudioGitHubGateway } from './studio.js';
 import { DEFAULT_PROFILE_NAME, type QueuedTaskMessage, type Task } from '../../shared/types.js';
@@ -88,9 +88,12 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       }
       if (error instanceof ProjectRepositoryBusyError) {
         return res.status(423).json({
-          error: `${error.activeTaskTitle} is currently using this Project repository. Finish or release it before starting this task.`,
+          error: error.message,
           code: 'PROJECT_REPOSITORY_BUSY',
           activeTaskId: error.activeTaskId,
+          activeTaskTitle: error.activeTaskTitle,
+          activeTaskProfileId: error.activeTaskProfileId,
+          reason: error.reason,
         });
       }
       const message = error instanceof Error ? error.message : 'Project repository preparation failed';
@@ -107,6 +110,11 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
     }
 
     if (res.destroyed) return;
+    const preparedTask = getTask(task.id);
+    if (hasTaskOperation(task.id) && !claimPreparedTaskWorkspace(task.id, preparedTask?.workdir)) {
+      restoreConsumedQueue();
+      return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This workspace still has work in progress. Try again after it finishes.' });
+    }
     if (!command) return next();
 
     res.locals.preparingProjectTask = true;

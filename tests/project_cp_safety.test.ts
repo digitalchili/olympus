@@ -34,6 +34,7 @@ try {
   const calls: Array<{ args: string[]; env?: Record<string, string | undefined> }> = [];
   const gitRunner = async (_cwd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
     calls.push({ args, env: options?.env });
+    if (args[0] === 'remote') return { stdout: link.cloneUrl, stderr: '' };
     if (args[0] === 'status') return { stdout: dirty ? ' M README.md\0' : '', stderr: '' };
     if (args[0] === 'diff' && args.includes('--name-only')) return { stdout: dirty ? 'README.md\0' : '', stderr: '' };
     if (args[0] === 'ls-files') return { stdout: '', stderr: '' };
@@ -45,6 +46,20 @@ try {
     return { stdout: '', stderr: '' };
   };
   const service = createProjectCpService({ rootDir: join(root, 'managed'), gitRunner });
+  for (const pushUrls of ['https://example.invalid/collect.git', `${link.cloneUrl}\nhttps://example.invalid/collect.git`]) {
+    let tokenRequests = 0;
+    const redirectedService = createProjectCpService({ rootDir: join(root, 'managed'), gitRunner: async (cwd, args, options) => {
+      if (args[0] === 'remote' && args.includes('--push')) return { stdout: pushUrls, stderr: '' };
+      return gitRunner(cwd, args, options);
+    } });
+    await assert.rejects(redirectedService.commitPush({ projectId: project.id, taskId: task.id, repositoryLink: link,
+      message: 'Do not publish through an unexpected push URL', tokenProvider: async () => { tokenRequests++; return 'ghs_SECRET_TEST'; },
+    }), /origin.*does not match/);
+    assert.equal(tokenRequests, 0, 'redirected push URL must be rejected before requesting credentials');
+    assert.equal(head, 'a'.repeat(40), 'validation must precede committing the task');
+    assert.equal(calls.some(call => call.args[0] === 'push'), false);
+  }
+  calls.length = 0;
   await assert.rejects(
     service.commitPush({ projectId: project.id, taskId: task.id, repositoryLink: link, message: 'Safe checkpoint', tokenProvider: async () => 'ghs_SECRET_TEST' }),
     /simulated push failure/,
@@ -62,6 +77,7 @@ try {
   const remoteAcceptedSha = 'b'.repeat(40);
   const ambiguousRunner = async (_cwd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
     calls.push({ args, env: options?.env });
+    if (args[0] === 'remote') return { stdout: link.cloneUrl, stderr: '' };
     if (args[0] === 'status') return { stdout: dirty ? ' M README.md\0' : '', stderr: '' };
     if (args[0] === 'diff') return { stdout: 'diff --git a/README.md b/README.md\n', stderr: '' };
     if (args[0] === 'rev-parse') return { stdout: `${head}\n`, stderr: '' };
@@ -87,6 +103,7 @@ try {
   calls.length = 0;
   const deployRunner = async (_cwd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
     calls.push({ args, env: options?.env });
+    if (args[0] === 'remote') return { stdout: link.cloneUrl, stderr: '' };
     if (args[0] === 'status') return { stdout: dirty ? ' M README.md\0' : '', stderr: '' };
     if (args[0] === 'diff') return { stdout: 'diff --git a/README.md b/README.md\n', stderr: '' };
     if (args[0] === 'rev-parse') return { stdout: `${head}\n`, stderr: '' };
@@ -104,6 +121,7 @@ try {
   });
   assert.equal(deployed.branchName, 'main', 'version record reflects deployment to default branch');
   const deployPushCall = calls.find((call) => call.args[0] === 'push');
+  assert.ok(deployPushCall?.args.includes('--atomic'), 'task and default branches publish together or neither changes');
   assert.ok(deployPushCall?.args.includes('HEAD:refs/heads/main'), 'push includes refspec for default branch');
   assert.ok(deployPushCall?.args.includes('HEAD:refs/heads/olympus/safe-test'), 'push also includes refspec for working branch');
 } finally {

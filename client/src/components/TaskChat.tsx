@@ -1,5 +1,6 @@
 import { CodingEvidencePanel } from './CodingEvidencePanel';
 import { BackgroundWorkNotice } from './BackgroundWorkNotice';
+import { ProjectChatBlockedNotice } from './ProjectChatBlockedNotice';
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo, Fragment } from 'react';
 import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText, FilePenLine, Globe, Code, Wrench, X, Target, Square } from 'lucide-react';
 import { InputToolbar, ContextRing } from './InputToolbar';
@@ -37,6 +38,7 @@ import { visibleToolProgress } from '../lib/toolProgressDisplay';
 import { RunModelResolution } from './RunModelResolution';
 import { RunFailureBanner } from './RunFailureBanner';
 import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSendQueuedMessage } from '../lib/runFailurePresentation';
+import { restoreRejectedChatDraft } from '../lib/chatSendRecovery';
 
 interface TaskChatProps {
   taskId: string;
@@ -278,6 +280,7 @@ export function TaskChat({
     context,
     modelResolution,
     runFailureNotice,
+    projectBlocker,
     hasOlderMessages,
     isLoadingOlderMessages,
     olderMessagesError,
@@ -289,7 +292,12 @@ export function TaskChat({
   } = useChat(reconcilePersistedTaskRun);
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const delegationRuns = useStore((s) => s.delegationRuns.get(taskId));
-  const [input, setInput] = useState('');
+  const [input, setInputValue] = useState('');
+  const draftRevisionRef = useRef(0);
+  const setInput = useCallback((value: React.SetStateAction<string>) => {
+    draftRevisionRef.current += 1;
+    setInputValue(value);
+  }, []);
   const [profiles, setProfiles] = useState<HermesProfile[]>([]);
   const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
   const [collaborationScope, setCollaborationScope] = useState<CollaborationInvitationScope>('discussion');
@@ -335,9 +343,9 @@ export function TaskChat({
     dragHandlers,
     handlePaste,
   } = useFileAttachments(taskId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
-  const startupRef = useRef({ taskId, initialMessage, initialSettings, initialInvitedProfileIds });
-  if (startupRef.current.taskId !== taskId) {
-    startupRef.current = { taskId, initialMessage, initialSettings, initialInvitedProfileIds };
+  const startupRef = useRef({ taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds });
+  if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) {
+    startupRef.current = { taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds };
   }
   const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig(
     taskId,
@@ -456,6 +464,7 @@ export function TaskChat({
     setInterruptInFlight(false);
     setInterruptError(null);
     setUploadError(null);
+    setInput('');
     clearFiles();
     lastGoalStatusRef.current = null;
     queuedMessageRef.current = null;
@@ -463,6 +472,7 @@ export function TaskChat({
     pendingRevealRef.current = false;
     didInitialScrollRef.current = false;
     setRenderLimit(INITIAL_RENDER_LIMIT);
+    const initialDraftRevision = draftRevisionRef.current;
     loadMessages(taskId)
       .then((loadedMessages) => {
         if (cancelled) return;
@@ -475,7 +485,16 @@ export function TaskChat({
           if (loadedMessages.length === 0) {
             pendingRevealRef.current = true;
             setOutgoingRevealActive(true);
-            sendMessage(taskId, firstMessage, isBot ? { ...startupRef.current.initialSettings, mode: 'task' } : startupRef.current.initialSettings, { invitedProfileIds });
+            void sendMessage(taskId, firstMessage, isBot ? { ...startupRef.current.initialSettings, mode: 'task' } : startupRef.current.initialSettings, { invitedProfileIds }).then(result => {
+              if (cancelled || result.ok || startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) return;
+              pendingRevealRef.current = false;
+              setOutgoingRevealActive(false);
+              setInputValue(currentDraft => restoreRejectedChatDraft({
+                currentTaskId: startupRef.current.taskId, responseTaskId: taskId,
+                revisionAtSend: initialDraftRevision, currentRevision: draftRevisionRef.current,
+                currentDraft, sentContent: firstMessage,
+              }));
+            });
           }
         }
       })
@@ -495,7 +514,7 @@ export function TaskChat({
         if (!cancelled) setQueuedSendError('Could not reload the queued message.');
       });
     return () => { cancelled = true; };
-  }, [isBot, taskId, loadMessages, sendMessage, clearFiles]);
+  }, [activeProfileId, isBot, taskId, loadMessages, sendMessage, clearFiles]);
 
   useEffect(() => {
     if (!configPending) inputRef.current?.focus();
@@ -654,11 +673,11 @@ export function TaskChat({
   }, [interruptInFlight]);
 
   const updateInput = useCallback((nextInput: string, cursor?: number | null) => {
-    setInput(nextInput);
+    if (nextInput !== input) setInput(nextInput);
     const nextMention = findActiveProfileMention(nextInput, cursor ?? nextInput.length, profiles);
     setActiveMention(nextMention);
     setHighlightedProfileIndex(0);
-  }, [profiles]);
+  }, [input, profiles, setInput]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -724,6 +743,7 @@ export function TaskChat({
     }
 
     setInput('');
+    const draftRevisionAtSend = draftRevisionRef.current;
     setSelectedProfiles([]);
     setCollaborationScope('discussion');
     setConfirmPersistentCollaboration(false);
@@ -735,6 +755,7 @@ export function TaskChat({
       collaborationScope: scopeAtSend,
       confirmPersistentCollaboration: confirmationAtSend,
     });
+    if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) return;
     if (result.ok && scopeAtSend !== 'discussion') await refreshPersistentGrants();
     if (!result.ok) {
       pendingRevealRef.current = false;
@@ -742,12 +763,18 @@ export function TaskChat({
       // submitWithAttachments already cleared the tray, so restore the full
       // message (incl. attachment paths) rather than just the typed text —
       // otherwise attachments are silently dropped when admission fails.
-      setInput(messageText);
-      setSelectedProfiles(selectedAtSend);
-      setCollaborationScope(scopeAtSend);
-      setConfirmPersistentCollaboration(confirmationAtSend);
+      setInputValue(currentDraft => restoreRejectedChatDraft({
+        currentTaskId: startupRef.current.taskId, responseTaskId: taskId,
+        revisionAtSend: draftRevisionAtSend, currentRevision: draftRevisionRef.current,
+        currentDraft, sentContent: messageText,
+      }));
+      if (draftRevisionRef.current === draftRevisionAtSend) {
+        setSelectedProfiles(selectedAtSend);
+        setCollaborationScope(scopeAtSend);
+        setConfirmPersistentCollaboration(confirmationAtSend);
+      }
     }
-  }, [isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
+  }, [activeProfileId, isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;
@@ -1112,6 +1139,7 @@ export function TaskChat({
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
         <RunFailureBanner notice={runFailureNotice} />
+        {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
         <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
         {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />

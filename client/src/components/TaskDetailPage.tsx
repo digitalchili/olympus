@@ -91,7 +91,7 @@ export function TaskDetailPage() {
       return;
     }
     try {
-      const editorRes = await fetchProjectEditor(effectiveProjectId);
+      const editorRes = await fetchProjectEditor(effectiveProjectId, task.id);
       if (editorRes.editor?.taskId === task.id) {
         const statusRes = await fetchProjectEditorStatus(effectiveProjectId, task.id);
         setTaskGitStatus(statusRes.status);
@@ -511,6 +511,7 @@ export function TaskDetailPage() {
 
       {showCommitPushModal && effectiveProjectId && repositoryLink && (
         <TaskCommitPushModal
+          key={`${effectiveProjectId}:${task.id}`}
           open={showCommitPushModal}
           onClose={() => {
             setShowCommitPushModal(false);

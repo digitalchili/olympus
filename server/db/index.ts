@@ -229,6 +229,8 @@ function recoverInterruptedDelegations(): void {
 db.exec('BEGIN IMMEDIATE');
 try {
   db.exec(schema);
+  // Existing leases keep their exact paths; only ownership cardinality changes.
+  db.exec('DROP INDEX IF EXISTS idx_project_editor_active');
   migrateCollaborationContributions();
   ensureCollaborationContributionIndex();
   migrateStudioGitHubConnectionStates();

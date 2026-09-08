@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { Link } from 'react-router';
 import type { ProjectSyncBlocker, ProjectSyncState } from '@shared/types';
 import { ApiError, fetchProjectSyncState, syncProjectFromGitHub } from '../lib/api';
-import { toWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
 
 interface SyncViewProps {
@@ -13,10 +11,9 @@ interface SyncViewProps {
   disabled: boolean;
   error: string | null;
   onSync: () => void;
-  onRelease: () => void;
 }
 
-export function ProjectGitHubSyncView({ projectId, state, pending, disabled, error, onSync, onRelease }: SyncViewProps) {
+export function ProjectGitHubSyncView({ state, pending, disabled, error, onSync }: SyncViewProps) {
   const { lastSync, blocker } = state;
   return (
     <section aria-label="GitHub sync" className="mt-4 text-xs">
@@ -34,10 +31,10 @@ export function ProjectGitHubSyncView({ projectId, state, pending, disabled, err
           </> : 'Not synced yet'}
         </p>
       </div>
+      {lastSync && <p className="mt-1 text-zinc-500">New tasks use this version.</p>}
       {error && <p role="alert" className="mt-2 text-red-600 dark:text-red-400">{error}</p>}
       {blocker && <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-        <p>{blocker.task && <><Link className="font-medium underline" to={toWithProfile(`/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(blocker.task.id)}`, blocker.task.profileId)}>{blocker.task.title}</Link>{' — '}</>}{blocker.message}</p>
-        {blocker.releaseEditorLeaseId && <button type="button" disabled={pending || disabled} onClick={onRelease} className="mt-2 rounded-md border border-amber-300 px-2.5 py-1.5 font-medium disabled:opacity-50 dark:border-amber-800">Release editor and sync</button>}
+        <p>{blocker.message}</p>
       </div>}
     </section>
   );
@@ -70,16 +67,16 @@ export function ProjectGitHubSync({ projectId, refreshKey, disabled, onBusyChang
     return () => { cancelled = true; };
   }, [projectId, refreshKey]);
 
-  const sync = async (releaseEditorLeaseId?: string) => {
+  const sync = async () => {
     if (disabled || running.current) return;
     running.current = true;
     ++generation.current; // A slower status read must not replace the new sync result.
     setPending(true); onBusyChange(true); setError(null);
     try {
-      const result = await syncProjectFromGitHub(projectId, releaseEditorLeaseId);
+      const result = await syncProjectFromGitHub(projectId);
       if (!mounted.current) return;
       setState({ lastSync: result.lastSync, blocker: null });
-      try { await onSynced(); } catch { setError('Synced successfully. Refresh the page to reload the editor.'); }
+      try { await onSynced(); } catch { setError('Synced successfully. Refresh the page to reload task changes.'); }
     } catch (cause) {
       if (!mounted.current) return;
       const blocker = cause instanceof ApiError ? cause.details?.blocker as ProjectSyncBlocker | undefined : undefined;
@@ -93,7 +90,5 @@ export function ProjectGitHubSync({ projectId, refreshKey, disabled, onBusyChang
     }
   };
 
-  return <ProjectGitHubSyncView projectId={projectId} state={state} pending={pending} disabled={disabled} error={error} onSync={() => void sync()} onRelease={() => {
-    if (state.blocker?.releaseEditorLeaseId) void sync(state.blocker.releaseEditorLeaseId);
-  }} />;
+  return <ProjectGitHubSyncView projectId={projectId} state={state} pending={pending} disabled={disabled} error={error} onSync={() => void sync()} />;
 }

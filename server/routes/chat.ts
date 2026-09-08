@@ -1,5 +1,6 @@
 import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying } from '../coding-verification.js';
 import { requestsCodingVerification } from '../verification-request.js';
+import { join } from 'node:path';
 import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
@@ -51,7 +52,7 @@ import {
   reviewContributorMessage,
   validateCollaborationInvites,
 } from '../collaboration.js';
-import { LocalProfileError } from '../local-profiles.js';
+import { LocalProfileError, localProfileRegistry } from '../local-profiles.js';
 import { acquireProfileWork } from '../profile-deletion.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
@@ -314,9 +315,13 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
 
 function taskSystemMessage(task: Task, supplemental = ''): string {
   if (task.kind === 'bot') return `${botSystemMessage(task)}${supplemental}`;
-  const base = !task.workdir
-    ? TASK_AGENT_SYSTEM_PROMPT
-    : `${TASK_AGENT_SYSTEM_PROMPT}\n\n<workspace>\n  <path>${task.workdir}</path>\n  <rule>Use this as the project root. Keep file and terminal work inside it; begin shell commands with cd ${JSON.stringify(task.workdir)} && when needed.</rule>\n</workspace>`;
+  const profile = localProfileRegistry.require(taskProfileId(task));
+  const outputs = join(profile.workspaceDir, 'tasks', task.id, 'outputs');
+  const base = `${TASK_AGENT_SYSTEM_PROMPT}\n\n<workspace>
+  <path>${task.workdir ?? profile.workspaceDir}</path>
+  <outputs>${outputs}</outputs>
+  <rule>Use the workspace path for requested repository changes. Save standalone images, design drafts, exports, and their one-off helper scripts in the outputs directory; create it as needed. These deliverables do not belong in the source repository unless the user asks to integrate them into the application. Use absolute output paths in MEDIA lines and olympus-preview collections so Olympus can publish them. Keep commands in the appropriate directory.</rule>
+</workspace>`;
   return `${base}${supplemental}`;
 }
 

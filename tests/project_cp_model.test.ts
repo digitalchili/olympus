@@ -13,6 +13,8 @@ try {
     getActiveProjectEditorForProfile,
     getActiveProjectEditorForTask,
     getProjectEditor,
+    getProjectEditorForTask,
+    listProjectEditors,
     listProjectVersions,
     recordProjectVersion,
     releaseProjectEditor,
@@ -23,7 +25,7 @@ try {
 
   const project = createProject({
     name: 'Commit Push Fixture',
-    purpose: 'Verify one editor and visible version history',
+    purpose: 'Verify independent task workspaces and visible version history',
     managerProfileId: 'default',
     changedBy: 'local-user',
   }, 1_000);
@@ -62,8 +64,7 @@ try {
   assert.equal(getActiveProjectEditorForTask(firstTask.id)?.projectId, project.id);
   assert.equal(getActiveProjectEditorForProfile('default')?.taskId, firstTask.id);
 
-  assert.throws(
-    () => acquireProjectEditor({
+  const secondLease = acquireProjectEditor({
       projectId: project.id,
       taskId: secondTask.id,
       profileId: 'default',
@@ -74,9 +75,10 @@ try {
       baseSha: 'b'.repeat(40),
       leaseToken: 'lease-token-2',
       now: 2_100,
-    }),
-    /already has an editor/i,
-  );
+    });
+  assert.equal(getProjectEditorForTask(project.id, secondTask.id)?.id, secondLease.id);
+  assert.equal(listProjectEditors(project.id).length, 2, 'a Project can retain concurrent task workspaces');
+  assert.equal(acquireProjectEditor({ projectId: project.id, taskId: firstTask.id, profileId: 'default', repositoryFullName: 'example/atlas', baseBranch: 'main', workdir: 'unused', branchName: 'unused', leaseToken: 'unused' }).id, lease.id, 'repeat acquisition returns only the requesting task lease');
 
   const commit = recordProjectVersion({
     projectId: project.id,
@@ -123,7 +125,8 @@ try {
   assert.equal(historyAfterTaskDeletion[0]?.taskId, null, 'deleted task attribution becomes unavailable without deleting history');
 
   releaseProjectEditor({ leaseId: lease.id, taskId: firstTask.id, now: 5_000 });
-  assert.equal(getProjectEditor(project.id), null);
+  assert.equal(getProjectEditorForTask(project.id, firstTask.id), null);
+  assert.equal(getProjectEditorForTask(project.id, secondTask.id)?.id, secondLease.id, 'deleting one task never releases another workspace');
 
   const afterRelease = acquireProjectEditor({
     projectId: project.id,

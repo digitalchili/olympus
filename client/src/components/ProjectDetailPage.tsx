@@ -16,12 +16,12 @@ import type {
   TaskStatus,
 } from '@shared/types';
 import {
-  acquireProjectEditor,
+  prepareProjectEditor,
   commitPushProject,
   deleteTask,
   deleteProjectReference,
   fetchProject,
-  fetchProjectEditor,
+  fetchProjectEditors,
   fetchProjectEditorStatus,
   fetchProjectGrants,
   fetchProjectReferences,
@@ -50,6 +50,8 @@ import { selectableStudioRepositories } from '../lib/studio-projects';
 import { TaskKanban } from './Board';
 import { usePageHeader } from './Header';
 import { ProjectGitHubSync } from './ProjectGitHubSync';
+import { ProjectTaskSelector } from './ProjectTaskSelector';
+import { projectTaskCodeView, selectProjectCodeTask } from '../lib/projectCodeSelection';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
 const projectTabs = ['board', 'code', 'references', 'activity', 'settings'] as const;
@@ -65,11 +67,14 @@ export function ProjectDetailPage() {
   const [history, setHistory] = useState<ProjectManagerHistoryEntry[]>([]);
   const [grants, setGrants] = useState<ProjectProfileGrant[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [editor, setEditor] = useState<PublicProjectEditorLease | null>(null);
+  const [editors, setEditors] = useState<PublicProjectEditorLease[]>([]);
   const [versions, setVersions] = useState<ProjectVersion[]>([]);
   const [editorTaskId, setEditorTaskId] = useState('');
+  const codeSelectionRef = useRef({ projectId, taskId: editorTaskId });
+  codeSelectionRef.current = { projectId, taskId: editorTaskId };
   const [commitMessage, setCommitMessage] = useState('');
-  const [codeStatus, setCodeStatus] = useState<{ clean: boolean; changedFiles: string[]; summary: string; diff: string } | null>(null);
+  const [codeStatusSnapshot, setCodeStatus] = useState<{ taskId: string; clean: boolean; changedFiles: string[]; summary: string; diff: string } | null>(null);
+  const { editor, versions: taskVersions, status: codeStatus } = projectTaskCodeView(editorTaskId, editors, versions, codeStatusSnapshot);
   const [references, setReferences] = useState<ProjectReferenceListItem[]>([]);
   const [referenceSearch, setReferenceSearch] = useState('');
   const [referenceResults, setReferenceResults] = useState<ProjectReferenceSearchResult[]>([]);
@@ -124,17 +129,18 @@ export function ProjectDetailPage() {
         fetchProjectTasks(projectId),
         fetchProjectGrants(projectId),
         fetchProjectReferences(projectId),
-        fetchProjectEditor(projectId),
+        fetchProjectEditors(projectId),
         fetchProjectVersions(projectId),
       ]);
+      if (codeSelectionRef.current.projectId !== projectId) return;
       setProject(detail.project);
       setHistory(detail.managerHistory);
       setTasks(taskResult.tasks);
       setGrants(grantResult.grants);
       setReferences(referenceResult.references);
-      setEditor(editorResult.editor);
+      setEditors(editorResult.editors);
       setVersions(versionResult.versions);
-      setEditorTaskId((current) => editorResult.editor?.taskId ?? current ?? '');
+      setEditorTaskId(current => selectProjectCodeTask(current, taskResult.tasks, editorResult.editors));
       setNextManager(detail.project.managerProfileId);
       setDraftName(detail.project.name);
       setDraftPurpose(detail.project.purpose);
@@ -353,34 +359,29 @@ export function ProjectDetailPage() {
   const taskProfileId = (task: Task) => task.handling_profile_id ?? task.profile_name ?? project?.managerProfileId ?? 'default';
 
   useEffect(() => {
-    if (editor?.taskId) {
-      setEditorTaskId(editor.taskId);
-      return;
-    }
-    if (!editorTaskId && tasks.length > 0) setEditorTaskId(tasks.find((task) => task.status === 'in_progress')?.id ?? tasks[0]!.id);
-  }, [editor?.taskId, editorTaskId, tasks]);
-
-  useEffect(() => {
+    let cancelled = false;
+    setCodeStatus(null);
     if (activeTab !== 'code' || !editor) {
-      setCodeStatus(null);
       return;
     }
     fetchProjectEditorStatus(projectId, editor.taskId)
-      .then(({ status }) => setCodeStatus(status))
-      .catch((cause) => setActionError(toErrorMessage(cause, 'Could not inspect Project changes')));
+      .then(({ status }) => { if (!cancelled) setCodeStatus({ ...status, taskId: editor.taskId }); })
+      .catch((cause) => { if (!cancelled) setActionError(toErrorMessage(cause, 'Could not inspect task changes')); });
+    return () => { cancelled = true; };
   }, [activeTab, editor, projectId]);
 
-  const refreshCode = async (taskId = editor?.taskId) => {
+  const refreshCode = async (taskId = editorTaskId) => {
     const [editorResult, versionResult] = await Promise.all([
-      fetchProjectEditor(projectId),
+      fetchProjectEditors(projectId),
       fetchProjectVersions(projectId),
     ]);
-    setEditor(editorResult.editor);
+    if (codeSelectionRef.current.projectId !== projectId) return;
+    setEditors(editorResult.editors);
     setVersions(versionResult.versions);
-    if (taskId && editorResult.editor?.taskId === taskId) {
+    if (taskId && editorResult.editors.some(candidate => candidate.taskId === taskId)) {
       const { status } = await fetchProjectEditorStatus(projectId, taskId);
-      setCodeStatus(status);
-    } else {
+      if (codeSelectionRef.current.projectId === projectId && codeSelectionRef.current.taskId === taskId) setCodeStatus({ ...status, taskId });
+    } else if (codeSelectionRef.current.taskId === taskId) {
       setCodeStatus(null);
     }
   };
@@ -390,31 +391,30 @@ export function ProjectDetailPage() {
     setBusy(true);
     setActionError(null);
     try {
-      const result = await acquireProjectEditor(projectId, editorTaskId);
-      setEditor(result.editor);
+      const result = await prepareProjectEditor(projectId, editorTaskId);
       await refreshCode(result.editor.taskId);
     } catch (cause) {
-      setActionError(toErrorMessage(cause, 'Could not prepare the Project editor'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const stopEditing = async () => {
-    if (!editor) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      await releaseProjectEditor(projectId, editor.taskId);
-      await refreshCode();
-    } catch (cause) {
-      setActionError(toErrorMessage(cause, 'Could not release the Project editor'));
+      setActionError(toErrorMessage(cause, 'Could not open task changes'));
     } finally {
       setBusy(false);
     }
   };
 
   const [generatingMessage, setGeneratingMessage] = useState(false);
+
+  const releaseWorkspace = async () => {
+    if (!editor || !codeStatus?.clean) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await releaseProjectEditor(projectId, editor.taskId);
+      await refreshCode(editor.taskId);
+    } catch (cause) {
+      setActionError(toErrorMessage(cause, 'Could not release this task workspace'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const autoGenerateMessage = async () => {
     if (!editor) return;
@@ -464,7 +464,7 @@ export function ProjectDetailPage() {
   };
 
   const restoreVersion = async (version: ProjectVersion) => {
-    if (!editor) return;
+    if (!editor || version.taskId !== editor.taskId) return;
     if (!window.confirm(`Revert to this version?\n\n${version.commitMessage}\n\nOlympus will create and push a new restore checkpoint. Existing history will remain intact.`)) return;
     setBusy(true);
     setActionError(null);
@@ -559,13 +559,10 @@ export function ProjectDetailPage() {
             <main className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
               <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div><h2 className="flex items-center gap-2 text-sm font-semibold"><GitBranch size={15} /> Project editor</h2><p className="mt-1 text-xs leading-5 text-zinc-500">One task may change this Project at a time. Other tasks can still plan and review.</p></div>
-                  <div className="flex items-center gap-2">
-                    {editor ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={12} /> Active</span> : <span className="rounded-full bg-zinc-100 px-2 py-1 text-[11px] text-zinc-500 dark:bg-zinc-800">Not started</span>}
-                  </div>
+                  <div><h2 className="flex items-center gap-2 text-sm font-semibold"><GitBranch size={15} /> Task changes</h2><p className="mt-1 text-xs leading-5 text-zinc-500">Each task keeps its own changes. Choose a task to review or publish its work.</p></div>
                 </div>
                 {!project.repositoryLink && <p className="mt-4 rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-700">Connect a write-enabled GitHub repository in Settings first.</p>}
-                {project.repositoryLink && !editor && <div className="mt-4 flex flex-col gap-2 sm:flex-row"><select aria-label="Code-writing task" value={editorTaskId} onChange={(event) => setEditorTaskId(event.target.value)} className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"><option value="">Choose the code-writing task</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select><button type="button" disabled={busy || !editorTaskId} onClick={() => void beginEditing()} className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">Prepare editor</button></div>}
+                {project.repositoryLink && <div className="mt-4 flex flex-col gap-2 sm:flex-row"><ProjectTaskSelector tasks={tasks} selectedTaskId={editorTaskId} disabled={busy || generatingMessage} canRelease={Boolean(codeStatus?.clean)} onRelease={editor ? () => void releaseWorkspace() : undefined} onSelect={taskId => { setEditorTaskId(taskId); setCommitMessage(''); setActionError(null); setPushStatus('idle'); }} />{!editor && <button type="button" disabled={busy || !editorTaskId} onClick={() => void beginEditing()} className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">View changes</button>}</div>}
                 {editor && <div className="mt-4 space-y-4">
                   <div className="rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-950/40"><p className="font-medium text-zinc-800 dark:text-zinc-200">{tasks.find((task) => task.id === editor.taskId)?.title ?? 'Assigned task'}</p><p className="mt-1 text-zinc-500">{codeStatus?.summary ?? 'Inspecting changes…'}</p></div>
                   {codeStatus && !codeStatus.clean && <><div><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Changed files</h3><ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded-lg border border-zinc-200 p-2 font-mono text-xs dark:border-zinc-700">{codeStatus.changedFiles.map((file) => <li key={file} className="truncate">{file}</li>)}</ul></div><details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700"><summary className="cursor-pointer text-xs font-medium">Review change preview</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">{codeStatus.diff || 'Binary or untracked files changed; review the file list above.'}</pre></details></>}
@@ -652,14 +649,6 @@ export function ProjectDetailPage() {
                     </button>
                     <button
                       type="button"
-                      disabled={busy || !codeStatus?.clean}
-                      onClick={() => void stopEditing()}
-                      className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium disabled:opacity-40 dark:border-zinc-700"
-                    >
-                      Release editor
-                    </button>
-                    <button
-                      type="button"
                       disabled={busy}
                       onClick={() => void refreshCode(editor.taskId)}
                       className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium dark:border-zinc-700"
@@ -670,13 +659,13 @@ export function ProjectDetailPage() {
                   <p className="text-[11px] leading-4 text-zinc-400">
                     {deployToDefault && project?.repositoryLink?.defaultBranch
                       ? `Commit & Deploy pushes directly to ${project.repositoryLink.defaultBranch} to trigger your deployment webhook.`
-                      : 'Commit & Push updates only this Project’s protected working branch. It does not merge or deploy.'}
+                      : 'Commit & Push updates only this task’s protected working branch. It does not merge or deploy.'}
                   </p>
                 </div>}
               </section>
               <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-                <h2 className="flex items-center gap-2 text-sm font-semibold"><History size={15} /> Version history</h2><p className="mt-1 text-xs leading-5 text-zinc-500">Every successful checkpoint stays visible. Restoring creates a new checkpoint and preserves this history.</p>
-                <div className="mt-4 space-y-3">{versions.length === 0 && <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-700">No checkpoints yet.</p>}{versions.map((version) => <article key={version.id} className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium">{version.commitMessage}</p><p className="mt-1 text-[11px] text-zinc-400">{new Date(version.pushedAt).toLocaleString()} · {version.commitSha.slice(0, 7)} · {version.changedFiles.length} file{version.changedFiles.length === 1 ? '' : 's'}</p></div>{version.action === 'revert' && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Restore</span>}</div><button type="button" disabled={busy || !editor || !codeStatus?.clean || versions[0]?.id === version.id} onClick={() => void restoreVersion(version)} className="mt-3 inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-200 px-2 text-xs font-medium disabled:opacity-40 dark:border-zinc-700"><RotateCcw size={12} /> Revert to this version</button></article>)}</div>
+                <h2 className="flex items-center gap-2 text-sm font-semibold"><History size={15} /> Version history</h2><p className="mt-1 text-xs leading-5 text-zinc-500">Checkpoints for the selected task. Restoring creates a new checkpoint and preserves its history.</p>
+                <div className="mt-4 space-y-3">{taskVersions.length === 0 && <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-700">No checkpoints for this task yet.</p>}{taskVersions.map((version) => <article key={version.id} className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium">{version.commitMessage}</p><p className="mt-1 text-[11px] text-zinc-400">{new Date(version.pushedAt).toLocaleString()} · {version.commitSha.slice(0, 7)} · {version.changedFiles.length} file{version.changedFiles.length === 1 ? '' : 's'}</p></div>{version.action === 'revert' && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Restore</span>}</div><button type="button" disabled={busy || !editor || !codeStatus?.clean || taskVersions[0]?.id === version.id} onClick={() => void restoreVersion(version)} className="mt-3 inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-200 px-2 text-xs font-medium disabled:opacity-40 dark:border-zinc-700"><RotateCcw size={12} /> Revert to this version</button></article>)}</div>
               </section>
             </main>
           )}

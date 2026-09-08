@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+
+const root = await mkdtemp(join(tmpdir(), 'olympus-verification-workspace-'));
+process.env.DB_PATH = join(root, 'test.db'); process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
+const { default: db } = await import('../server/db/index.js');
+const { insertTask, updateTask } = await import('../server/db/queries.js');
+const { captureCodingBaseline, verifyCodingRun, readCodingEvidence, codingReviewAllowed } = await import('../server/coding-verification.js');
+const git = async (cwd: string, ...args: string[]) => (await promisify(execFile)('git', args, { cwd })).stdout.trim();
+try {
+  const oldRoot = join(root, 'legacy-now-owned-by-another-task'); const newRoot = join(root, 'isolated-task'); const marker = join(root, 'executed-in.txt');
+  await mkdir(join(oldRoot, '.olympus'), { recursive: true });
+  await writeFile(join(oldRoot, 'source.txt'), 'Same published source');
+  await writeFile(join(oldRoot, '.olympus', 'verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)},process.cwd())`]] }));
+  await git(oldRoot, 'init', '-b', 'main'); await git(oldRoot, 'config', 'user.name', 'Fixture'); await git(oldRoot, 'config', 'user.email', 'fixture@example.invalid');
+  await git(oldRoot, 'add', '.'); await git(oldRoot, 'commit', '-m', 'Published'); await git(root, 'clone', oldRoot, newRoot);
+  const originalTask = insertTask({ title: 'Task with old evidence', status: 'in_progress', workdir: oldRoot });
+  await captureCodingBaseline(originalTask, 'old-run');
+  assert.equal(await verifyCodingRun(originalTask, 'old-run', 2000), true);
+  assert.equal(codingReviewAllowed(originalTask.id, 'old-run'), true);
+  await rm(marker);
+  const currentTask = updateTask(originalTask.id, { workdir: newRoot })!;
+  assert.equal(codingReviewAllowed(originalTask.id, 'old-run'), false, 'changing the bound workspace immediately invalidates old review evidence even at the same commit');
+  const historical = await readCodingEvidence(originalTask);
+  assert.equal(historical?.status, 'stale', 'freshness reads use the current task binding, not an older task object or evidence directory');
+  assert.match(historical?.reason ?? '', /workspace.*changed/i);
+  assert.equal(await verifyCodingRun(originalTask, 'old-run', 2000), false, 'manual checks cannot execute an old workspace under a new task lock');
+  await assert.rejects(readFile(marker), 'neither old nor new commands run against a mismatched agent baseline');
+  await captureCodingBaseline(currentTask, 'new-run');
+  assert.equal(await verifyCodingRun(currentTask, 'new-run', 2000), true, 'a new turn safely establishes evidence for the current workspace');
+  assert.equal(await readFile(marker, 'utf8'), await realpath(newRoot));
+  assert.equal(codingReviewAllowed(currentTask.id, 'new-run'), true);
+  await rm(marker);
+  updateTask(currentTask.id, { workdir: null });
+  assert.equal(codingReviewAllowed(currentTask.id, 'new-run'), false);
+  assert.equal((await readCodingEvidence(currentTask))?.status, 'stale');
+  assert.equal(await verifyCodingRun(currentTask, 'new-run', 2000), false);
+  await assert.rejects(readFile(marker));
+} finally { db.close(); await rm(root, { recursive: true, force: true }); }
+console.log('Verification task workspace binding tests passed');

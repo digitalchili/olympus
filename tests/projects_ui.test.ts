@@ -56,8 +56,6 @@ assert.match(detail, /protected branch/);
 assert.doesNotMatch(detail, /read-only/);
 assert.match(detail, /Version history/);
 assert.match(detail, /Revert to this version/);
-assert.match(detail, /acquireProjectEditor/);
-assert.match(detail, /releaseProjectEditor/);
 assert.match(api, /export function fetchProjectVersions\(/);
 assert.match(api, /export function fetchProjectEditor\(/);
 assert.match(api, /export function acquireProjectEditor\(/);

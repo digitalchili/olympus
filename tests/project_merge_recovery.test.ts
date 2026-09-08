@@ -18,7 +18,6 @@ const { createProjectCpService } = await import('../server/project-cp.js');
 const { createProject, upsertProjectRepositoryLink } = await import('../server/db/projects.js');
 const { upsertGitHubInstallation } = await import('../server/db/studio-projects.js');
 const { insertTask, updateTask } = await import('../server/db/queries.js');
-const { getProjectEditor } = await import('../server/db/project-cp.js');
 const { createProjectTaskWorkspaceRouter } = await import('../server/routes/project-task-workspace.js');
 const { default: db } = await import('../server/db/index.js');
 
@@ -49,6 +48,7 @@ try {
   await git(seed, 'add', '.');
   await git(seed, 'commit', '-m', 'Conflicting upstream');
   await git(seed, 'push', remote, 'main');
+  await service.sync({ projectId: project.id, repositoryLink: link });
 
   const app = express();
   app.use(express.json());
@@ -64,70 +64,35 @@ try {
   try {
     const response = await send();
     const body = await response.json();
-    assert.equal(response.status, 409, JSON.stringify(body));
-    assert.equal(body.code, 'PROJECT_MERGE_CONFLICT');
-    assert.deepEqual(body.conflictingFiles, ['README.md']);
-    assert.equal(body.activeTaskId, first.id);
-    assert.match(body.error, /README\.md/);
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.started, true, 'another task starts from GitHub without merging into the older workspace');
+    const { getProjectEditorForTask } = await import('../server/db/project-cp.js');
+    const nextLease = getProjectEditorForTask(project.id, next.id)!;
+    assert.notEqual(nextLease.workdir, lease.workdir);
+    assert.equal(await readFile(join(nextLease.workdir, 'README.md'), 'utf8'), 'new upstream content\n');
     assert.equal(await git(lease.workdir, 'rev-parse', 'HEAD'), saved);
     assert.equal(await readFile(join(lease.workdir, 'README.md'), 'utf8'), 'saved Olympus work\n');
-    assert.equal(await git(lease.workdir, 'status', '--porcelain'), '');
-    assert.equal(getProjectEditor(project.id)?.taskId, first.id);
-    assert.equal((await service.prepareTask(input)).taskId, first.id, 'original editor remains available for conflict recovery');
 
-    const external = join(root, 'external');
-    await git(root, 'clone', remote, external);
-    await git(external, 'config', 'user.name', 'Fixture');
-    await git(external, 'config', 'user.email', 'fixture@example.invalid');
-    await git(external, 'checkout', lease.branchName);
-    await writeFile(join(external, 'remote-only.txt'), 'published elsewhere\n');
-    await git(external, 'add', '.');
-    await git(external, 'commit', '-m', 'Published branch advance');
-    await git(external, 'push', 'origin', lease.branchName);
-    const published = await git(external, 'rev-parse', 'HEAD');
-    assert.equal((await send()).status, 409);
-    assert.equal(await git(lease.workdir, 'rev-parse', 'HEAD'), published);
-    assert.equal(getProjectEditor(project.id)?.baseSha, published, 'published fast-forward is not misclassified as an unpublished checkpoint');
-    assert.equal((await service.status({ projectId: project.id, taskId: first.id })).clean, true);
-    assert.equal((await send()).status, 409, 'retry remains a resolvable conflict, not a permanently busy editor');
-
-    await assert.rejects(git(external, 'merge', '--no-edit', 'origin/main'));
-    await git(external, 'checkout', '--ours', 'README.md');
-    await git(external, 'add', 'README.md');
-    await git(external, 'commit', '-m', 'Resolve conflict preserving saved work');
-    await git(external, 'push', 'origin', lease.branchName);
-    await service.sync({ projectId: project.id, repositoryLink: link });
-    assert.equal(getProjectEditor(project.id)?.baseSha, await git(lease.workdir, 'rev-parse', 'HEAD'));
-    assert.equal((await service.status({ projectId: project.id, taskId: first.id })).clean, true, 'explicit sync reconciles the active lease');
-
-    const syncedBase = getProjectEditor(project.id)?.baseSha;
     await writeFile(join(lease.workdir, 'local-only.txt'), 'unpublished work\n');
     await git(lease.workdir, 'add', '.');
     await git(lease.workdir, 'commit', '-m', 'Unpublished user work');
-    await assert.rejects(service.sync({ projectId: project.id, repositoryLink: link }), /checkpoint|unpublished/i);
-    assert.equal(getProjectEditor(project.id)?.baseSha, syncedBase, 'unpublished work never becomes a published baseline');
+    const unpublishedHead = await git(lease.workdir, 'rev-parse', 'HEAD');
+    const syncedBase = getProjectEditorForTask(project.id, first.id)?.baseSha;
+    await service.sync({ projectId: project.id, repositoryLink: link });
+    assert.equal(getProjectEditorForTask(project.id, first.id)?.baseSha, syncedBase, 'baseline sync does not change task evidence');
+    assert.equal(await git(lease.workdir, 'rev-parse', 'HEAD'), unpublishedHead);
     assert.equal((await service.status({ projectId: project.id, taskId: first.id })).clean, false);
 
-    await service.commitPush({ projectId: project.id, taskId: first.id, repositoryLink: link, message: 'Publish local work' });
-    await writeFile(join(seed, 'upstream-only.txt'), 'independent upstream change\n');
-    await git(seed, 'add', '.');
-    await git(seed, 'commit', '-m', 'Nonconflicting upstream work');
-    await git(seed, 'push', remote, 'main');
-    const beforeMerge = await git(lease.workdir, 'rev-parse', 'HEAD');
-    const pending = await send();
-    const pendingBody = await pending.json();
-    assert.equal(pending.status, 409, JSON.stringify(pendingBody));
-    assert.equal(pendingBody.code, 'PROJECT_CHECKPOINT_PENDING');
-    assert.equal(pendingBody.activeTaskId, first.id);
-    assert.equal(getProjectEditor(project.id)?.taskId, first.id, 'unpublished merge retains its editor');
-    assert.equal(getProjectEditor(project.id)?.baseSha, beforeMerge, 'only published progress advances the baseline');
-    assert.equal((await service.status({ projectId: project.id, taskId: first.id })).clean, false);
-    const merge = await git(lease.workdir, 'rev-parse', 'HEAD');
-    assert.notEqual(merge, beforeMerge);
-    await service.commitPush({ projectId: project.id, taskId: first.id, repositoryLink: link, message: 'Publish synchronized checkpoint' });
-    assert.equal(await git(remote, 'rev-parse', `refs/heads/${lease.branchName}`), merge);
-    assert.equal((await send()).status, 200, 'handoff succeeds after the previous editor publishes the merge');
-    assert.equal(getProjectEditor(project.id)?.taskId, next.id);
+    const remoteTaskBefore = await git(remote, 'rev-parse', `refs/heads/${lease.branchName}`);
+    const remoteMainBefore = await git(remote, 'rev-parse', 'main');
+    await assert.rejects(service.commitPush({ projectId: project.id, taskId: first.id, repositoryLink: link, message: 'Publish conflicting source', deployToDefaultBranch: true }), /rejected|atomic|failed/i);
+    assert.equal(await git(remote, 'rev-parse', `refs/heads/${lease.branchName}`), remoteTaskBefore, 'atomic publish never advances only the task branch when default branch rejects');
+    assert.equal(await git(remote, 'rev-parse', 'main'), remoteMainBefore, 'concurrent GitHub work is never force-pushed away');
+    assert.equal(await readFile(join(lease.workdir, 'local-only.txt'), 'utf8'), 'unpublished work\n');
+    assert.equal(getProjectEditorForTask(project.id, first.id)?.id, lease.id, 'failed publish keeps this task recoverable');
+    assert.equal((await send()).status, 200, 'one task publish conflict never blocks another task');
+    assert.equal(await readFile(join(nextLease.workdir, 'README.md'), 'utf8'), 'new upstream content\n');
+
   } finally {
     await new Promise<void>((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
   }
@@ -135,4 +100,4 @@ try {
   db.close();
   await rm(root, { recursive: true, force: true });
 }
-console.log('Project conflict preservation and sync baseline regression tests passed');
+console.log('Independent task conflict preservation and atomic publish tests passed');

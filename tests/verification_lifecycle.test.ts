@@ -64,6 +64,35 @@ async function slowCheck(cwd: string, name: string) {
 }
 
 try {
+  await test('manual checks use only their own Project workspace and background state', async () => {
+    const { createProject } = await import('../server/db/projects.js');
+    const { acquireProjectEditor } = await import('../server/db/project-cp.js');
+    const { startRun } = await import('../server/live-chat.js');
+    const project = createProject({name:'Independent checks',purpose:'Verify separate workspaces',managerProfileId:'default',changedBy:'test'});
+    const first = await fixture('parallel-first'); const second = await fixture('parallel-second');
+    for (const [index, item] of [first, second].entries()) {
+      db.prepare('UPDATE tasks SET project_id = ? WHERE id = ?').run(project.id, item.task.id);
+      acquireProjectEditor({projectId:project.id,taskId:item.task.id,profileId:'default',repositoryFullName:'fixture/repo',baseBranch:'main',branchName:`task-${index}`,workdir:item.cwd,leaseToken:`fixture-token-${index}`});
+      createTaskAgentRun({taskId:item.task.id,runId:`parallel-${index}`,kind:'chat',status:'done',startedAt:Date.now()});
+      await writeFile(join(item.cwd,'.olympus/verification.json'),JSON.stringify({commands:[[process.execPath,'-e','setTimeout(()=>{},200)']]}));
+    }
+    adapter.getBackgroundWork = idle;
+    const checks = await Promise.all([post(first.task.id,{},'verification'),post(second.task.id,{},'verification')]);
+    assert.deepEqual(checks.map(response=>response.status),[200,200]);
+    for (const response of checks) assert.equal((await response.json()).evidence.status,'passed');
+    await writeFile(join(first.cwd,'source'),'changed only first');
+    assert.equal((await (await fetch(`${api}/${first.task.id}/verification`)).json()).evidence.status,'stale');
+    assert.equal((await (await fetch(`${api}/${second.task.id}/verification`)).json()).evidence.status,'passed');
+    startRun(first.task.id,first.task.id,'Working');
+    try { assert.equal((await post(second.task.id,{},'verification')).status,200); }
+    finally { discardRun(first.task.id); }
+    adapter.getBackgroundWork = async id => id === first.task.id ? {available:true,work:[{id:'first-process',kind:'process',status:'running'}]} : idle();
+    try {
+      assert.equal((await post(first.task.id,{},'verification')).status,409);
+      assert.equal((await post(second.task.id,{},'verification')).status,200);
+    } finally { adapter.getBackgroundWork = idle; }
+  });
+
   await test('a greeting finishes without launching repository checks or claiming they passed', async () => {
     const { task, cwd } = await fixture('greeting');
     const { ready } = await slowCheck(cwd, 'greeting');
@@ -86,6 +115,36 @@ try {
     const manual = await (await post(task.id, {}, 'verification')).json();
     assert.equal(existsSync(ready), true, 'manual Run checks must still execute on the same source');
     assert.equal(manual.evidence.status, 'passed');
+  });
+
+  await test('a generated poster publishes from task outputs without changing or checking the source repository', async () => {
+    const { task, cwd } = await fixture('poster');
+    const { ready } = await slowCheck(cwd, 'poster');
+    await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+    adapter.getBackgroundWork = idle;
+    let posterPath = '';
+    adapter.chatStream = async function* (sessionId, _content, options) {
+      const outputPath = options?.systemMessage?.match(/<outputs>(.*?)<\/outputs>/)?.[1];
+      assert.ok(outputPath, 'the model needs a separate task output directory');
+      assert.equal(outputPath.startsWith(cwd), false);
+      assert.ok(outputPath.includes(task.id), 'outputs belong to this task');
+      await mkdir(outputPath, { recursive: true });
+      await writeFile(join(outputPath, 'create_poster.py'), '# one-off design helper\n');
+      posterPath = join(outputPath, 'morning-coffee.png');
+      await writeFile(posterPath, Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from('poster bytes')]));
+      yield { type: 'text_delta', content: `Here is the poster.\nMEDIA: ${posterPath}` };
+      yield { type: 'done', sessionId };
+    };
+    assert.equal((await post(task.id, { content: 'Create a coffee shop poster and show its image preview.' })).status, 202);
+    await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+    assert.ok(existsSync(posterPath));
+    assert.equal((await git(cwd, 'status', '--porcelain')).stdout, '');
+    assert.equal(existsSync(ready), false, 'standalone design output must not trigger application checks');
+    const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
+    assert.equal(evidence.status, 'skipped');
+    const { getRun } = await import('../server/live-chat.js');
+    const published = getRun(task.id)?.messages.flatMap(message => message.attachments ?? []);
+    assert.ok(published?.some(attachment => attachment.name === 'morning-coffee.png'), 'the output still uses the native artifact publisher');
   });
 
   for (const mode of ['chat', 'goal'] as const) {
@@ -239,6 +298,7 @@ try {
   });
 
   await test('manual checks can be stopped without changing a previously completed agent run', async () => {
+    adapter.getBackgroundWork = idle;
     const { task, cwd } = await fixture('manual-stop');
     const { ready, finished } = await slowCheck(cwd, 'manual-stop');
     createTaskAgentRun({ taskId: task.id, runId: 'manual-stop-run', kind: 'chat', status: 'streaming', startedAt: 1 });
@@ -255,7 +315,7 @@ try {
     assert.equal(getLatestTaskAgentRun(task.id)?.status, 'done', 'manual verification is separate from the completed agent run');
   });
 
-  await test('another task cannot prepare the same Project during manual verification', async () => {
+  await test('another task pointing to the same physical workspace cannot start during manual verification', async () => {
     const { createProject } = await import('../server/db/projects.js');
     const project = createProject({ name: 'Shared checkout', purpose: 'Verification ownership', managerProfileId: 'default', changedBy: 'test' });
     const { task, cwd } = await fixture('project-ownership');
@@ -271,7 +331,7 @@ try {
     const requested = await post(next.id, { content: 'Use the checkout' });
     await manual;
     await wait(() => !isVerifying(next.id));
-    assert.equal(requested.status, 409, 'a Project checkout has one operation owner across tasks');
+    assert.equal(requested.status, 409, 'an intentionally shared physical workspace still has one operation owner');
   });
 
   await test('Stop wins when the terminal result arrives before Hermes acknowledges cancellation', async () => {

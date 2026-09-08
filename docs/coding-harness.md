@@ -6,7 +6,7 @@ Olympus keeps Hermes as its execution engine. This release adds persisted contin
 
 Select a local Git working directory or a managed Project checkout. A task in a repository subdirectory uses the enclosing repository root for source evidence and checks. Olympus records the starting commit and a fingerprint of tracked and nonignored untracked files, including file modes and symlinks. Before a successful coding run can enter review, Olympus runs the repository's required checks and records their command, output, exit status, elapsed time and source fingerprint. Failed, missing or stale checks leave the task in progress. A clean working tree does not bypass checks for coding work, revision changes, explicit verification requests, goals or the manual **Run checks** action.
 
-An unchanged conversational turn without a coding/check request or execution/edit tool activity records verification as **skipped** and finishes without launching commands. The comparison uses both the starting revision and source fingerprint, not just Git's changed-file count. Skipping is not passing evidence and does not promote a repository task to code review. A repository created during the turn still requires checks.
+An unchanged conversational turn without a coding/check request records verification as **skipped** and finishes without launching commands. Read-only terminal activity does not require checks. The comparison uses both the starting revision and source fingerprint, not just Git's changed-file count. Skipping is not passing evidence and does not promote a repository task to code review. A repository created during the turn still requires checks.
 
 Add `.olympus/verification.json` at the repository root to select commands:
 
@@ -22,15 +22,23 @@ Add `.olympus/verification.json` at the repository root to select commands:
 
 Each entry is an executable followed by arguments, executed in the repository root without an implicit shell. Up to eight commands run sequentially with a combined five-minute ceiling, further limited by the agent run's remaining deadline. Without this file, Olympus uses existing `test`, `typecheck` and `build` scripts from `package.json`. Other projects need explicit commands. Commands are ordinary local project code, with the same access as Olympus; this is not a sandbox.
 
-The task's **Code verification** panel shows the checked revision, changed paths, tracked-file diff and check output. While checks run, it shows the active command, recent output and elapsed time, including a heartbeat for quiet commands. Use **Run checks** after correcting a failed check. Passing evidence becomes stale when the source changes, including edits without a new commit. Verification that modifies source cannot attest its starting source; rerun after reviewing those changes. The final source comparison runs before terminal delivery, within the same cancellation and time budget as the checks. Existing managed Projects still have one editor and a dedicated checkout. Tasks outside Git retain their normal completion flow.
+The task's **Code verification** panel shows the checked revision, changed paths, tracked-file diff and check output. While checks run, it shows the active command, recent output and elapsed time, including a heartbeat for quiet commands. Use **Run checks** after correcting a failed check. Passing evidence becomes stale when the source changes, including edits without a new commit. Verification that modifies source cannot attest its starting source; rerun after reviewing those changes. The final source comparison runs before terminal delivery, within the same cancellation and time budget as the checks. Checks operate in that task's checkout. Tasks outside Git retain their normal completion flow.
 
 Evidence does not establish functional completeness or replace human review. Ignored files are excluded from the fingerprint; submodules require separate verification. Output and tracked diffs are size limited and common secret assignments are redacted, but the panel remains local project data. Olympus does not publish or push a Git change through this feature.
 
-## Project GitHub sync (v0.7.4)
+## Independent Project tasks and GitHub sync
 
 Use **Sync latest from GitHub** on a connected Project. The Project keeps the last successful sync time, checked commit and **Updated** or **Up to date** result across reloads. Failed attempts leave that evidence unchanged; it describes the last verified sync, not a promise that GitHub has not changed since then.
 
-When an editor or task blocks syncing, Olympus names and links the task. **Release editor and sync** is available only after verifying that the editor is idle, its working tree and checkpoints are saved, and its native background work has finished. The server checks again under the Project operation lock and retains the editor until Git succeeds. Active work, unknown background activity, unpublished changes and merge conflicts block recovery without discarding files or stopping tasks. Existing Project permissions and task-handler restrictions apply to recovery; GitHub App credentials stay in the server control plane.
+Each new task gets an independent clone and branch from the downloaded Project baseline. Saved changes, active checks, and unfinished runs in another task do not block starting it. Reopening a task retains its files and branch. The existing legacy checkout stays with its owner; migration never stashes, resets, or moves its files. Selecting a task on the Code tab scopes status, publishing, and version restore to that task.
+
+Sync refreshes only the separate baseline for future tasks. It does not change existing task workspaces or require their editors to be released. A new task can use an already downloaded baseline while GitHub is temporarily unavailable. Publishing conflicts affect only that task; Olympus never force pushes to resolve them. Existing Project permissions and task-handler restrictions apply, and GitHub App credentials stay in the server control plane.
+
+Operations in the same task or the same physical workspace remain exclusive until checks and background cleanup settle. Rejected chat startup restores the prompt and attachments without overwriting a newer draft. This protects shared legacy/local folders while allowing independent Project tasks to run concurrently.
+
+Agents receive a separate task output directory under the active profile's workspace for standalone images, HTML drafts, exports, and helper scripts. Absolute output paths use the existing native artifact publisher. These outputs do not trigger source checks unless the agent also changes repository files. Files requested as part of the application still belong in its source checkout and require normal verification.
+
+See [Project task workspace contracts](project-task-workspaces.md) for storage and migration details. Completing a task or publishing from another checkout never proves the original task's files were published.
 
 ## Recovery
 

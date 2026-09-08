@@ -436,8 +436,13 @@ export interface ProjectGitStatus {
   diff: string;
 }
 
-export function fetchProjectEditor(projectId: string) {
-  return request<{ editor: PublicProjectEditorLease | null }>(`/projects/${encodeURIComponent(projectId)}/editor`, undefined, false);
+export function fetchProjectEditor(projectId: string, taskId?: string) {
+  const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
+  return request<{ editor: PublicProjectEditorLease | null }>(`/projects/${encodeURIComponent(projectId)}/editor${query}`, undefined, false);
+}
+
+export function fetchProjectEditors(projectId: string) {
+  return request<{ editors: PublicProjectEditorLease[] }>(`/projects/${encodeURIComponent(projectId)}/editors`, undefined, false);
 }
 
 export function acquireProjectEditor(projectId: string, taskId: string) {
@@ -494,10 +499,10 @@ export function fetchProjectSyncState(projectId: string) {
   return request<ProjectSyncState>(`/projects/${encodeURIComponent(projectId)}/sync`, undefined, false);
 }
 
-export function syncProjectFromGitHub(projectId: string, releaseEditorLeaseId?: string) {
+export function syncProjectFromGitHub(projectId: string) {
   return request<{ updated: boolean; currentSha: string; message: string; lastSync: ProjectSyncEvidence }>(
     `/projects/${encodeURIComponent(projectId)}/sync`,
-    { method: 'POST', body: JSON.stringify({ releaseEditorLeaseId }) },
+    { method: 'POST', body: JSON.stringify({}) },
     false,
   );
 }

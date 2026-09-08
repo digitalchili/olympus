@@ -188,7 +188,7 @@ export function TaskCommitPushModal({
                 Working tree is clean
               </h3>
               <p className="mt-1 max-w-sm text-xs text-zinc-500 dark:text-zinc-400">
-                No uncommitted file changes were detected for this task. Any previous changes are already up to date on GitHub.
+                No uncommitted file changes were detected for this task.
               </p>
             </div>
           )}
@@ -272,7 +272,7 @@ export function TaskCommitPushModal({
                       <p className="mt-0.5 text-[11px] text-zinc-400 leading-normal">
                         {deployToDefault
                           ? `Pushes directly to ${repositoryLink.defaultBranch} to trigger your deployment webhook.`
-                          : `Updates only this Project’s working branch (${editor?.branchName ?? 'working branch'}). Does not merge or deploy.`}
+                          : `Updates only this task’s working branch (${editor?.branchName ?? 'working branch'}). Does not merge or deploy.`}
                       </p>
                     </div>
                   </label>

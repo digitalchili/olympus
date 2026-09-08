@@ -31,13 +31,15 @@ upsertGitHubInstallation({ id: 77, accountLogin: 'fixture', accountType: 'Organi
 upsertProjectRepositoryLink(project.id, 77, { id: 9001, name: 'fixture', fullName: 'fixture/repo', owner: 'fixture', private: false, defaultBranch: 'main', htmlUrl: 'https://example.invalid/repo', cloneUrl: join(root, 'unused.git') });
 const target = insertTask({ title: 'Requested task', status: 'in_progress', project_id: project.id });
 const owner = insertTask({ title: 'Other editor', status: 'in_progress', project_id: project.id, workdir: join(root, 'checkout') });
-const routes = ['editor/acquire', 'editor/prepare', 'editor/release', 'sync', 'commit-push', 'versions/version-1/revert'];
-let mutation: () => Promise<never> = async () => { throw new Error('Unexpected checkout mutation'); };
+const routes = ['editor/acquire', 'editor/prepare', 'editor/release', 'commit-push', 'versions/version-1/revert'];
+const responseValue = { id:'fixture-lease', projectId:project.id, taskId:target.id, status:'active', workdir:'/private/fixture', changedFiles:[] };
+let mutation: () => Promise<any> = async () => responseValue;
+let background: () => Promise<any> = async () => ({ available:true, work:[] });
 // A controllable Git boundary lets each route remain pending after its caller disconnects.
 const projectCp = Object.fromEntries(['acquireEditor', 'prepareTask', 'releaseEditor', 'sync', 'commitPush', 'revert', 'status'].map(name => [name, () => mutation()])) as unknown as ProjectCpService;
 const app = express();
 app.use(express.json());
-app.use('/api/projects', createProjectsRouter({ projectCp }));
+app.use('/api/projects', createProjectsRouter({ projectCp, adapter: { getBackgroundWork: () => background() } as never }));
 const server = app.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const address = server.address();
@@ -71,20 +73,34 @@ try {
       assert.equal(body.code, 'PROJECT_CHECKPOINT_PENDING');
       assert.equal(body.activeTaskId, owner.id);
     } finally {
-      mutation = async () => { throw new Error('Unexpected checkout mutation'); };
+      mutation = async () => responseValue;
     }
   });
 
-  await test('all direct Project mutations reject another task operation in the checkout', async () => {
-    const release = claimTaskOperation(owner.id, project.id);
-    assert.ok(release);
-    try { await assertBlocked(); } finally { release(); }
+  await test('all task mutations allow a different workspace operation in the same Project', async () => {
+    const release = claimTaskOperation(owner.id, project.id)!;
+    try { for (const route of routes) assert.equal((await post(route)).status, 200, route); }
+    finally { release(); }
+    const same = claimTaskOperation(target.id, project.id)!;
+    try { await assertBlocked(); } finally { same(); }
   });
 
-  for (const phase of ['streaming', 'compacting']) await test(`all direct Project mutations reject another ${phase} task`, async () => {
-    if (phase === 'streaming') startRun(owner.id, owner.id, 'Working');
-    else startCompactionRun(owner.id, owner.id);
-    try { await assertBlocked(); } finally { discardRun(owner.id); }
+  for (const phase of ['streaming', 'compacting']) await test(`task mutations isolate another ${phase} task and protect their own`, async () => {
+    const start = phase === 'streaming' ? (id: string) => startRun(id, id, 'Working') : (id: string) => startCompactionRun(id, id);
+    start(owner.id);
+    try { for (const route of routes) assert.equal((await post(route)).status, 200, route); }
+    finally { discardRun(owner.id); }
+    start(target.id);
+    try { await assertBlocked(); } finally { discardRun(target.id); }
+  });
+
+  await test('task mutations fail closed for their own native background work', async () => {
+    try {
+      for (const inventory of [{available:true,work:[{id:'native',kind:'process',status:'running'}]}, {available:false,work:[]}]) {
+        background = async () => inventory;
+        for (const route of routes) assert.equal((await post(route)).status, 409, route);
+      }
+    } finally { background = async () => ({available:true,work:[]}); }
   });
 
   await test('an accepted chat still excludes Project mutation after its HTTP ownership ends', async () => {
@@ -121,7 +137,7 @@ try {
     }
   });
 
-  await test('automatic verification keeps the shared checkout unavailable to direct mutation', async () => {
+  await test('automatic verification in another task does not block independent workspace mutations', async () => {
     const cwd = owner.workdir!;
     const ready = join(root, 'check-ready');
     await mkdir(join(cwd, '.olympus'), { recursive: true });
@@ -133,14 +149,14 @@ try {
     const checking = verifyCodingRun(owner, 'automatic-check', 10_000);
     try {
       await waitFor(() => existsSync(ready));
-      await assertBlocked();
+      for (const route of routes) assert.equal((await post(route)).status, 200, route);
     } finally {
       await cancelCodingVerification(owner.id);
       await checking;
     }
   });
 
-  for (const route of routes) await test(`${route} retains Project ownership until a disconnected mutation settles`, async () => {
+  for (const route of routes) await test(`${route} retains its task workspace until a disconnected mutation settles`, async () => {
     let entered = false;
     let settle!: () => void;
     mutation = async () => {
@@ -155,13 +171,14 @@ try {
       controller.abort();
       await pending;
       await new Promise(resolve => setTimeout(resolve, 30));
-      const conflicting = claimTaskOperation(owner.id, project.id);
+      const conflicting = claimTaskOperation(target.id, project.id);
       conflicting?.();
       assert.equal(conflicting, null, 'response close must not release a checkout still being mutated');
+      const independent = claimTaskOperation(owner.id, project.id); assert.ok(independent); independent();
     } finally {
       settle?.();
       await waitFor(() => {
-        const release = claimTaskOperation(owner.id, project.id);
+        const release = claimTaskOperation(target.id, project.id);
         release?.();
         return Boolean(release);
       });

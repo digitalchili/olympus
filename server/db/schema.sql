@@ -340,8 +340,12 @@ CREATE TABLE IF NOT EXISTS project_editor_leases (
   CHECK(released_at IS NULL OR released_at >= created_at)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_project_editor_active
-  ON project_editor_leases(project_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_editor_active_task
+  ON project_editor_leases(task_id)
+  WHERE status = 'active';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_editor_active_workdir
+  ON project_editor_leases(workdir)
   WHERE status = 'active';
 
 CREATE INDEX IF NOT EXISTS idx_project_editor_task

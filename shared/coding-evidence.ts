@@ -9,6 +9,7 @@ export interface RunningCodingCheck {
 }
 export interface CodingEvidence {
   taskId: string; runId: string; workdir: string; status: 'pending' | 'running' | 'passed' | 'failed' | 'stale' | 'unconfigured' | 'skipped';
+  taskWorkdir?: string;
   baseline: SourceSnapshot; source: SourceSnapshot | null; checks: CodingCheck[];
   currentCheck?: RunningCodingCheck | null;
   reason: string | null; updatedAt: number;

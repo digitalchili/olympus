@@ -7,7 +7,7 @@ import { ProjectGitHubSyncView } from '../client/src/components/ProjectGitHubSyn
 import { ApiError, syncProjectFromGitHub } from '../client/src/lib/api.js';
 
 const render = (state: ProjectSyncState, pending = false, error: string | null = null) => renderToStaticMarkup(createElement(MemoryRouter, null,
-  createElement(ProjectGitHubSyncView, { projectId: 'project-1', state, pending, disabled: false, error, onSync() {}, onRelease() {} }),
+  createElement(ProjectGitHubSyncView, { projectId: 'project-1', state, pending, disabled: false, error, onSync() {} }),
 ));
 assert.match(render({ lastSync: null, blocker: null }), /Sync latest from GitHub/);
 assert.match(render({ lastSync: null, blocker: null }), /Not synced yet/);
@@ -19,14 +19,11 @@ assert.match(updated, /Last verified/);
 assert.match(updated, /datetime="2026-09-08T06:00:00.000Z"/i);
 assert.match(updated, /aaaaaaa/);
 assert.match(render({ lastSync: { ...lastSync, updated: false }, blocker: null }), /Up to date/);
-const blocker = { kind: 'editor' as const, task: { id: 'task-1', title: 'Website update', profileId: 'writer' }, message: 'This idle task still holds the Project editor.', releaseEditorLeaseId: 'lease-1' };
-const idle = render({ lastSync, blocker });
-assert.match(idle, /Release editor and sync/);
-assert.match(idle, /Website update/);
-assert.match(idle, /\/projects\/project-1\/tasks\/task-1\?profile=writer/);
-const active = render({ lastSync, blocker: { ...blocker, kind: 'active_task', releaseEditorLeaseId: null, message: 'Wait for this task to finish.' } });
-assert.doesNotMatch(active, /Release editor and sync/);
-assert.match(active, /Website update/);
+const blocker = { kind: 'project_operation' as const, task: null, message: 'A GitHub sync is already running.', releaseEditorLeaseId: null };
+assert.match(render({ lastSync, blocker }), /A GitHub sync is already running/);
+assert.doesNotMatch(render({ lastSync, blocker }), /Release editor|previous task|\/tasks\//i);
+assert.doesNotMatch(render({ lastSync, blocker: null }), /Release editor|previous task|\/tasks\//i, 'syncing the baseline has no dependency on another task');
+assert.match(updated, /New tasks use this version/, 'verified sync must not imply that existing task workspaces were overwritten');
 assert.match(render({ lastSync, blocker }, true), /disabled=""/);
 assert.match(render({ lastSync, blocker }, true), /Syncing/);
 assert.match(render({ lastSync, blocker: null }, false, 'GitHub could not be reached'), /GitHub could not be reached/);
@@ -35,12 +32,12 @@ const previousFetch = globalThis.fetch;
 try {
   globalThis.fetch = async (url, init) => {
     assert.equal(url, '/api/projects/project-1/sync', 'Project API retains operator routing, without ambient profile credentials');
-    assert.deepEqual(JSON.parse(String(init?.body)), { releaseEditorLeaseId: 'lease-1' });
+    assert.deepEqual(JSON.parse(String(init?.body)), {}, 'baseline sync must not release any task workspace');
     return new Response(JSON.stringify({ error: blocker.message, code: 'PROJECT_SYNC_BLOCKED', blocker }), { status: 409, headers: { 'content-type': 'application/json' } });
   };
-  await assert.rejects(syncProjectFromGitHub('project-1', 'lease-1'), (error: unknown) => {
+  await assert.rejects(syncProjectFromGitHub('project-1'), (error: unknown) => {
     assert.ok(error instanceof ApiError);
-    assert.deepEqual(error.details?.blocker, blocker, 'API errors preserve the task and safe recovery action');
+    assert.deepEqual(error.details?.blocker, blocker, 'API errors preserve a genuine baseline operation blocker');
     return true;
   });
 } finally { globalThis.fetch = previousFetch; }

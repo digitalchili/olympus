@@ -1,5 +1,5 @@
 import { isVerifying } from '../coding-verification.js';
-import { claimTaskOperation, hasActiveTaskRun, hasTaskOperation, hasProjectOperation } from '../task-run-lifecycle.js';
+import { claimTaskOperation, hasActiveTaskRun, hasTaskOperation, hasActiveWorkspaceRun } from '../task-run-lifecycle.js';
 import { getRecovery, cancelRecovery } from '../run-recovery.js';
 import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
 import { Router } from 'express';
@@ -11,7 +11,7 @@ import type { Task } from '../../shared/types.js';
 
 function taskIsRunning(task: Task): boolean {
   const live = getRunStatus(task.id);
-  return hasActiveTaskRun(task.id) || isVerifying(task.id)
+  return hasActiveWorkspaceRun(task.id, task.workdir) || hasActiveTaskRun(task.id) || isVerifying(task.id)
     || live?.status === 'streaming' || live?.status === 'compacting'
     || getLatestTaskAgentRun(task.id)?.status === 'streaming';
 }
@@ -35,7 +35,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
       const inventory = await readInventory(adapter, task.id);
       const canStop = Boolean(adapter.stopBackgroundWork && inventory.available && inventory.work.length
         && inventory.work.every(item => item.kind === 'process') && !taskIsRunning(task)
-        && !hasTaskOperation(task.id) && !(task.project_id && hasProjectOperation(task.project_id)));
+        && !hasTaskOperation(task.id));
       res.json({ ...inventory, canStop, runId: getLatestTaskAgentRun(task.id)?.runId ?? null });
     } catch {
       res.status(503).json({ code: 'BACKGROUND_WORK_UNAVAILABLE', error: 'Could not check background work. Try again.' });
@@ -50,8 +50,8 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
       return res.status(400).json({ error: 'Select the background work to stop.' });
     }
     if (taskIsRunning(task)) return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'The agent is still working. Wait for it to finish or use Stop in chat.' });
-    const release = claimTaskOperation(task.id, task.project_id);
-    if (!release) return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'The task or Project is busy. Check again shortly.' });
+    const release = claimTaskOperation(task.id, task.project_id, task.workdir);
+    if (!release) return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task is busy. Check again shortly.' });
     // Keep ownership even when the browser disconnects during process termination.
     try {
       const inventory = await readInventory(adapter, task.id);
@@ -84,7 +84,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
       return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has a message in progress.' });
     }
     // Hold through downstream startup so two tabs cannot both pass an async probe.
-    const release = claimTaskOperation(task.id, task.project_id);
+    const release = claimTaskOperation(task.id, task.project_id, task.workdir);
     if (!release) return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has work in progress.' });
     res.locals.releaseTaskOperation = release;
     res.once('finish', release);
