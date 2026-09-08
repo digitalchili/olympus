@@ -296,6 +296,14 @@ CREATE TABLE IF NOT EXISTS project_repository_links (
   UNIQUE(provider, provider_repository_id)
 );
 
+CREATE TABLE IF NOT EXISTS project_repository_sync (
+  project_id     TEXT PRIMARY KEY REFERENCES project_repository_links(project_id) ON DELETE CASCADE,
+  repository_key TEXT NOT NULL,
+  verified_at    INTEGER NOT NULL,
+  current_sha    TEXT NOT NULL,
+  updated        INTEGER NOT NULL CHECK(updated IN (0, 1))
+);
+
 CREATE TABLE IF NOT EXISTS task_collaboration_grants (
   task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   profile_id  TEXT NOT NULL,

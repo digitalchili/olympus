@@ -151,7 +151,7 @@ app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/storage', createStorageRouter(() => drainController.status().ready));
 app.use('/api/updates', createUpdatesRouter());
-app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp }));
+app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp, adapter }));
 app.use('/api/studio', createStudioRouter({
   github: studioGitHubGateway,
   publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,

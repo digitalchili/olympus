@@ -430,6 +430,25 @@ export interface ProjectEditorLease {
 
 export type PublicProjectEditorLease = Omit<ProjectEditorLease, 'workdir'>;
 
+/** Evidence from the last successful network sync, not a claim about GitHub now. */
+export interface ProjectSyncEvidence {
+  verifiedAt: number;
+  currentSha: string;
+  updated: boolean;
+}
+
+export interface ProjectSyncBlocker {
+  kind: 'active_task' | 'project_operation' | 'editor' | 'changes';
+  message: string;
+  task: { id: string; title: string; profileId: string } | null;
+  releaseEditorLeaseId: string | null;
+}
+
+export interface ProjectSyncState {
+  lastSync: ProjectSyncEvidence | null;
+  blocker: ProjectSyncBlocker | null;
+}
+
 export interface ProjectVersion {
   id: string;
   projectId: string;

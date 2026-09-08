@@ -39,7 +39,6 @@ import {
   revertProjectVersion,
   searchProjectReferences,
   setProjectGrant,
-  syncProjectFromGitHub,
   updateProject,
   uploadProjectReference,
 } from '../lib/api';
@@ -50,6 +49,7 @@ import { useProjectBoardEvents } from '../hooks/useProjectBoardEvents';
 import { selectableStudioRepositories } from '../lib/studio-projects';
 import { TaskKanban } from './Board';
 import { usePageHeader } from './Header';
+import { ProjectGitHubSync } from './ProjectGitHubSync';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
 const projectTabs = ['board', 'code', 'references', 'activity', 'settings'] as const;
@@ -479,28 +479,6 @@ export function ProjectDetailPage() {
     }
   };
 
-  const [syncingGitHub, setSyncingGitHub] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
-
-  const syncFromGitHub = async () => {
-    if (!project?.repositoryLink) return;
-    setSyncingGitHub(true);
-    setSyncMessage(null);
-    setActionError(null);
-    try {
-      const result = await syncProjectFromGitHub(projectId);
-      setSyncMessage(result.message);
-      setTimeout(() => setSyncMessage(null), 6000);
-      if (editor?.taskId) {
-        await refreshCode(editor.taskId);
-      }
-    } catch (cause) {
-      setActionError(toErrorMessage(cause, 'Could not sync from GitHub'));
-    } finally {
-      setSyncingGitHub(false);
-    }
-  };
-
   const moveProjectTask = async (task: Task, status: TaskStatus): Promise<Task> => {
     const result = await moveTask(task.id, status, taskProfileId(task));
     setTasks((current) => current.map((item) => item.id === task.id ? result.task : item));
@@ -525,21 +503,18 @@ export function ProjectDetailPage() {
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">{project.purpose}</p>
           </div>
           <div className="flex items-center gap-2">
-            {project.repositoryLink && (
-              <button
-                type="button"
-                disabled={syncingGitHub || busy}
-                onClick={() => void syncFromGitHub()}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50"
-                title={`Pull latest commits from GitHub ${project.repositoryLink.defaultBranch}`}
-              >
-                <RefreshCw size={13} className={syncingGitHub ? 'animate-spin' : ''} />
-                {syncingGitHub ? 'Syncing…' : 'Sync with GitHub'}
-              </button>
-            )}
             <Link to={toWithProfile({ pathname: '/tasks/new', search: `?project=${encodeURIComponent(project.id)}` }, project.managerProfileId)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-900 px-3.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"><Plus size={16} /> New task</Link>
           </div>
         </div>
+
+        {project.repositoryLink && <ProjectGitHubSync
+          key={`${projectId}:${project.repositoryLink.updatedAt}`}
+          projectId={projectId}
+          refreshKey={`${editor?.id ?? ''}:${busy}:${[...taskRuns.values()].map(run => `${run.taskId}:${run.status}`).sort().join(',')}`}
+          disabled={busy}
+          onBusyChange={setBusy}
+          onSynced={() => refreshCode()}
+        />}
 
         <nav aria-label="Project sections" className="mt-5 flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
           <button type="button" aria-current={activeTab === 'board' ? 'page' : undefined} onClick={() => selectTab('board')} className={`h-10 shrink-0 border-b-2 px-3 text-sm font-medium ${activeTab === 'board' ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100'}`}>Board</button>
@@ -570,7 +545,7 @@ export function ProjectDetailPage() {
         )}
 
         {actionError && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{actionError}</div>}
-        {syncMessage && <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300 flex items-center gap-2"><Check size={16} />{syncMessage}</div>}
+
 
         <div className="mt-6">
           {activeTab === 'board' && (
@@ -586,18 +561,6 @@ export function ProjectDetailPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div><h2 className="flex items-center gap-2 text-sm font-semibold"><GitBranch size={15} /> Project editor</h2><p className="mt-1 text-xs leading-5 text-zinc-500">One task may change this Project at a time. Other tasks can still plan and review.</p></div>
                   <div className="flex items-center gap-2">
-                    {project.repositoryLink && (
-                      <button
-                        type="button"
-                        disabled={syncingGitHub || busy}
-                        onClick={() => void syncFromGitHub()}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50"
-                        title={`Pull latest commits from GitHub ${project.repositoryLink.defaultBranch}`}
-                      >
-                        <RefreshCw size={12} className={syncingGitHub ? 'animate-spin' : ''} />
-                        {syncingGitHub ? 'Syncing…' : 'Pull from GitHub'}
-                      </button>
-                    )}
                     {editor ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={12} /> Active</span> : <span className="rounded-full bg-zinc-100 px-2 py-1 text-[11px] text-zinc-500 dark:bg-zinc-800">Not started</span>}
                   </div>
                 </div>

@@ -45,6 +45,8 @@ import type {
   ProjectManagerHistoryEntry,
   ProjectProfileGrant,
   ProjectVersion,
+  ProjectSyncState,
+  ProjectSyncEvidence,
   ProjectReferenceChunk,
   ProjectReferenceListItem,
   ProjectReferenceSearchResult,
@@ -74,6 +76,7 @@ export class ApiError extends Error {
     message: string,
     public status: number,
     public code?: string,
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -93,7 +96,7 @@ async function request<T>(path: string, init?: RequestInit, profileScoped = true
     const body = await res.json().catch(() => ({}));
     const message = isRecord(body) && typeof body.error === 'string' ? body.error : `HTTP ${res.status}`;
     const code = isRecord(body) && typeof body.code === 'string' ? body.code : undefined;
-    throw new ApiError(message, res.status, code);
+    throw new ApiError(message, res.status, code, isRecord(body) ? body : undefined);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -472,10 +475,14 @@ export function revertProjectVersion(projectId: string, taskId: string, versionI
   );
 }
 
-export function syncProjectFromGitHub(projectId: string) {
-  return request<{ updated: boolean; currentSha: string; message: string }>(
+export function fetchProjectSyncState(projectId: string) {
+  return request<ProjectSyncState>(`/projects/${encodeURIComponent(projectId)}/sync`, undefined, false);
+}
+
+export function syncProjectFromGitHub(projectId: string, releaseEditorLeaseId?: string) {
+  return request<{ updated: boolean; currentSha: string; message: string; lastSync: ProjectSyncEvidence }>(
     `/projects/${encodeURIComponent(projectId)}/sync`,
-    { method: 'POST' },
+    { method: 'POST', body: JSON.stringify({ releaseEditorLeaseId }) },
     false,
   );
 }

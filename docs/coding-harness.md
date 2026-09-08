@@ -26,6 +26,12 @@ The task's **Code verification** panel shows the checked revision, changed paths
 
 Evidence does not establish functional completeness or replace human review. Ignored files are excluded from the fingerprint; submodules require separate verification. Output and tracked diffs are size limited and common secret assignments are redacted, but the panel remains local project data. Olympus does not publish or push a Git change through this feature.
 
+## Project GitHub sync (v0.7.4)
+
+Use **Sync latest from GitHub** on a connected Project. The Project keeps the last successful sync time, checked commit and **Updated** or **Up to date** result across reloads. Failed attempts leave that evidence unchanged; it describes the last verified sync, not a promise that GitHub has not changed since then.
+
+When an editor or task blocks syncing, Olympus names and links the task. **Release editor and sync** is available only after verifying that the editor is idle, its working tree and checkpoints are saved, and its native background work has finished. The server checks again under the Project operation lock and retains the editor until Git succeeds. Active work, unknown background activity, unpublished changes and merge conflicts block recovery without discarding files or stopping tasks. Existing Project permissions and task-handler restrictions apply to recovery; GitHub App credentials stay in the server control plane.
+
 ## Recovery
 
 The worker stores continuation state in a profile-scoped SQLite journal under `OLYMPUS_DISPATCH_HOME/data/continuations-*.db`. Hermes continues to own transcripts, child execution and native results. Queue notifications are hints: the worker also reconciles native durable child records, so a missed notification need not lose a completed result.

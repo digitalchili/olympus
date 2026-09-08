@@ -39,6 +39,14 @@ export function claimProjectOperation(projectId: string): (() => void) | null {
   return claimOperations([`project:${projectId}`]);
 }
 
+export function hasTaskOperation(taskId: string): boolean {
+  return taskOperations.has(`task:${taskId}`);
+}
+
+export function hasProjectOperation(projectId: string): boolean {
+  return taskOperations.has(`project:${projectId}`);
+}
+
 export function getActiveOperationCount(): number {
   return activeOperations;
 }

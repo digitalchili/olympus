@@ -4,7 +4,7 @@ import multer from 'multer';
 import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { v4 as uuid } from 'uuid';
-import type { Project, ProjectAccessRole, ProjectEditorLease, ProjectRepositoryLink, ProjectVersion } from '../../shared/types.js';
+import type { Project, ProjectAccessRole, ProjectEditorLease, ProjectRepositoryLink, ProjectSyncBlocker, ProjectVersion, Task } from '../../shared/types.js';
 import { DEFAULT_PROFILE_NAME } from '../../shared/types.js';
 import {
   createProject,
@@ -26,7 +26,7 @@ import { getTask, getTasksForProject } from '../db/queries.js';
 import { addProjectClient, initSSE, sendEvent } from '../events.js';
 import { getRunStatus, getRunStatuses } from '../live-chat.js';
 import { isVerifying } from '../coding-verification.js';
-import { claimProjectOperation, hasActiveTaskRun } from '../task-run-lifecycle.js';
+import { activeCollaborations, claimProjectOperation, hasActiveTaskRun, hasProjectOperation, hasTaskOperation } from '../task-run-lifecycle.js';
 import {
   LocalProfileError,
   localProfileRegistry,
@@ -43,6 +43,7 @@ import type { StudioGitHubGateway } from './studio.js';
 import { getGitHubInstallation } from '../db/studio-projects.js';
 import { createProjectCpService, ProjectRepositoryBusyError, type ProjectCpService } from '../project-cp.js';
 import { getProjectEditor, listProjectVersions } from '../db/project-cp.js';
+import { getProjectSyncEvidence, recordProjectSyncEvidence } from '../db/project-sync.js';
 import {
   PROJECT_REFERENCE_MAX_BYTES,
   createProjectReferenceFromQuarantine,
@@ -113,7 +114,10 @@ async function verifiedRepositoryLink(
 
 function sendError(res: Response, error: unknown): Response {
   if (error instanceof ProjectOperationActiveError) {
-    return res.status(409).json({ error: error.message, code: 'PROJECT_OPERATION_ACTIVE' });
+    return res.status(409).json({ error: error.message, code: 'PROJECT_OPERATION_ACTIVE', blocker: error.blocker });
+  }
+  if (error instanceof ProjectSyncBlockedError) {
+    return res.status(409).json({ error: error.message, code: 'PROJECT_SYNC_BLOCKED', blocker: error.blocker });
   }
   if (error instanceof ProjectRepositoryCheckpointError) {
     return res.status(409).json({ error: error.message, code: 'PROJECT_CHECKPOINT_PENDING', activeTaskId: error.activeTaskId });
@@ -205,19 +209,47 @@ function requireWriteRepository(projectId: string): ProjectRepositoryLink {
   return repositoryLink;
 }
 
+function syncTask(task: Task): NonNullable<ProjectSyncBlocker['task']> {
+  return { id: task.id, title: task.title, profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME };
+}
+
+function activeProjectTask(projectId: string): Task | undefined {
+  return getTasksForProject(projectId).find(task => {
+    const status = getRunStatus(task.id)?.status;
+    const collaboration = activeCollaborations.get(task.id);
+    return hasTaskOperation(task.id) || hasActiveTaskRun(task.id) || status === 'streaming'
+      || status === 'compacting' || isVerifying(task.id) || (collaboration && !collaboration.settled);
+  });
+}
+
+function operationBlocker(projectId: string): ProjectSyncBlocker {
+  const task = activeProjectTask(projectId);
+  return {
+    kind: task ? 'active_task' : 'project_operation',
+    task: task ? syncTask(task) : null,
+    message: task ? 'Wait for this task and its checks to finish, then sync again.' : 'Another Project operation is running. Wait for it to finish, then sync again.',
+    releaseEditorLeaseId: null,
+  };
+}
+
 class ProjectOperationActiveError extends Error {
-  constructor() { super('This Project has work in progress. Wait for its task or checks to finish before changing the repository.'); }
+  readonly blocker: ProjectSyncBlocker;
+  constructor(projectId: string) {
+    const blocker = operationBlocker(projectId);
+    super(blocker.message);
+    this.blocker = blocker;
+  }
+}
+
+class ProjectSyncBlockedError extends Error {
+  constructor(readonly blocker: ProjectSyncBlocker) { super(blocker.message); }
 }
 
 async function withProjectMutation<T>(projectId: string, mutate: () => Promise<T>): Promise<T> {
   const release = claimProjectOperation(projectId);
-  if (!release) throw new ProjectOperationActiveError();
+  if (!release) throw new ProjectOperationActiveError(projectId);
   try {
-    const busy = getTasksForProject(projectId).some(task => {
-      const status = getRunStatus(task.id)?.status;
-      return hasActiveTaskRun(task.id) || status === 'streaming' || status === 'compacting' || isVerifying(task.id);
-    });
-    if (busy) throw new ProjectOperationActiveError();
+    if (activeProjectTask(projectId)) throw new ProjectOperationActiveError(projectId);
     return await mutate();
   } finally {
     // Git must settle before another caller can own this checkout, even after disconnect.
@@ -313,6 +345,44 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
   const changedBy = options.changedBy ?? 'local-user';
   const github = options.github;
   const projectCp = options.projectCp ?? createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), now });
+
+  async function syncBlocker(req: Request, projectId: string, ownsOperation = false): Promise<ProjectSyncBlocker | null> {
+    if (activeProjectTask(projectId) || (!ownsOperation && hasProjectOperation(projectId))) return operationBlocker(projectId);
+    const editor = getProjectEditor(projectId);
+    if (!editor) return null;
+    const task = getTask(editor.taskId);
+    const actor = profileActor(req, registry);
+    const canRelease = task && (!actor || (canProfileAccessProject(projectId, actor, 'contribute') && actor === syncTask(task).profileId));
+    let clean = false;
+    let message = 'Could not verify the editor’s changes. Open the task to inspect its checkout.';
+    try {
+      const status = await projectCp.status({ projectId, taskId: editor.taskId });
+      clean = status.clean;
+      message = clean ? 'This idle task still holds the Project editor.' : `${status.summary}. Open the task and use Commit & Push before syncing.`;
+    } catch { /* Unknown checkout state never permits recovery. */ }
+    // A finished root stream can still own native children or shell processes.
+    // POST calls this while holding the Project operation lock, before Git runs.
+    let backgroundBlocker: string | null = null;
+    if (clean) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const inventory = await Promise.race([
+          options.adapter?.getBackgroundWork?.(editor.taskId) ?? Promise.resolve({ available: false, work: [] }),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Background check timeout')), 5_000); }),
+        ]);
+        if (!inventory.available || !Array.isArray(inventory.work)) throw new Error('Background inventory unavailable');
+        if (inventory.work.length) backgroundBlocker = 'This task still has background work. Wait for it to finish, then sync again.';
+      } catch {
+        backgroundBlocker = 'Could not verify whether this task still has background work. Open the task or retry syncing.';
+      } finally { if (timer) clearTimeout(timer); }
+    }
+    if (activeProjectTask(projectId) || (!ownsOperation && hasProjectOperation(projectId)) || getProjectEditor(projectId)?.id !== editor.id) return operationBlocker(projectId);
+    return {
+      kind: backgroundBlocker ? 'active_task' : clean ? 'editor' : 'changes', message: backgroundBlocker ?? message,
+      task: task ? syncTask(task) : null,
+      releaseEditorLeaseId: clean && !backgroundBlocker && canRelease ? editor.id : null,
+    };
+  }
 
   router.get('/', async (req, res) => {
     try {
@@ -652,16 +722,37 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     }
   });
 
+  router.get('/:id/sync', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      const repositoryLink = getProjectRepositoryLink(projectId);
+      return res.json({ lastSync: repositoryLink ? getProjectSyncEvidence(repositoryLink) : null, blocker: await syncBlocker(req, projectId) });
+    } catch (error) { return sendError(res, error); }
+  });
+
   router.post('/:id/sync', async (req, res) => {
     try {
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
       const repositoryLink = requireWriteRepository(projectId);
-      const result = await withProjectMutation(projectId, () => projectCp.sync({
-        projectId,
-        repositoryLink,
-        tokenProvider: tokenProvider(github),
-      }));
+      const releaseEditorLeaseId = req.body?.releaseEditorLeaseId;
+      if (releaseEditorLeaseId !== undefined && (typeof releaseEditorLeaseId !== 'string' || !releaseEditorLeaseId.trim())) {
+        return res.status(400).json({ error: 'A valid editor lease is required', code: 'INVALID_PROJECT_REQUEST' });
+      }
+      const result = await withProjectMutation(projectId, async () => {
+        const editor = getProjectEditor(projectId);
+        if (releaseEditorLeaseId && editor) requireProjectEditorTask(req, registry, projectId, editor.taskId);
+        const blocker = await syncBlocker(req, projectId, true);
+        if (releaseEditorLeaseId && editor?.id !== releaseEditorLeaseId) {
+          throw new ProjectSyncBlockedError({ ...blocker, kind: 'editor', message: 'The Project editor changed. Sync again to review the current editor.', task: blocker?.task ?? null, releaseEditorLeaseId: null });
+        }
+        if (blocker && (!releaseEditorLeaseId || blocker.releaseEditorLeaseId !== releaseEditorLeaseId)) throw new ProjectSyncBlockedError(blocker);
+        const synced = await projectCp.sync({ projectId, repositoryLink, tokenProvider: tokenProvider(github), releaseEditorLeaseId });
+        const lastSync = { verifiedAt: now(), currentSha: synced.currentSha, updated: synced.updated };
+        recordProjectSyncEvidence(repositoryLink, lastSync);
+        return { ...synced, lastSync };
+      });
       return res.json(result);
     } catch (error) {
       return sendError(res, error);

@@ -86,6 +86,7 @@ export interface ProjectCpService {
     projectId: string;
     repositoryLink: ProjectRepositoryLink;
     tokenProvider?: InstallationTokenProvider;
+    releaseEditorLeaseId?: string;
   }): Promise<ProjectCpSyncResult>;
 }
 
@@ -223,6 +224,17 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     };
   }
 
+  async function releaseEditorUnlocked(input: { projectId: string; taskId: string }): Promise<ProjectEditorLease> {
+    const lease = getProjectEditorForTask(input.projectId, input.taskId);
+    if (!lease) throw new Error('This task is not the Project editor');
+    const status = await readStatus(input.projectId, input.taskId);
+    if (!status.clean) throw new Error('Commit & Push current changes before releasing the editor');
+    const released = releaseProjectEditor({ leaseId: lease.id, taskId: input.taskId, now: now() });
+    if (!released) throw new Error('This task is not the Project editor');
+    updateTask(input.taskId, { workdir: null });
+    return released;
+  }
+
   async function pushWithRecovery(input: {
     lease: ProjectEditorLease;
     repositoryLink: ProjectRepositoryLink;
@@ -262,6 +274,10 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     tokenProvider?: InstallationTokenProvider,
     lease?: ProjectEditorLease,
   ): Promise<void> {
+    const origin = (await git(workdir, ['remote', 'get-url', 'origin'])).stdout.trim();
+    if (origin !== repositoryLink.cloneUrl) {
+      throw Object.assign(new Error('The checkout’s origin does not match this Project’s GitHub repository. Inspect the repository connection before syncing.'), { statusCode: 409 });
+    }
     const token = await tokenFor(repositoryLink, tokenProvider);
     const auth = { env: gitHubAuthEnv(token) };
     const protectedBranch = (await git(workdir, ['branch', '--show-current'])).stdout.trim();
@@ -411,16 +427,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     },
 
     async releaseEditor(input) {
-      return serialized(input.projectId, async () => {
-        const lease = getProjectEditorForTask(input.projectId, input.taskId);
-        if (!lease) throw new Error('This task is not the Project editor');
-        const status = await readStatus(input.projectId, input.taskId);
-        if (!status.clean) throw new Error('Commit & Push or discard current changes before releasing the editor');
-        const released = releaseProjectEditor({ leaseId: lease.id, taskId: input.taskId, now: now() });
-        if (!released) throw new Error('This task is not the Project editor');
-        updateTask(input.taskId, { workdir: null });
-        return released;
-      });
+      return serialized(input.projectId, () => releaseEditorUnlocked(input));
     },
 
     async status(input) {
@@ -521,13 +528,18 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
 
     async sync(input) {
       return serialized(input.projectId, async () => {
+        const editor = getProjectEditor(input.projectId);
+        if (input.releaseEditorLeaseId && editor?.id !== input.releaseEditorLeaseId) {
+          throw Object.assign(new Error('The Project editor changed. Sync again to review the current editor.'), { statusCode: 409 });
+        }
         await mkdir(options.rootDir, { recursive: true });
         const workdir = managedWorkdir(options.rootDir, input.projectId);
         const checkoutExists = await pathExists(workdir);
-        const token = await tokenFor(input.repositoryLink, input.tokenProvider);
-        const auth = { env: gitHubAuthEnv(token) };
 
         if (!checkoutExists) {
+          if (editor) throw new Error('The Project editor checkout is missing; inspect it before syncing.');
+          const token = await tokenFor(input.repositoryLink, input.tokenProvider);
+          const auth = { env: gitHubAuthEnv(token) };
           await git(options.rootDir, ['clone', '--branch', input.repositoryLink.defaultBranch, '--single-branch', input.repositoryLink.cloneUrl, workdir], auth);
           const branchName = generatedBranch(input.projectId);
           await git(workdir, ['checkout', '-b', branchName]);
@@ -546,12 +558,14 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         }
 
         const headBefore = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-        const editor = getProjectEditor(input.projectId);
         if (editor && !(await readStatus(input.projectId, editor.taskId)).clean) {
           throw new Error('Project has a local checkpoint waiting to be pushed; publish it before syncing.');
         }
         await syncManagedCheckout(workdir, input.repositoryLink, input.tokenProvider, editor ?? undefined);
         const headAfter = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+
+        // Keep ownership on fetch failure, conflict or an unpublished merge checkpoint.
+        if (input.releaseEditorLeaseId && editor) await releaseEditorUnlocked({ projectId: input.projectId, taskId: editor.taskId });
 
         const updated = headBefore !== headAfter;
         return {
