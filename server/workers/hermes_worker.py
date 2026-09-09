@@ -2542,6 +2542,15 @@ def _submit_chat_request(request_id: str, request: dict[str, Any]) -> None:
     thread.start()
 
 
+def _handle_usage_request(request_id: str, refresh: bool) -> None:
+    try:
+        from hermes_usage import get_usage
+        cfg = _load_config()
+        _result(request_id, get_usage(_defaults_from_config(cfg), cfg, refresh))
+    except Exception:
+        _send_error(request_id, WorkerError('Account usage is unavailable. Check the profile connection and try again.', code='usage_unavailable'))
+
+
 def _handle_request(request: dict[str, Any]) -> None:
     request_id = str(request.get("id") or "")
     if not request_id:
@@ -2563,6 +2572,8 @@ def _handle_request(request: dict[str, Any]) -> None:
             _result(request_id, _set_defaults(request))
         elif request_type == "models.list":
             _result(request_id, _list_models())
+        elif request_type == "usage.get":
+            threading.Thread(target=_handle_usage_request, args=(request_id, request.get('refresh') is True), daemon=True).start()
         elif request_type == "scheduledTasks.list":
             _result(request_id, list_scheduled_tasks(bool(request.get("includeDisabled")), request.get("limit")))
         elif request_type == "scheduledTasks.get":

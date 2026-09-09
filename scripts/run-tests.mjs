@@ -8,6 +8,7 @@ const pythonTests = [
   'test_hermes_sessions_pagination.py',
   'test_delegation_event_projection.py',
   'test_worker_environment_overrides.py',
+  'test_worker_usage.py',
   'test_worker_task_workdir.py',
   'test_worker_background_work_rpc.py',
   'test_worker_deadline_budget.py',

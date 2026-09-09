@@ -13,6 +13,7 @@ import type {
   DelegationWorkerEvent,
 } from '../../shared/types.js';
 import type { InteractionResponse, NativeInteraction } from '../../shared/interactions.js';
+import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import type { AgentRunOptions, BotMessageRequest, BotMessageRespondRequest, AgentRunSettings, ScheduledTaskDrainStatus, TaskBackgroundWork } from './types.js';
 
 export type WorkerRequest =
@@ -20,6 +21,7 @@ export type WorkerRequest =
   | { id: string; type: 'settings.get' }
   | { id: string; type: 'settings.set'; provider?: string | null; model?: string | null; reasoningEffort?: string | null }
   | { id: string; type: 'models.list' }
+  | { id: string; type: 'usage.get'; refresh?: boolean }
   | { id: string; type: 'scheduledTasks.list'; includeDisabled?: boolean; limit?: number }
   | { id: string; type: 'scheduledTasks.get'; scheduledTaskId: string }
   | { id: string; type: 'scheduledTasks.create' } & ScheduledTaskInput
@@ -84,6 +86,7 @@ export type WorkerResult =
   | { ok: boolean; agentDir?: string | null; python?: string | null }
   | AgentDefaults
   | AgentModelsResponse
+  | ProviderUsageResponse
   | { scheduledTasks: ScheduledTask[] }
   | { scheduledTask: ScheduledTask | null }
   | { executed: number }

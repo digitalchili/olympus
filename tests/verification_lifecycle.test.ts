@@ -64,6 +64,36 @@ async function slowCheck(cwd: string, name: string) {
 }
 
 try {
+  await test('startup repairs old clean skipped completions without rerunning work or overriding reviewed tasks', async () => {
+    const { verifyCodingRun } = await import('../server/coding-verification.js');
+    const { reconcileSkippedReviews } = await import('../server/reconcile-review.js');
+    const candidates = [];
+    for (const state of ['clean', 'dirty', 'stale', 'failed', 'previously-reviewed', 'human-reopened']) {
+      const { task, cwd } = await fixture(`reconcile-${state}`);
+      const runId = `reconcile-${state}`;
+      if (state === 'dirty') await writeFile(join(cwd, 'source'), 'existing user work');
+      createTaskAgentRun({ taskId: task.id, runId, kind: 'chat', status: 'streaming', startedAt: Date.now() });
+      await captureCodingBaseline(task, runId);
+      await verifyCodingRun(task, runId, { skipUnchanged: true });
+      const completedAt = Date.now();
+      finishTaskAgentRun(runId, state === 'failed' ? 'error' : 'done', completedAt);
+      if (state === 'stale') await writeFile(join(cwd, 'source'), 'changed after completion');
+      if (state === 'previously-reviewed') db.prepare('UPDATE tasks SET last_agent_response_at = 1 WHERE id = ?').run(task.id);
+      if (state === 'human-reopened') {
+        db.prepare("UPDATE tasks SET status = 'done', updated_at = ? WHERE id = ?").run(completedAt + 1, task.id);
+        db.prepare("UPDATE tasks SET status = 'in_progress', updated_at = ? WHERE id = ?").run(completedAt + 2, task.id);
+      }
+      candidates.push({ task, state });
+    }
+    await reconcileSkippedReviews();
+    for (const { task, state } of candidates) {
+      assert.equal(getTask(task.id)?.status, state === 'clean' ? 'in_review' : 'in_progress', state);
+    }
+    assert.ok(getTask(candidates[0].task.id)?.last_agent_response_at);
+    await reconcileSkippedReviews();
+    assert.equal(getTask(candidates[0].task.id)?.status, 'in_review', 'reconciliation is idempotent');
+  });
+
   await test('manual checks use only their own Project workspace and background state', async () => {
     const { createProject } = await import('../server/db/projects.js');
     const { acquireProjectEditor } = await import('../server/db/project-cp.js');

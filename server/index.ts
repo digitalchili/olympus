@@ -1,4 +1,5 @@
 import { reconcileRecoveries, recoverRecoveryRecords } from './run-recovery.js';
+import { reconcileSkippedReviews } from './reconcile-review.js';
 import 'dotenv/config';
 import './logging.js';
 import './db/index.js';
@@ -165,6 +166,7 @@ async function main() {
   recover();
   configureQueuedMessageDispatcher(queuedMessageDispatcher);
   for (const message of listQueuedTaskMessages()) queuedMessageDispatcher.schedule(message.taskId);
+  void reconcileSkippedReviews().catch(() => console.error('Could not reconcile older completed tasks'));
 
   const diskAlertTimer = setInterval(() => {
     if (shuttingDown) return;

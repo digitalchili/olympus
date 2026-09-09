@@ -1,4 +1,5 @@
 import { getTask } from '../db/queries.js';
+import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
 import type { AgentAdapter, AgentRunOptions, BotMessageRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
@@ -256,6 +257,14 @@ export class ProfileAgentAdapter implements AgentAdapter {
   async getModels(profileId?: string | null): Promise<AgentModelsResponse> {
     const worker = await this.adapterForProfileId(profileId);
     return (worker as AgentAdapter & { getModels: () => Promise<AgentModelsResponse> }).getModels();
+  }
+
+  async getUsage(profileId?: string | null, refresh = false): Promise<ProviderUsageResponse> {
+    const release = acquireProfileWork(profileId ?? 'default');
+    try {
+      const worker = await this.adapterForProfileId(profileId);
+      return await (worker as AgentAdapter & { getUsage: (refresh: boolean) => Promise<ProviderUsageResponse> }).getUsage(refresh);
+    } finally { release(); }
   }
 
   async compressSession(sessionId: string, options?: Parameters<AgentAdapter['compressSession']>[1]) {

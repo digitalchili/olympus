@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import { getTask } from '../db/queries.js';
 import { isRecord, toErrorMessage } from '../errors.js';
 import { taskRunSettings } from '../agent-settings.js';
@@ -8,6 +9,7 @@ import { LocalProfileError } from '../local-profiles.js';
 import type { AgentDefaults, Task, TaskAgentSettings, ReasoningEffort } from '../../shared/types.js';
 
 interface AgentSettingsAdapter {
+  getUsage?(profileId?: string | null, refresh?: boolean): Promise<ProviderUsageResponse>;
   getDefaults(profileId?: string | null): Promise<AgentDefaults>;
   setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }, profileId?: string | null): Promise<AgentDefaults>;
   getModels(profileId?: string | null): Promise<unknown>;
@@ -49,6 +51,16 @@ function buildTaskSettings(task: Task, defaults: AgentDefaults): TaskAgentSettin
 
 export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
+
+  router.get('/usage', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      if (!adapter.getUsage) throw new Error('Usage unavailable');
+      res.json(await adapter.getUsage(requestProfile(req).id, req.query.refresh === 'true'));
+    } catch {
+      res.status(503).json({ error: 'Account usage is unavailable. Check this profile’s provider connection and try again.' });
+    }
+  });
 
   router.get('/defaults', async (req, res) => {
     try {

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import type {
   AgentDefaults,
   AgentModelsResponse,
@@ -717,6 +718,10 @@ export class HermesWorkerAdapter implements AgentAdapter {
 
   async getModels(): Promise<AgentModelsResponse> {
     return await this.client.request<AgentModelsResponse>('models.list');
+  }
+
+  async getUsage(refresh = false): Promise<ProviderUsageResponse> {
+    return this.client.request<ProviderUsageResponse>({ type: 'usage.get', refresh });
   }
 
   async listScheduledTasks(includeDisabled = false, limit = 100): Promise<ScheduledTask[]> {

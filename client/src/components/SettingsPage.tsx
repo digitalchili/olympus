@@ -12,16 +12,18 @@ import { ChannelSettings } from './ChannelSettings';
 import { StorageSettings } from './StorageSettings';
 import { UpdateSettings } from './UpdateSettings';
 import { GitHubSettings } from './GitHubSettings';
+import { UsageSettings } from './UsageSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
 import {
   REASONING_EFFORTS,
   type ReasoningEffort,
 } from '@shared/types';
 
-export type SettingsTab = 'general' | 'profiles' | 'git' | 'integrations' | 'storage' | 'updates';
+export type SettingsTab = 'general' | 'usage' | 'profiles' | 'git' | 'integrations' | 'storage' | 'updates';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: 'General Settings' },
+  { id: 'usage', label: 'Usage' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'git', label: 'Git Connections' },
   { id: 'integrations', label: 'Integrations' },
@@ -30,7 +32,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 function resolveTab(hash: string, searchTab: string | null): SettingsTab {
-  if (searchTab && ['general', 'profiles', 'git', 'integrations', 'storage', 'updates'].includes(searchTab)) {
+  if (searchTab && ['general', 'usage', 'profiles', 'git', 'integrations', 'storage', 'updates'].includes(searchTab)) {
     return searchTab as SettingsTab;
   }
   const cleanHash = hash.replace(/^#/, '').toLowerCase();
@@ -40,6 +42,7 @@ function resolveTab(hash: string, searchTab: string | null): SettingsTab {
   if (cleanHash === 'profiles') return 'profiles';
   if (cleanHash === 'updates') return 'updates';
   if (cleanHash === 'general') return 'general';
+  if (cleanHash === 'usage') return 'usage';
   return 'general';
 }
 
@@ -281,6 +284,8 @@ export function SettingsPage() {
             </div>
           </div>
         )}
+
+        {activeTab === 'usage' && <UsageSettings />}
 
         {activeTab === 'profiles' && (
           <ProfilesSettings />

@@ -19,6 +19,11 @@ const {configureQueuedMessageDispatcher,createQueuedMessageDispatcher,assertQueu
 const orphan=insertTask({title:'Find Replacement Wine for AU0080',description:'Replacement for AU0080',status:'in_progress',profile_name:'som',handling_profile_id:'som'});
 const defaults={provider:'fixture',model:'fixture-model',reasoningEffort:'low' as const,showReasoning:true,baseUrl:null,apiMode:null};
 adapter.getDefaults=async()=>defaults;
+adapter.getUsage=async(profileId)=>({providers:[{
+ provider:'openai-codex',label:'OpenAI · ChatGPT subscription',isDefault:true,available:true,plan:'Pro',
+ windows:[{label:'Current window',remainingPercent:profileId==='som'?31:77,resetAt:Date.now()+7200000,detail:null},{label:'Weekly',remainingPercent:39,resetAt:Date.now()+172800000,detail:null}],
+ details:[],unavailableReason:null,dashboardUrl:'https://chatgpt.com/codex/settings/usage',fetchedAt:Date.now(),
+},{provider:'openai',label:'OpenAI · API',isDefault:false,available:false,plan:null,windows:[],details:[],unavailableReason:'API spending is separate from subscription allowance. Open the provider dashboard for usage and billing.',dashboardUrl:'https://platform.openai.com/usage',fetchedAt:Date.now()}]});
 adapter.getModels=async()=>({defaultModel:'fixture-model',activeProvider:'fixture',groups:[]}) as never;
 adapter.generateTitle=async()=>({title:'Find Replacement Wine for AU0080'});
 adapter.getBackgroundWork=async()=>({available:true,work:[]});

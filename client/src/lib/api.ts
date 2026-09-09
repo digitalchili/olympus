@@ -734,6 +734,10 @@ export function fetchAgentDefaults() {
   return request<AgentDefaults>('/agent/defaults');
 }
 
+export function fetchProviderUsage(profileId: string, refresh = false) {
+  return request<import('@shared/provider-usage').ProviderUsageResponse>(apiPathWithProfile(`/agent/usage${refresh ? '?refresh=true' : ''}`, profileId));
+}
+
 export function fetchAgentModels(profileId?: string) {
   const path = profileId ? apiPathWithProfile('/agent/models', profileId) : '/agent/models';
   return request<AgentModelsResponse>(path);
