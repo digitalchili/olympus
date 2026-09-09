@@ -1011,6 +1011,7 @@ function fileRelativePath(file: File): string {
 export const fetchCodingEvidence = (taskId: string) => request<{ evidence: import('@shared/coding-evidence').CodingEvidence | null }>(`/tasks/${encodeURIComponent(taskId)}/verification`);
 export const runCodingVerification = (taskId: string) => request<{ evidence: import('@shared/coding-evidence').CodingEvidence | null }>(`/tasks/${encodeURIComponent(taskId)}/verification`, { method: 'POST' });
 export interface TaskRecoveryStatus {
+  kind?: 'verification' | 'native';
   state: string; attempts: number; deadlineAt: number; reason: string | null;
   checkpoint: { saved?: boolean } | null;
 }

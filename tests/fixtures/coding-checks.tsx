@@ -3,6 +3,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { CodingEvidencePanel } from '../../client/src/components/CodingEvidencePanel';
 import type { CodingEvidence } from '../../shared/coding-evidence';
+import type { TaskRecoveryStatus } from '../../client/src/lib/api';
 import '../../client/src/styles/globals.css';
 
 const source = { head: 'fb1e0f6fb096', fingerprint: 'fixture', changedFiles: ['M example.ts'], diff: '' };
@@ -12,11 +13,19 @@ let evidence: CodingEvidence = { taskId: 'fixture', runId: 'run-1', workdir: '/f
   updatedAt: 1700000000000 };
 let settle: (() => void) | undefined;
 let rejectRequest = false;
-window.fetch = async (_input, init) => {
+const automaticRepair = new URLSearchParams(location.search).has('repair');
+let recovery: TaskRecoveryStatus | null = null;
+window.fetch = async (input, init) => {
+  if (String(input).includes('/recovery/stop')) {
+    recovery = { ...recovery!, state: 'blocked', reason: 'Stopped by user' };
+    return new Response(JSON.stringify({ paused: true }));
+  }
+  if (String(input).includes('/recovery')) return new Response(JSON.stringify({ recovery }));
   if (init?.method === 'POST') {
     if (rejectRequest) return new Response(JSON.stringify({ error: 'Wait for the active run to settle.' }), { status: 409 });
     await new Promise<void>(resolve => { settle = resolve; });
     evidence = { ...evidence, updatedAt: Date.now() };
+    if (automaticRepair) recovery = { kind: 'verification', state: 'pending', reason: 'verification_failed', attempts: 0, deadlineAt: 0, checkpoint: null };
   }
   return new Response(JSON.stringify({ evidence }), { headers: { 'Content-Type': 'application/json' } });
 };
@@ -37,6 +46,14 @@ void (async () => {
   check(!root.innerText.includes('A required verification command failed'), 'Previous failure must not appear as the current running result');
   root.querySelector('summary')!.click(); // The result must reopen even if progress was collapsed.
   settle!();
+  if (automaticRepair) {
+    await waitFor(() => root.innerText.includes('repair these failures'));
+    check(button().disabled, 'Queued automatic repair must not offer a duplicate rerun');
+    const pause = Array.from(root.querySelectorAll('button')).find(node => node.textContent === 'Pause automatic repair');
+    check(pause, 'Queued repair must have a Pause control');
+    pause!.click();
+    await waitFor(() => root.innerText.includes('Stopped by user'));
+  }
   await waitFor(() => !!button() && !button().disabled);
   check(root.innerText.includes('Finished'), 'Rerun must show a completion time');
   const output = Array.from(root.querySelectorAll('pre')).find(node => node.textContent?.includes('Expected 03:06'));
@@ -49,5 +66,5 @@ void (async () => {
   await waitFor(() => !!root.querySelector('[role="alert"]'));
   check(root.querySelector('[role="alert"]')?.textContent?.includes('Wait for the active run'), 'Rejected rerun must show its error');
   check(!button().disabled, 'Rejected rerun must release the button');
-  root.querySelector('#test-result')!.textContent = 'PASS: rerun progress, completion time, visible failure, and request error';
+  root.querySelector('#test-result')!.textContent = `PASS: rerun progress, completion time, visible failure, and request error${automaticRepair ? ', automatic repair queue and Pause' : ''}`;
 })().catch(error => { root.querySelector('#test-result')!.textContent = `FAIL: ${error.message}`; });

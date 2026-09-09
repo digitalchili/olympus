@@ -425,7 +425,8 @@ CREATE TABLE IF NOT EXISTS task_recovery (
   attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL,
   reason TEXT,
-  checkpoint_json TEXT
+  checkpoint_json TEXT,
+  repair_fingerprint TEXT
 );
 
 CREATE TABLE IF NOT EXISTS coding_evidence (

@@ -1,7 +1,7 @@
 import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying } from '../coding-verification.js';
 import { requestsCodingVerification } from '../verification-request.js';
 import { join } from 'node:path';
-import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint } from '../run-recovery.js';
+import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint, queueVerificationRepair } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
 import {
@@ -289,6 +289,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   if (run?.modelResolution) updateTaskAgentRunResolution(runId, run.modelResolution);
   finishTaskAgentRun(runId, status?.status ?? 'error', Date.now(), run?.errorCode);
   recoveryOutcome(taskId, runId, status?.status ?? 'error', run?.errorCode);
+  queueVerificationRepair(taskId, runId);
   if (status) broadcast({ type: 'task_run_updated', run: { ...status, recoveryState: getRecovery(taskId)?.state } });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
@@ -332,7 +333,7 @@ async function captureBaselineUntilStopped(task: Task, runId: string): Promise<v
 
 async function verifyBeforeReview(task: Task, runId: string): Promise<boolean> {
   const run = getRun(task.id);
-  const requested = run?.messages.some(message =>
+  const requested = Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
     message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {
@@ -476,7 +477,7 @@ async function streamChatTurn(
 async function consumeChatRun(runTask: Task, sessionId: string, content: string, runId: string): Promise<void> {
   let turnContent = content;
   let finalContext: ContextUsage | null | undefined;
-  let recoveryContinuation = (getRecovery(runTask.id)?.attempts ?? 0) > 0;
+  let recoveryContinuation = (getRecovery(runTask.id)?.attempts ?? 0) > 0 && getRecovery(runTask.id)?.reason !== 'verification_failed';
   while (true) {
     const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true, recoveryContinuation });
     recoveryContinuation = false;
@@ -973,6 +974,10 @@ chatRouter.post('/:id/messages', async (req, res) => {
     if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id) {
       restoreConsumedQueue();
       return res.status(409).json({ error: 'Recovery was paused or changed; nothing new was started.' });
+    }
+    if (res.locals.verificationRepair && (getTask(task.id)?.status !== 'in_progress' || getQueuedTaskMessage(task.id))) {
+      restoreConsumedQueue();
+      return res.status(409).json({ error: 'Task or queued instructions changed; repair was not started.' });
     }
   }
 

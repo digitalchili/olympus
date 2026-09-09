@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CodingEvidence } from '@shared/coding-evidence';
-import { fetchCodingEvidence, interruptTask, runCodingVerification } from '../lib/api';
+import { fetchCodingEvidence, fetchTaskRecovery, pauseTaskRecovery, interruptTask, runCodingVerification, type TaskRecoveryStatus } from '../lib/api';
 
 function showOutputEnd(node: HTMLPreElement | null) {
   if (node) node.scrollTop = node.scrollHeight;
@@ -11,17 +11,20 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
+  const [recovery, setRecovery] = useState<TaskRecoveryStatus | null>(null);
+  const repairQueued = recovery?.kind === 'verification' && ['pending', 'waiting', 'dispatching'].includes(recovery.state);
   const refresh = useCallback(async () => {
     await Promise.all([
       fetchCodingEvidence(taskId).then(checks => setEvidence(checks.evidence)),
+      fetchTaskRecovery(taskId).then(result => setRecovery(result.recovery)),
     ]);
   }, [taskId]);
   useEffect(() => {
     let active = true;
     const load = () => { if (active) void refresh().catch(() => {}); };
-    load(); const timer = setInterval(load, isStreaming || busy || evidence?.status === 'running' ? 1000 : 10_000);
+    load(); const timer = setInterval(load, isStreaming || busy || repairQueued || evidence?.status === 'running' ? 1000 : 10_000);
     return () => { active = false; clearInterval(timer); };
-  }, [refresh, isStreaming, busy, evidence?.status]);
+  }, [refresh, isStreaming, busy, repairQueued, evidence?.status]);
   const visibleEvidence = evidence && !(evidence.status === 'pending' && isStreaming) ? evidence : null;
   if (!visibleEvidence) return null;
   const running = busy || evidence?.status === 'running';
@@ -69,10 +72,17 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
       </div>}
       {evidence.source && <details className="mt-2"><summary>Changed files ({evidence.source.changedFiles.length}) and diff</summary><pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all">{evidence.source.changedFiles.join('\n')}{'\n'}{evidence.source.diff || 'No tracked-file diff.'}</pre></details>}
       </div>
-      {!running && evidence.status === 'failed' && <p className="mt-3">The checks ran and failed. Fix the reported failures, then run checks again. Rerunning checks does not change code.</p>}
-      <button disabled={busy || isStreaming || evidence.status === 'running'} className="mt-3 rounded bg-zinc-900 px-3 py-2 text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900" onClick={() => {
-        setBusy(true); setError(''); void runCodingVerification(taskId).then(result => setEvidence(result.evidence)).catch(e => setError(String(e))).finally(() => setBusy(false));
+      {!running && evidence.status === 'failed' && <p role="status" className="mt-3">{repairQueued
+        ? 'The agent will repair these failures and run checks again automatically. Waiting for the task to be available.'
+        : recovery?.kind === 'verification' && recovery.state === 'blocked'
+          ? recovery.reason
+          : 'The checks failed. Run checks again to retry; a failed result will return to the agent for repair.'}</p>}
+      <button disabled={busy || isStreaming || repairQueued || evidence.status === 'running'} className="mt-3 rounded bg-zinc-900 px-3 py-2 text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900" onClick={() => {
+        setBusy(true); setError(''); void runCodingVerification(taskId).then(result => { setEvidence(result.evidence); return refresh(); }).catch(e => setError(String(e))).finally(() => setBusy(false));
       }}>{running ? 'Running checks…' : evidence.checks.length ? 'Run checks again' : 'Run checks'}</button>
+      {repairQueued && <button disabled={stopping} className="ml-3 underline disabled:opacity-40" onClick={() => {
+        setStopping(true); setError(''); void pauseTaskRecovery(taskId).then(refresh).catch(e => setError(String(e))).finally(() => setStopping(false));
+      }}>{stopping ? 'Pausing…' : 'Pause automatic repair'}</button>}
       </details>
       {running && <button disabled={stopping} className="shrink-0 py-1 underline disabled:opacity-40" onClick={() => {
         setStopping(true); setError('');

@@ -235,6 +235,7 @@ try {
   ensureCollaborationContributionIndex();
   migrateStudioGitHubConnectionStates();
   ensureColumn('task_agent_runs', 'error_code', 'TEXT');
+  ensureColumn('task_recovery', 'repair_fingerprint', 'TEXT');
   ensureColumn('tasks', 'kind', "TEXT NOT NULL DEFAULT 'task' CHECK(kind IN ('task', 'bot'))");
   ensureColumn('tasks', 'agent_provider', 'TEXT');
   ensureColumn('tasks', 'workdir', 'TEXT');

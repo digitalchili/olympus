@@ -138,7 +138,7 @@ export function taskExecutionLabel(status: TaskStatus, run?: TaskRunState): stri
     if (run.recoveryState === 'waiting') return 'Waiting to resume';
     return isRecovering(run.recoveryState) ? 'Resuming…' : 'Needs attention';
   }
-  if (run?.status === 'done') return 'Needs attention';
+  if (run?.status === 'done') return isRecovering(run.recoveryState) ? 'Preparing follow-up' : 'Needs attention';
   return 'Not running';
 }
 

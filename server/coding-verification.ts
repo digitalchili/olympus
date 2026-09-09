@@ -67,6 +67,14 @@ function read(taskId: string, runId?: string): CodingEvidence | null {
     : db.prepare('SELECT evidence_json FROM coding_evidence WHERE task_id=? ORDER BY updated_at DESC LIMIT 1').get(taskId)) as { evidence_json: string } | undefined;
   return row ? JSON.parse(row.evidence_json) : null;
 }
+/** Only completed command failures in this task's bound source can request repair. */
+export function failedCodingEvidence(taskId: string, runId: string): CodingEvidence | null {
+  const evidence = read(taskId, runId);
+  if (!evidence || evidence.status !== 'failed' || !evidence.source
+    || (evidence.taskWorkdir ?? evidence.workdir) !== getTask(taskId)?.workdir
+    || !evidence.checks.some(check => check.exitCode !== null && check.exitCode !== 0 && !check.timedOut)) return null;
+  return evidence;
+}
 export async function captureCodingBaseline(task: Task, runId: string, signal?: AbortSignal): Promise<void> {
   task = getTask(task.id) ?? task;
   if (!task.workdir || read(task.id, runId)) return;

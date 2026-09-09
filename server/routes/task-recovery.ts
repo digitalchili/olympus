@@ -1,6 +1,6 @@
 import { isVerifying } from '../coding-verification.js';
 import { claimTaskOperation, hasActiveTaskRun, hasTaskOperation, hasActiveWorkspaceRun } from '../task-run-lifecycle.js';
-import { getRecovery, cancelRecovery } from '../run-recovery.js';
+import { getRecovery, cancelRecovery, verificationRepairPrompt } from '../run-recovery.js';
 import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
 import { Router } from 'express';
 import type { AgentAdapter, TaskBackgroundWork } from '../adapters/types.js';
@@ -74,7 +74,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
   router.post('/:id/recovery/stop', requireTaskForProfile(getTask), (_req, res) => { cancelRecovery((res.locals.task as Task).id); res.json({ paused: true }); });
   router.get('/:id/recovery', requireTaskForProfile(getTask), (_req, res) => {
     const row = getRecovery((res.locals.task as Task).id);
-    res.json({ recovery: row ? { state: row.state, attempts: row.attempts, deadlineAt: row.deadline_at, reason: row.reason, checkpoint: row.checkpoint_json ? JSON.parse(row.checkpoint_json) : null } : null });
+    res.json({ recovery: row ? { state: row.state, kind: row.repair_fingerprint ? 'verification' : 'native', attempts: row.attempts, deadlineAt: row.deadline_at, reason: row.reason, checkpoint: row.checkpoint_json ? JSON.parse(row.checkpoint_json) : null } : null });
   });
   router.post('/:id/messages', requireTaskForProfile(getTask), async (req, res, next) => {
     const task = res.locals.task as Task;
@@ -104,11 +104,20 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
       }
       if (req.body.recoveryOfRunId !== undefined) {
         const recovery = getRecovery(task.id);
-        if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id || inventory.continuation?.status !== 'pending') {
+        const repair = recovery?.reason === 'verification_failed';
+        if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id || (!repair && inventory.continuation?.status !== 'pending')) {
           return res.status(409).json({ error: 'Recovery state changed; nothing new was started.' });
         }
+        if (repair) {
+          const prompt = await verificationRepairPrompt(task.id, recovery.run_id);
+          if (!prompt) return res.status(409).json({ error: 'Verification repair changed; nothing new was started.' });
+          // Diagnostics and repair instructions come from persisted evidence, never caller text.
+          req.body.content = prompt;
+          req.body.settings = { mode: 'task' };
+          res.locals.verificationRepair = true;
+        }
         res.locals.recoveryContinuation = true;
-        res.locals.recoveryKind = getLatestTaskAgentRun(task.id)?.kind;
+        res.locals.recoveryKind = repair ? 'chat' : getLatestTaskAgentRun(task.id)?.kind;
       }
       return next();
     } catch {

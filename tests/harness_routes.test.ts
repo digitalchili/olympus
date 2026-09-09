@@ -31,6 +31,8 @@ try {
  assert.equal((await post(task.id,{content:'Fix code'})).status,202);await wait(task.id);
  assert.equal(getTask(task.id)?.status,'in_progress','failed verification prevents automatic review');
  assert.equal((await (await fetch(`${api}/${task.id}/verification`)).json()).evidence.status,'failed');
+ assert.equal(getRecovery(task.id)?.state,'pending','failed checks now queue automatic repair');
+ assert.equal((await post(task.id,{},'recovery/stop')).status,200,'pause automatic repair before a manual source fix and check');
  await writeFile(join(cwd,'.olympus/verification.json'),JSON.stringify({commands:[[process.execPath,'-e','console.log("pass")']]}));
  assert.equal((await post(task.id,{},'verification')).status,200);assert.equal(getTask(task.id)?.status,'in_review');
  const recovering=insertTask({title:'Automatic continuation',status:'in_progress',profile_name:'default'});ids.push(recovering.id);
