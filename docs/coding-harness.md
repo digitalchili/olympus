@@ -72,3 +72,13 @@ When a finished or interrupted turn leaves a command or preview server alive, th
 Cleanup requires the same latest run and exact process IDs shown to the user. The server holds task and Project ownership until the worker settles, including after a browser disconnect. The profile-scoped worker independently checks session lineage and exact native process ownership; active agents, delegated work, unavailable or oversized inventories prevent cleanup. Native process APIs retain their PID identity checks and output history. Cleanup does not need a model-run slot and never uses a blanket OS process kill, Git reset, checkout, or application restart.
 
 Disposable browser fixtures should be stopped when verification ends or fails. A stopped fixture is not evidence that verification passed; existing failed-run and coding-evidence rules still apply.
+
+## Task execution and recovery in v0.7.7
+
+The board column remains the human workflow status. The task header and cards separately show **Running** only for an active run, **Resuming…** while automatic continuation is pending, **Waiting to resume** when recovery is waiting for background work or evidence, and **Needs attention** when execution has stopped. These outcomes persist across reloads and server restarts. The chat uses one recovery banner; **Continue task** resumes through normal admission without clearing an unsent draft, and **Pause automatic recovery** prevents another automatic dispatch.
+
+Olympus no longer imposes a 40-step limit. It uses Hermes's unlimited step default, honors an explicit profile `agent.max_turns` or `OLYMPUS_AGENT_MAX_ITERATIONS`, and retains the finite wall-clock deadline.
+
+A foreground tool such as an installer can be silent for more than five minutes. Its running/completed lifecycle now suspends only the idle timeout; the absolute run deadline still applies. After the tool or child-result wait finishes, the model idle timeout applies again.
+
+A tool-iteration limit can now continue automatically if Hermes returned normally at that boundary and its returned conversation matches durable session history, with every tool call resolved and no unknown effects or cleanup failures. The child result remains unacknowledged until synthesis succeeds. Recovery still checks every ten seconds, permits at most two automatic attempts within two hours, and never treats a partial result as completion. User stops, crashes, interrupted tools and uncertain effects remain explicit blockers; no arbitrary actions are replayed automatically.

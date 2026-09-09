@@ -1,4 +1,4 @@
-import type { LiveChatRun, LiveChatRunStatus, TaskAgentRun } from '@shared/types';
+import type { LiveChatRun, LiveChatRunStatus, TaskAgentRun, TaskRunState, TaskStatus } from '@shared/types';
 
 export interface RunFailureNotice {
   status: Extract<LiveChatRunStatus, 'error' | 'stopped'>;
@@ -29,35 +29,35 @@ function inferCode(error: unknown): string | null {
 function runFailureText(status: RunFailureNotice['status'], code: string | null): Pick<RunFailureNotice, 'title' | 'detail'> {
   if (status === 'stopped') {
     return {
-      title: 'Run paused: stopped',
+      title: 'Needs attention: stopped',
       detail: 'Hermes stopped before completion. The turn is unfinished; review the partial transcript before sending another message.',
     };
   }
 
   if (code === 'run_runtime_timeout') {
     return {
-      title: 'Run paused: run cap reached',
+      title: 'Needs attention: run cap reached',
       detail: 'Hermes hit the run cap before completing this turn. The turn is unfinished; review the partial transcript before retrying.',
     };
   }
 
   if (code === 'deadline_finalized') {
     return {
-      title: 'Run paused: deadline reached',
+      title: 'Needs attention: deadline reached',
       detail: 'The run reached its deadline reserve. Review the available transcript and recovery status; file checkpoint creation has not been verified.',
     };
   }
 
   if (code === 'run_idle_timeout') {
     return {
-      title: 'Run paused: idle timeout',
+      title: 'Needs attention: idle timeout',
       detail: 'Hermes stopped after no activity. The turn is unfinished; review the partial transcript before retrying.',
     };
   }
 
   if (code === 'iteration_limit') {
     return {
-      title: 'Run paused: iteration limit',
+      title: 'Needs attention: iteration limit',
       detail: 'Hermes reached the tool-iteration cap before completing this turn. The turn is unfinished; review the partial transcript before retrying.',
     };
   }
@@ -123,4 +123,30 @@ export function queuedMessageWaitingLabel(input: {
 }): string {
   if (input.pausedByRunFailure) return 'Paused after unfinished run';
   return input.compactionBlocker ? 'Sends after compaction' : 'Sends after current response';
+}
+
+export function isRecovering(state: string | null | undefined): boolean {
+  return state === 'pending' || state === 'waiting' || state === 'dispatching';
+}
+
+export function taskExecutionLabel(status: TaskStatus, run?: TaskRunState): string {
+  if (status === 'done') return 'Done';
+  if (run?.status === 'streaming') return 'Running';
+  if (run?.status === 'compacting') return 'Compacting…';
+  if (status === 'in_review') return 'In Review';
+  if (run?.status === 'error' || run?.status === 'stopped') {
+    if (run.recoveryState === 'waiting') return 'Waiting to resume';
+    return isRecovering(run.recoveryState) ? 'Resuming…' : 'Needs attention';
+  }
+  return 'Not running';
+}
+
+export function reconcileRunSnapshot(runs: TaskRunState[], current: Map<string, TaskRunState>): Map<string, TaskRunState> {
+  return new Map(runs.map(run => {
+    const previous = current.get(run.taskId);
+    const stale = previous && (previous.startedAt > run.startedAt ||
+      (previous.runId === run.runId && ['done', 'error', 'stopped'].includes(previous.status)
+        && ['streaming', 'compacting'].includes(run.status)));
+    return [run.taskId, stale ? previous : run];
+  }));
 }

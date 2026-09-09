@@ -1,3 +1,5 @@
+import type { StreamEvent } from './adapters/types.js';
+
 export type RunWatchdogReason = 'idle' | 'runtime';
 
 export interface RunWatchdogOptions {
@@ -6,6 +8,7 @@ export interface RunWatchdogOptions {
   onTimeoutGraceMs?: number;
   onTimeout: (reason: RunWatchdogReason) => Promise<void> | void;
   pauseUntil?: () => number | null | undefined;
+  hasActiveTool?: () => boolean;
   hardDeadlineAtMs?: number;
 }
 
@@ -160,9 +163,10 @@ export async function* withRunWatchdog<T>(
       }
       const runtimeRemaining = options.maxRuntimeMs - elapsed;
       // Human time is not provider runtime; still stop at the finite input deadline.
-      const activeWaitMs = pauseRemaining > 0 ? pauseRemaining : Math.min(options.idleTimeoutMs, runtimeRemaining);
+      const idleRemaining = options.hasActiveTool?.() ? Infinity : options.idleTimeoutMs;
+      const activeWaitMs = pauseRemaining > 0 ? pauseRemaining : Math.min(idleRemaining, runtimeRemaining);
       const waitMs = Math.min(activeWaitMs, hardRemaining);
-      const reason: RunWatchdogReason = hardRemaining <= activeWaitMs ? 'runtime' : pauseRemaining > 0 ? 'idle' : runtimeRemaining <= options.idleTimeoutMs ? 'runtime' : 'idle';
+      const reason: RunWatchdogReason = hardRemaining <= activeWaitMs ? 'runtime' : pauseRemaining > 0 ? 'idle' : runtimeRemaining <= idleRemaining ? 'runtime' : 'idle';
       let timer: ReturnType<typeof setTimeout> | undefined;
 
       type NextOutcome = { kind: 'next'; next: IteratorResult<T> };
@@ -198,4 +202,26 @@ export async function* withRunWatchdog<T>(
     // Do not await return(): a stalled producer may also stall its cleanup path.
     void iterator.return?.().catch(() => undefined);
   }
+}
+
+/** A foreground tool can be silent for longer than the model idle timeout. */
+export async function* withChatRunWatchdog(
+  stream: AsyncIterable<StreamEvent>, options: RunWatchdogOptions,
+): AsyncIterable<StreamEvent> {
+  const tools = new Map<string, number>();
+  async function* trackTools() {
+    for await (const event of stream) {
+      if (event.type === 'tool_progress' && event.tool) {
+        const count = tools.get(event.tool) ?? 0;
+        if (event.status === 'running') tools.set(event.tool, count + 1);
+        else if (event.status === 'completed' || event.status === 'error') {
+          if (count <= 1) tools.delete(event.tool);
+          else tools.set(event.tool, count - 1);
+        }
+      }
+      if (event.type === 'done' || event.type === 'error') tools.clear();
+      yield event;
+    }
+  }
+  yield* withRunWatchdog(trackTools(), { ...options, hasActiveTool: () => tools.size > 0 });
 }

@@ -1,3 +1,4 @@
+import { pauseTaskRecovery } from '../lib/api';
 import { CodingEvidencePanel } from './CodingEvidencePanel';
 import { BackgroundWorkNotice } from './BackgroundWorkNotice';
 import { ProjectChatBlockedNotice } from './ProjectChatBlockedNotice';
@@ -291,6 +292,8 @@ export function TaskChat({
     loadOlderMessages,
   } = useChat(reconcilePersistedTaskRun);
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
+  const taskOutcome = useStore(s => s.taskOutcomes.get(taskId));
+  const [continuing, setContinuing] = useState(false);
   const delegationRuns = useStore((s) => s.delegationRuns.get(taskId));
   const [input, setInputValue] = useState('');
   const draftRevisionRef = useRef(0);
@@ -1138,7 +1141,17 @@ export function TaskChat({
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
-        <RunFailureBanner notice={runFailureNotice} />
+        <RunFailureBanner notice={runFailureNotice} recoveryState={taskOutcome?.recoveryState}
+          busy={continuing || isStreaming || configPending}
+          onPause={() => { void pauseTaskRecovery(taskId).catch(error => setUploadError(toErrorMessage(error, 'Could not pause recovery'))); }}
+          onContinue={() => {
+            setContinuing(true);
+            void sendMessage(taskId, 'Continue the unfinished task from saved progress. Reconcile existing changes and completed child results first. Do not repeat completed actions. Finish remaining verification and report a truthful result.', {
+              model, provider, reasoningEffort, mode: taskOutcome?.kind === 'goal' ? 'goal' : 'task',
+            }).then(result => { if (!result.ok) setUploadError(result.error || 'Could not continue task'); })
+              .catch(error => setUploadError(toErrorMessage(error, 'Could not continue task')))
+              .finally(() => setContinuing(false));
+          }} />
         {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
         <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
         {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />}

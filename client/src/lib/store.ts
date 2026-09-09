@@ -1,3 +1,4 @@
+import { reconcileRunSnapshot } from './runFailurePresentation';
 import { create } from 'zustand';
 import type { DelegationRun, Task, TaskRunState, TaskStatus } from '@shared/types';
 import { applyDelegationRunUpdate } from './delegationActivity';
@@ -5,6 +6,7 @@ import { applyDelegationRunUpdate } from './delegationActivity';
 interface AppState {
   tasks: Task[];
   taskRuns: Map<string, TaskRunState>;
+  taskOutcomes: Map<string, TaskRunState>;
   delegationRuns: Map<string, DelegationRun[]>;
   tasksLoaded: boolean;
   sidebarCollapsed: boolean;
@@ -34,6 +36,8 @@ function taskRunEqual(a: TaskRunState | undefined, b: TaskRunState): boolean {
   return (
     a.runId === b.runId &&
     a.status === b.status &&
+    a.recoveryState === b.recoveryState &&
+    a.errorCode === b.errorCode &&
     a.kind === b.kind &&
     a.goal?.turnsUsed === b.goal?.turnsUsed &&
     a.goal?.maxTurns === b.goal?.maxTurns &&
@@ -44,6 +48,7 @@ function taskRunEqual(a: TaskRunState | undefined, b: TaskRunState): boolean {
 export const useStore = create<AppState>((set) => ({
   tasks: [],
   taskRuns: new Map<string, TaskRunState>(),
+  taskOutcomes: new Map<string, TaskRunState>(),
   delegationRuns: new Map<string, DelegationRun[]>(),
   tasksLoaded: false,
   sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
@@ -66,42 +71,42 @@ export const useStore = create<AppState>((set) => ({
   removeTask: (taskId) =>
     set((state) => {
       const tasks = state.tasks.filter((t) => t.id !== taskId);
-      if (!state.taskRuns.has(taskId) && !state.delegationRuns.has(taskId)) return { tasks };
+      if (!state.taskRuns.has(taskId) && !state.taskOutcomes.has(taskId) && !state.delegationRuns.has(taskId)) return { tasks };
       const taskRuns = new Map(state.taskRuns);
       taskRuns.delete(taskId);
+      const taskOutcomes = new Map(state.taskOutcomes);
+      taskOutcomes.delete(taskId);
       const delegationRuns = new Map(state.delegationRuns);
       delegationRuns.delete(taskId);
-      return { tasks, taskRuns, delegationRuns };
+      return { tasks, taskRuns, taskOutcomes, delegationRuns };
     }),
 
-  setTaskRuns: (runs) =>
-    set((state) => {
-      const activeRuns = runs.filter(isActiveRun);
-      if (
-        activeRuns.length === state.taskRuns.size &&
-        activeRuns.every((run) => taskRunEqual(state.taskRuns.get(run.taskId), run))
-      ) {
-        return state;
-      }
-      return { taskRuns: new Map(activeRuns.map((run) => [run.taskId, run])) };
-    }),
+  setTaskRuns: (runs) => set(state => {
+    const merged = [...reconcileRunSnapshot(runs, new Map([...state.taskOutcomes, ...state.taskRuns])).values()];
+    return {
+      taskRuns: new Map(merged.filter(isActiveRun).map(run => [run.taskId, run])),
+      taskOutcomes: new Map(merged.filter(run => !isActiveRun(run)).map(run => [run.taskId, run])),
+    };
+  }),
 
-  setTaskRun: (run) =>
-    set((state) => {
-      const current = state.taskRuns.get(run.taskId);
-      const shouldStore = isActiveRun(run);
-      if (
-        (!shouldStore && !current) ||
-        (shouldStore && taskRunEqual(current, run))
-      ) {
-        return state;
-      }
-
-      const taskRuns = new Map(state.taskRuns);
-      if (shouldStore) taskRuns.set(run.taskId, run);
-      else taskRuns.delete(run.taskId);
-      return { taskRuns };
-    }),
+  setTaskRun: (run) => set((state) => {
+    const current = state.taskRuns.get(run.taskId) ?? state.taskOutcomes.get(run.taskId);
+    if (current && (current.startedAt > run.startedAt ||
+      (current.runId === run.runId && !isActiveRun(current) && isActiveRun(run)))) return state;
+    const effective = current?.runId === run.runId && run.recoveryState === undefined
+      ? { ...run, recoveryState: current.recoveryState } : run;
+    if (taskRunEqual(current, effective)) return state;
+    const taskRuns = new Map(state.taskRuns);
+    const taskOutcomes = new Map(state.taskOutcomes);
+    if (isActiveRun(effective)) {
+      taskRuns.set(run.taskId, effective);
+      taskOutcomes.delete(run.taskId);
+    } else {
+      taskRuns.delete(run.taskId);
+      taskOutcomes.set(run.taskId, effective);
+    }
+    return { taskRuns, taskOutcomes };
+  }),
 
   setDelegationRuns: (runs) =>
     set(() => {
@@ -152,5 +157,5 @@ export function reconcilePersistedTaskRun(run: TaskRunState | null): void {
   if (!run || isActiveRun(run)) return;
   const state = useStore.getState();
   const current = state.taskRuns.get(run.taskId);
-  if (current && (current.runId === run.runId || current.startedAt < run.startedAt)) state.setTaskRun(run);
+  if (!current || current.runId === run.runId || current.startedAt < run.startedAt) state.setTaskRun(run);
 }

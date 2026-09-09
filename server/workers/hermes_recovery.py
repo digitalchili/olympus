@@ -18,6 +18,36 @@ class RecoveryBlocked(RuntimeError):
     pass
 
 
+def saved_turn_matches(result: dict, persisted: list[dict]) -> bool:
+    """Only resume a returned iteration boundary whose tool history is durable."""
+    if result.get('interrupted') or result.get('failed') or result.get('cleanup_errors'):
+        return False
+    def signature(messages):
+        return [{key: row[key] for key in ('role', 'content', 'tool_calls', 'tool_call_id')
+                 if row.get(key) is not None and row.get(key) != []}
+                for row in messages if isinstance(row, dict) and row.get('role') != 'system']
+    returned = result.get('messages')
+    if not isinstance(returned, list) or not returned:
+        return False
+    if any(row.get('effect_disposition') == 'unknown' for row in [*returned, *persisted] if isinstance(row, dict)):
+        return False
+    expected = signature(returned)
+    saved = signature(persisted)
+    if not expected or expected[-1].get('role') != 'assistant' or not expected[-1].get('content'):
+        return False
+    if len(saved) < len(expected) or saved[-len(expected):] != expected:
+        return False
+    pending = set()
+    for row in expected:
+        for call in row.get('tool_calls', []):
+            if not isinstance(call, dict) or not call.get('id'):
+                return False
+            pending.add(call['id'])
+        if row.get('role') == 'tool':
+            pending.discard(row.get('tool_call_id'))
+    return not pending
+
+
 class ContinuationJournal:
     def __init__(self, task_id: str):
         self.task_id = task_id

@@ -46,9 +46,20 @@ assert.equal(tasks[0].status, 'in_review');
 
 applyProjectBoardEvent({
   type: 'task_run_updated',
-  run: { ...activeRun, status: 'completed' },
+  run: { ...activeRun, status: 'done' },
 }, setTasks, setRuns);
-assert.equal(runs.has(task.id), false);
+assert.equal(runs.get(task.id)?.status, 'done');
+
+applyProjectBoardEvent({ type: 'task_run_updated', run: { ...activeRun, status: 'error', recoveryState: 'blocked' } }, setTasks, setRuns);
+assert.equal(runs.get(task.id)?.recoveryState, 'blocked', 'Project board retains stopped execution');
+applyProjectBoardEvent({ type: 'task_runs_snapshot', runs: [{ ...activeRun, status: 'error', recoveryState: 'pending' }] }, setTasks, setRuns);
+assert.equal(runs.get(task.id)?.recoveryState, 'pending', 'Project reload retains resuming state');
+
+applyProjectBoardEvent({ type: 'task_run_updated', run: { ...activeRun, runId: 'new', startedAt: 500, status: 'done' } }, setTasks, setRuns);
+applyProjectBoardEvent({ type: 'task_run_updated', run: { ...activeRun, startedAt: 100, status: 'error' } }, setTasks, setRuns);
+assert.equal(runs.get(task.id)?.runId, 'new', 'late error cannot replace a newer successful run');
+applyProjectBoardEvent({ type: 'task_run_updated', run: { ...activeRun, startedAt: 100, status: 'streaming' } }, setTasks, setRuns);
+assert.equal(runs.get(task.id)?.status, 'done', 'late old streaming cannot revive a completed task');
 
 applyProjectBoardEvent({ type: 'task_deleted', taskId: task.id }, setTasks, setRuns);
 assert.equal(tasks.length, 0);

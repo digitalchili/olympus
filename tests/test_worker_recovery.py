@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server/workers'))
 import hermes_worker as worker
-from hermes_recovery import ContinuationJournal, RecoveryBlocked
+from hermes_recovery import ContinuationJournal, RecoveryBlocked, saved_turn_matches
 
 
 class RecoveryTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class RecoveryTests(unittest.TestCase):
             raise AssertionError('Missing notification never reconciled native state')
         return None
 
-    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, **request_extra):
+    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, saved_history=None, **request_extra):
         outer = self
         class Agent:
             session_id = 'task-1'
@@ -75,7 +75,7 @@ class RecoveryTests(unittest.TestCase):
         with ExitStack() as stack:
             for name, value in {
                 'open_session': lambda *_: (object(), 'task-1'),
-                'load_agent_history': lambda *_: [], '_create_agent': create,
+                'load_agent_history': lambda *_: saved_history or [], '_create_agent': create,
                 'native_approval_context': lambda *_: nullcontext(),
                 '_start_deadline_controls': lambda *_: types.SimpleNamespace(cancel=lambda: None, finalization_started=finalization),
                 'take_owned_delegation_notification': self.notification if not notification else lambda *_a, **_k: self.event,
@@ -115,6 +115,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.messages), 2)
         self.assertIn('Saved child result', str(self.messages[1]))
         self.assertEqual(len(self.completed), 1)
+        waiting = [event['status'] for event in self.sent if event.get('tool') == 'delegate_task' and event.get('label') == 'Waiting for saved child results']
+        self.assertEqual(waiting, ['running', 'completed'], 'finished child wait must restore model idle timeout')
 
     def test_fresh_chat_injects_saved_result_without_replaying_old_request(self):
         journal = ContinuationJournal('task-1')
@@ -136,6 +138,62 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(worker.WorkerError):
             self.run_chat(dispatch=False, recoveryContinuation=True)
         self.assertEqual(len(self.messages), 2)
+
+    def test_iteration_recovery_rejects_uncertain_tool_effects(self):
+        history = [
+            {'role': 'user', 'content': 'Save the change'},
+            {'role': 'assistant', 'tool_calls': [{'id': 'write', 'type': 'function', 'function': {'name': 'terminal', 'arguments': '{}'}}]},
+            {'role': 'tool', 'tool_call_id': 'write', 'content': 'Timed out', 'effect_disposition': 'unknown'},
+            {'role': 'assistant', 'content': 'Unfinished'},
+        ]
+        self.assertFalse(saved_turn_matches({'messages': history}, history))
+        clean = [{k: v for k, v in row.items() if k != 'effect_disposition'} for row in history]
+        self.assertFalse(saved_turn_matches({'messages': clean}, history))
+        self.assertFalse(saved_turn_matches({'messages': history}, clean))
+        self.assertTrue(saved_turn_matches({'messages': clean}, clean))
+        self.assertFalse(saved_turn_matches({'messages': clean}, clean[:-1]))
+        unresolved = [clean[0], clean[1], clean[-1]]
+        self.assertFalse(saved_turn_matches({'messages': unresolved}, unresolved))
+
+    def iteration_result(self):
+        return {'completed': False, 'turn_exit_reason': 'max_iterations_reached(40/40)',
+                'final_response': 'Changes saved; build unfinished.', 'messages': [
+                    {'role': 'user', 'content': 'User request'},
+                    {'role': 'assistant', 'content': 'Changes saved; build unfinished.'},
+                ]}
+
+    def test_saved_iteration_limit_can_continue_without_replaying_child_work(self):
+        result = self.iteration_result()
+        with self.assertRaises(worker.WorkerError) as error:
+            self.run_chat(result, saved_history=result['messages'])
+        self.assertEqual(error.exception.code, 'iteration_limit')
+        journal = ContinuationJournal('task-1')
+        self.assertEqual(journal.status()['status'], 'pending')
+        self.assertEqual(journal.rows()[0]['state'], 'ready')
+        self.assertFalse(self.completed, 'partial synthesis must not acknowledge the child result')
+        self.run_chat(dispatch=False, recoveryContinuation=True)
+        self.assertEqual(journal.status()['status'], 'none')
+        self.assertEqual(len(self.completed), 1)
+        self.assertIn('Saved child result', self.messages[-1][1])
+
+    def test_iteration_recovery_requires_durable_history(self):
+        result = self.iteration_result()
+        for extra in ({}, {'cleanup_errors': ['persist_session: failed']}, {'interrupted': True}):
+            with self.subTest(extra=extra):
+                if extra.get('interrupted'):
+                    self.run_chat({**result, **extra}, dispatch=False)
+                else:
+                    with self.assertRaises(worker.WorkerError):
+                        self.run_chat({**result, **extra}, dispatch=False)
+                self.assertEqual(ContinuationJournal('task-1').status()['status'], 'blocked')
+
+    def test_saved_iteration_limit_without_child_is_recoverable(self):
+        result = self.iteration_result()
+        with self.assertRaises(worker.WorkerError):
+            self.run_chat(result, dispatch=False, saved_history=result['messages'])
+        self.assertEqual(ContinuationJournal('task-1').status()['status'], 'pending')
+        self.run_chat(dispatch=False, recoveryContinuation=True)
+        self.assertIn('saved session history', self.messages[-1][1])
 
     def test_wrong_task_result_and_profile_cannot_be_recovered(self):
         journal = ContinuationJournal('task-1')

@@ -37,16 +37,24 @@ MANAGED_CFG = {
 
 
 class ResolveModelProviderTest(unittest.TestCase):
-    def test_olympus_caps_tool_iterations_below_hermes_default(self):
+    def test_olympus_uses_native_iteration_default_and_explicit_limits(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OLYMPUS_AGENT_MAX_ITERATIONS", None)
-            self.assertEqual(hermes_worker._agent_max_iterations(), 40)
+            self.assertEqual(hermes_worker._agent_max_iterations(), sys.maxsize)
 
         with patch.dict(os.environ, {"OLYMPUS_AGENT_MAX_ITERATIONS": "12"}):
             self.assertEqual(hermes_worker._agent_max_iterations(), 12)
 
         with patch.dict(os.environ, {"OLYMPUS_AGENT_MAX_ITERATIONS": "invalid"}):
-            self.assertEqual(hermes_worker._agent_max_iterations(), 40)
+            self.assertEqual(hermes_worker._agent_max_iterations(), sys.maxsize)
+
+    def test_hermes_profile_iteration_limit_is_respected(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OLYMPUS_AGENT_MAX_ITERATIONS", None)
+            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 90}}), 90)
+            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 'unlimited'}}), sys.maxsize)
+        with patch.dict(os.environ, {'OLYMPUS_AGENT_MAX_ITERATIONS': '12'}):
+            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 90}}), 12)
 
     def test_incomplete_agent_result_is_not_reported_as_success(self):
         self.assertEqual(

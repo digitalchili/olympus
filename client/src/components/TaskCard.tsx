@@ -5,7 +5,8 @@ import { Link } from 'react-router';
 import { ProfileLink, useProfile } from '../contexts/ProfileContext';
 import { DEFAULT_PROFILE_NAME, type ProjectSummary, type Task, type TaskRunState, type TaskStatus } from '@shared/types';
 import { goalTurnLabel, timeAgo } from '../lib/format';
-import { isActiveRun } from '../lib/store';
+import { taskExecutionLabel } from '../lib/runFailurePresentation';
+import { isActiveRun, useStore } from '../lib/store';
 import { hasUnseenAgentResponse } from '../lib/taskState';
 import { taskProfileLabel } from '../lib/profiles';
 import { TaskContextMenu } from './TaskContextMenu';
@@ -17,12 +18,14 @@ const BUSY_LABELS: Record<string, string> = { compact: 'Compacting...', goal: 'W
 
 function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
   const { profiles } = useProfile();
+  const outcome = useStore(s => s.taskOutcomes.get(task.id));
+  const executionLabel = taskExecutionLabel(task.status, run ?? outcome);
   const isAlert = task.routing_source === 'system_alert';
   const isUnseen = hasUnseenAgentResponse(task);
   const isBusy = !!run && isActiveRun(run);
   const isGoalRun = run?.kind === 'goal' && run.status === 'streaming';
   const compactGoalLabel = isGoalRun ? goalTurnLabel(run.goal?.turnsUsed ?? 0, run.goal?.maxTurns ?? 0, true) : null;
-  const busyLabel = (run?.kind && BUSY_LABELS[run.kind]) || 'Working...';
+  const busyLabel = (run?.kind && BUSY_LABELS[run.kind]) || 'Running';
   const showBusyState = isBusy && !isGoalRun;
   const routingLabel = taskProfileLabel(task, profiles);
   const timeRowClass = showBusyState
@@ -68,7 +71,7 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
           ) : isUnseen && (
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-700 ring-4 ring-zinc-100 dark:bg-zinc-200 dark:ring-zinc-800" />
           )}
-          <span className="truncate">{showBusyState ? busyLabel : timeAgo(task.updated_at)}</span>
+          <span className="truncate">{showBusyState ? busyLabel : task.status === 'in_progress' ? executionLabel : timeAgo(task.updated_at)}</span>
         </div>
         {isGoalRun && (
           <span

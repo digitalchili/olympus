@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CodingEvidence } from '@shared/coding-evidence';
-import { fetchCodingEvidence, fetchTaskRecovery, interruptTask, pauseTaskRecovery, runCodingVerification, type TaskRecoveryStatus } from '../lib/api';
+import { fetchCodingEvidence, interruptTask, runCodingVerification } from '../lib/api';
 
 export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; isStreaming: boolean }) {
   const [evidence, setEvidence] = useState<CodingEvidence | null>(null);
-  const [recovery, setRecovery] = useState<TaskRecoveryStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
   const refresh = useCallback(async () => {
     await Promise.all([
       fetchCodingEvidence(taskId).then(checks => setEvidence(checks.evidence)),
-      fetchTaskRecovery(taskId).then(continuation => setRecovery(continuation.recovery)),
     ]);
   }, [taskId]);
   useEffect(() => {
@@ -20,9 +18,8 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
     load(); const timer = setInterval(load, isStreaming || busy || evidence?.status === 'running' ? 1000 : 10_000);
     return () => { active = false; clearInterval(timer); };
   }, [refresh, isStreaming, busy, evidence?.status]);
-  const waiting = recovery && ['pending','waiting','dispatching','exhausted','blocked'].includes(recovery.state);
   const visibleEvidence = evidence && !(evidence.status === 'pending' && isStreaming) ? evidence : null;
-  if (!visibleEvidence && !waiting) return null;
+  if (!visibleEvidence) return null;
   const running = busy || evidence?.status === 'running';
   const labels = {
     pending: 'Task details', skipped: 'Task details', running: 'Checking project…',
@@ -30,13 +27,6 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
     unconfigured: 'Project checks not set up',
   };
   return <section aria-label="Task checks and recovery" className="mx-auto mb-3 w-full min-w-0 max-w-[760px] text-xs text-zinc-600 dark:text-zinc-300">
-    {waiting && <details className="mb-2">
-      <summary className="cursor-pointer font-medium">{['exhausted','blocked'].includes(recovery.state) ? 'Task needs attention' : 'Resuming task…'}</summary>
-      <p className="mt-2">Recovery: {recovery.state} · {recovery.attempts}/2 attempts</p>
-      {recovery.reason && <p>{recovery.reason}</p>}
-      {recovery.checkpoint?.saved && <p>Continuation state saved. Project files are not backed up by this receipt.</p>}
-      {['pending','waiting','dispatching'].includes(recovery.state) && <button className="underline" onClick={() => { void pauseTaskRecovery(taskId).then(refresh).catch(e => setError(String(e))); }}>Pause automatic recovery</button>}
-    </details>}
     {visibleEvidence && evidence && <div className="flex items-start gap-3">
       <details key={evidence.runId} className="min-w-0 flex-1">
       <summary aria-label={labels[evidence.status]} className="flex min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 py-1 [&::-webkit-details-marker]:hidden">

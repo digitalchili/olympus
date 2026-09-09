@@ -1,3 +1,4 @@
+import { taskExecutionLabel } from '../lib/runFailurePresentation';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useParams } from 'react-router';
 import { MoreHorizontal, Trash2, Loader2, Pencil, Check, GitCommitHorizontal } from 'lucide-react';
@@ -47,6 +48,7 @@ export function TaskDetailPage() {
   const initialSettings = locationState?.initialSettings;
   const initialInvitedProfileIds = locationState?.initialInvitedProfileIds;
   const task = useStore((s) => s.tasks.find((t) => t.id === taskId) ?? null);
+  const executionRun = useStore(s => taskId ? s.taskRuns.get(taskId) ?? s.taskOutcomes.get(taskId) : undefined);
   const tasksLoaded = useStore((s) => s.tasksLoaded);
   const upsertTask = useStore((s) => s.upsertTask);
   const removeTask = useStore((s) => s.removeTask);
@@ -347,7 +349,7 @@ export function TaskDetailPage() {
             <div className="flex items-center gap-2.5">
               <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium shrink-0 ${statusMeta.tint}`}>
                 <StatusIcon status={task.status} />
-                {statusMeta.label}
+                {taskExecutionLabel(task.status, executionRun)}
               </span>
 
               <span className="text-xs text-zinc-400 dark:text-zinc-500 shrink-0">

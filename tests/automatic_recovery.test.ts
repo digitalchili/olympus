@@ -23,6 +23,12 @@ try {
  await reconcileRecoveries(idle, async () => { starts++; }, 203);
  assert.equal(starts, 2, 'only two recovery attempts');
  assert.equal(getRecovery(task.id)?.state, 'exhausted');
+ fail('iteration');
+ finishTaskAgentRun('iteration', 'error', 102, 'iteration_limit');
+ recoveryOutcome(task.id, 'iteration', 'error', 'iteration_limit');
+ await reconcileRecoveries(idle, async () => { starts++; }, 203);
+ assert.equal(starts, 3, 'a durably saved iteration limit uses bounded recovery');
+ starts = 2;
  fail('manual'); cancelRecovery(task.id);
  await reconcileRecoveries(idle, async () => { starts++; }, 204);
  assert.equal(starts, 2, 'explicit stop cannot auto resume');

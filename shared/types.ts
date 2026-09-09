@@ -605,6 +605,7 @@ export interface TaskAgentRun {
   status: LiveChatRunStatus;
   modelResolution: AgentModelResolution | null;
   errorCode?: string | null;
+  recoveryState?: string | null;
   startedAt: number;
   updatedAt: number;
   completedAt: number | null;
@@ -619,6 +620,7 @@ export interface TaskRunState {
   updatedAt: number;
   goal?: GoalStateSnapshot | null;
   errorCode?: string | null;
+  recoveryState?: string | null;
   modelResolution?: AgentModelResolution | null;
 }
 
@@ -716,6 +718,7 @@ export interface LiveChatRun {
   context?: ContextUsage | null;
   error?: string;
   errorCode?: string | null;
+  recoveryState?: string | null;
   modelResolution?: AgentModelResolution | null;
 }
 

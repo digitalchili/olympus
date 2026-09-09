@@ -1,6 +1,6 @@
 {
   "name": "olympus-dispatch",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Digital Chili's Hermes-first mission control for autonomous agent tasks",
   "author": "Digital Chili",
   "repository": {
@@ -53,7 +53,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "lucide-react": "^1.12.0",
-    "multer": "^2.1.1",
+    "multer": "^2.3.0",
     "papaparse": "^5.5.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -20,6 +20,7 @@ AGENT_HISTORY_KEYS = {
     "content",
     "tool_calls",
     "tool_call_id",
+    "effect_disposition",
     "tool_name",
     "finish_reason",
     "reasoning",

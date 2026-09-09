@@ -5,6 +5,7 @@ import {
   remainingRunWatchdogConfig,
   runWatchdogConfig,
   withRunWatchdog,
+  withChatRunWatchdog,
 } from '../server/run-watchdog.js';
 
 {
@@ -244,3 +245,43 @@ async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
   assert.equal(stopped, true, 'human waits never extend the absolute run deadline');
 }
 console.log('run watchdog tests passed');
+
+// Foreground tools are quiet while blocked on a child process (e.g. Chromium installation).
+{
+  async function* install() {
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'running' as const };
+    await new Promise(resolve => setTimeout(resolve, 50));
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'completed' as const };
+    yield { type: 'done' as const };
+  }
+  assert.equal((await collect(withChatRunWatchdog(install(), {
+    maxRuntimeMs: 1000, idleTimeoutMs: 15, onTimeout: () => assert.fail('active tool is not idle'),
+  }))).length, 3);
+  async function* hungTool() {
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'running' as const };
+    await new Promise(() => undefined);
+  }
+  await assert.rejects(() => collect(withChatRunWatchdog(hungTool(), {
+    maxRuntimeMs: 50, idleTimeoutMs: 15, onTimeout: () => {},
+  })), (error) => error instanceof RunWatchdogError && error.reason === 'runtime');
+  for (const status of ['completed', 'error'] as const) {
+    async function* quietModel() {
+      yield { type: 'tool_progress' as const, tool: 'terminal', status: 'running' as const };
+      yield { type: 'tool_progress' as const, tool: 'terminal', status };
+      await new Promise(() => undefined);
+    }
+    await assert.rejects(() => collect(withChatRunWatchdog(quietModel(), {
+      maxRuntimeMs: 1000, idleTimeoutMs: 15, onTimeout: () => {},
+    })), (error) => error instanceof RunWatchdogError && error.reason === 'idle');
+  }
+  async function* parallelTools() {
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'running' as const };
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'running' as const };
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'completed' as const };
+    await new Promise(resolve => setTimeout(resolve, 50));
+    yield { type: 'tool_progress' as const, tool: 'terminal', status: 'completed' as const };
+  }
+  assert.equal((await collect(withChatRunWatchdog(parallelTools(), {
+    maxRuntimeMs: 1000, idleTimeoutMs: 15, onTimeout: () => assert.fail('second tool still active'),
+  }))).length, 4);
+}

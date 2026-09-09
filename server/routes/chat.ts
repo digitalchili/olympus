@@ -61,7 +61,7 @@ import {
   createRunBudget,
   withinRunDeadline,
   remainingRunWatchdogConfig,
-  withRunWatchdog,
+  withChatRunWatchdog,
   type AgentRunBudget,
   type RunWatchdogReason,
 } from '../run-watchdog.js';
@@ -297,7 +297,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   if (run?.modelResolution) updateTaskAgentRunResolution(runId, run.modelResolution);
   finishTaskAgentRun(runId, status?.status ?? 'error', Date.now(), run?.errorCode);
   recoveryOutcome(taskId, runId, status?.status ?? 'error', run?.errorCode);
-  if (status) broadcast({ type: 'task_run_updated', run: status });
+  if (status) broadcast({ type: 'task_run_updated', run: { ...status, recoveryState: getRecovery(taskId)?.state } });
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
   if (status && (bot || codingReviewAllowed(taskId, runId)) && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
@@ -394,7 +394,7 @@ async function streamChatTurn(
 
   try {
     if (interactionRunId && runTask.kind !== 'bot') await captureBaselineWithinBudget(runTask, interactionRunId, runBudget);
-    const stream = withRunWatchdog(adapter.chatStream(sessionId, content, {
+    const stream = withChatRunWatchdog(adapter.chatStream(sessionId, content, {
       systemMessage: taskSystemMessage(runTask, `${options.supplementalSystemMessage ?? ''}${deadlineMessage}`),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
@@ -403,6 +403,7 @@ async function streamChatTurn(
       bot: botRunOptions(runTask),
     }), {
       ...remainingRunWatchdogConfig(runBudget),
+      hardDeadlineAtMs: runBudget.hardDeadlineAtMs,
       pauseUntil: () => humanWaits.size ? Math.max(...humanWaits.values()) : null,
       onTimeout: async (reason: RunWatchdogReason) => {
         const message = reason === 'idle'

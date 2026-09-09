@@ -24,7 +24,8 @@ import {
 } from '../db/projects.js';
 import { getTask, getTasksForProject } from '../db/queries.js';
 import { addProjectClient, initSSE, sendEvent } from '../events.js';
-import { getRunStatus, getRunStatuses } from '../live-chat.js';
+import { taskRunSnapshot } from '../task-run-snapshot.js';
+import { getRunStatus } from '../live-chat.js';
 import { isVerifying } from '../coding-verification.js';
 import { activeCollaborations, claimProjectOperation, claimProjectConfigurationOperation, claimTaskOperation, hasActiveTaskRun, hasProjectOperation } from '../task-run-lifecycle.js';
 import {
@@ -900,7 +901,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       }
       const actor = profileActor(req, registry);
       if (actor) requireProfileProjectAccess(projectId, actor, 'view');
-      const runs = getRunStatuses().filter((run) => getTask(run.taskId)?.project_id === projectId);
+      const runs = taskRunSnapshot().filter((run) => getTask(run.taskId)?.project_id === projectId);
       initSSE(res);
       addProjectClient(res, projectId);
       sendEvent(res, { type: 'task_runs_snapshot', runs });

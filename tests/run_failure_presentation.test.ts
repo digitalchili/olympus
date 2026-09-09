@@ -130,7 +130,7 @@ assert.equal(currentLiveRun(null, failedPersistedRun), null);
 assert.equal(canManuallySendQueuedMessage({taskBusyForQueue: currentLiveRun(staleLiveRun, failedPersistedRun)?.status === 'streaming', configPending: false, queuedIsSending: false}), true);
 
 const rendered = renderToStaticMarkup(createElement(RunFailureBanner, { notice: iterationNotice }));
-assert.match(rendered, /Run paused/);
+assert.match(rendered, /Needs attention/);
 assert.match(rendered, /tool-iteration/);
 assert.match(rendered, /unfinished/);
 assert.equal(renderToStaticMarkup(createElement(RunFailureBanner, { notice: null })), '');
@@ -166,3 +166,23 @@ assert.equal(currentLiveRun(
 ), null, 'persisted terminal state retires a stale snapshot of the same run');
 
 assert.equal(currentLiveRun({ runId: 'same', startedAt: 100, updatedAt: 500, status: 'streaming' } as any, { runId: 'same', startedAt: 100, updatedAt: 120, status: 'error' } as any), null, 'server terminal history wins over client receive timestamps');
+const { taskExecutionLabel } = await import('../client/src/lib/runFailurePresentation.js');
+assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recoveryState: 'blocked' }), 'Needs attention');
+assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recoveryState: 'pending' }), 'Resuming…');
+assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recoveryState: 'exhausted' }), 'Needs attention');
+assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, status: 'streaming' }), 'Running');
+assert.equal(taskExecutionLabel('in_progress', undefined), 'Not running');
+assert.equal(taskExecutionLabel('done', failedPersistedRun), 'Done');
+const resuming = renderToStaticMarkup(createElement(RunFailureBanner, {
+  notice: iterationNotice, recoveryState: 'pending', onContinue: () => {},
+}));
+assert.match(resuming, /Resuming task/);
+assert.doesNotMatch(resuming, /Run paused|Continue task/);
+const blocked = renderToStaticMarkup(createElement(RunFailureBanner, {
+  notice: iterationNotice, recoveryState: 'blocked', onContinue: () => {},
+}));
+assert.match(blocked, /Continue task/);
+assert.match(blocked, /Needs attention/);
+assert.doesNotMatch(blocked, /Resuming task/);
+
+assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recoveryState: 'waiting' }), 'Waiting to resume');

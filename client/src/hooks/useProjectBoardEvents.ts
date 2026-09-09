@@ -1,3 +1,4 @@
+import { reconcileRunSnapshot } from '../lib/runFailurePresentation';
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { BoardEvent, Task, TaskRunState } from '@shared/types';
 
@@ -31,13 +32,15 @@ export function applyProjectBoardEvent(
     return;
   }
   if (event.type === 'task_runs_snapshot') {
-    setTaskRuns(new Map(event.runs.filter(isActiveProjectRun).map((run) => [run.taskId, run])));
+    setTaskRuns(current => reconcileRunSnapshot(event.runs, current));
     return;
   }
   if (event.type === 'task_run_updated') {
     setTaskRuns((current) => {
+      const previous = current.get(event.run.taskId);
+      if (previous && (previous.startedAt > event.run.startedAt || (previous.runId === event.run.runId && !isActiveProjectRun(previous) && isActiveProjectRun(event.run)))) return current;
       const next = new Map(current);
-      if (isActiveProjectRun(event.run)) next.set(event.run.taskId, event.run);
+      if (isActiveProjectRun(event.run) || event.run.status === 'error' || event.run.status === 'stopped' || event.run.status === 'done') next.set(event.run.taskId, event.run);
       else next.delete(event.run.taskId);
       return next;
     });

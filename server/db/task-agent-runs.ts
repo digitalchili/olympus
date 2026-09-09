@@ -8,6 +8,7 @@ type AgentRunRow = {
   kind: TaskRunKind;
   status: LiveChatRunStatus;
   error_code: string | null;
+  recovery_state?: string | null;
   requested_model: string | null;
   requested_provider: string | null;
   requested_reasoning_effort: AgentModelResolution['requested']['reasoningEffort'];
@@ -42,7 +43,9 @@ const finishRun = db.prepare(`
   WHERE run_id = @runId AND NOT (status IN ('error', 'stopped') AND @status = 'done')
 `);
 const latestRun = db.prepare(`
-  SELECT * FROM task_agent_runs WHERE task_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1
+  SELECT r.*, c.state AS recovery_state FROM task_agent_runs r
+  LEFT JOIN task_recovery c ON c.task_id = r.task_id AND c.run_id = r.run_id
+  WHERE r.task_id = ? ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1
 `);
 
 function project(row: AgentRunRow | undefined): TaskAgentRun | undefined {
@@ -53,6 +56,7 @@ function project(row: AgentRunRow | undefined): TaskAgentRun | undefined {
     taskId: row.task_id,
     kind: row.kind,
     status: row.status,
+    ...(row.recovery_state ? { recoveryState: row.recovery_state } : {}),
     ...(row.error_code ? { errorCode: row.error_code } : {}),
     modelResolution: hasResolution ? {
       requested: {
@@ -110,4 +114,13 @@ export function recoverInterruptedTaskAgentRuns(now = Date.now()): number {
 
 export function getLatestTaskAgentRun(taskId: string): TaskAgentRun | undefined {
   return project(latestRun.get(taskId) as AgentRunRow | undefined);
+}
+
+/** Persist terminal outcomes across board reconnects and server restarts. */
+export function listLatestTaskAgentRuns(): TaskAgentRun[] {
+  const rows = db.prepare(`SELECT r.*, c.state AS recovery_state FROM task_agent_runs r
+    LEFT JOIN task_recovery c ON c.task_id = r.task_id AND c.run_id = r.run_id
+    WHERE r.rowid = (SELECT rowid FROM task_agent_runs WHERE task_id = r.task_id
+      ORDER BY started_at DESC, rowid DESC LIMIT 1)`).all() as AgentRunRow[];
+  return rows.map(row => project(row)!);
 }

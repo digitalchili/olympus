@@ -1,3 +1,4 @@
+import { taskRunSnapshot } from './task-run-snapshot.js';
 import { createCodingVerificationRouter } from './routes/coding-verification.js';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
@@ -31,7 +32,7 @@ import { normalizeDelegationEvent } from './delegation-events.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { ProfileAgentAdapter } from './adapters/routing.js';
 import { initSSE, addClient, sendEvent, closeClientsForRestart, broadcast } from './events.js';
-import { closeSubscribersForRestart, getRunStatuses, interruptActiveRuns } from './live-chat.js';
+import { closeSubscribersForRestart, interruptActiveRuns } from './live-chat.js';
 import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
 import { createDrainRouter, maintenanceGuard } from './drain-http.js';
@@ -114,7 +115,7 @@ app.get('/api/version', (_req, res) => {
 app.get('/api/events', (req, res) => {
   try {
     const profile = requestProfile(req);
-    const runs = getRunStatuses().filter((run) => {
+    const runs = taskRunSnapshot().filter((run) => {
       const task = getTask(run.taskId);
       return task !== undefined && taskBelongsToProfile(task, profile);
     });

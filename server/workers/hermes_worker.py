@@ -33,7 +33,7 @@ from hermes_worker_utils import (
     truncate_with_ellipsis,
 )
 from hermes_bot_messaging import BotMessageBroker, BotMessageError, configure_bot_agent, install_native_guard
-from hermes_recovery import ContinuationJournal, RecoveryBlocked
+from hermes_recovery import ContinuationJournal, RecoveryBlocked, saved_turn_matches
 from hermes_background_work import get_background_work as _native_session_background_work
 from hermes_background_work import stop_background_work as _native_stop_background_work, _scoped_session_ids
 from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
@@ -1815,12 +1815,17 @@ def _model_resolution_payload(
     return payload
 
 
-def _agent_max_iterations() -> int:
+def _agent_max_iterations(config: dict[str, Any] | None = None) -> int:
+    # Match Hermes's default: work until completion or the wall-clock deadline.
+    # Respect an explicit Olympus override or the selected Hermes profile limit.
+    raw = os.environ.get("OLYMPUS_AGENT_MAX_ITERATIONS")
+    if raw is None:
+        raw = ((config or {}).get("agent") or {}).get("max_turns")
     try:
-        value = int(os.environ.get("OLYMPUS_AGENT_MAX_ITERATIONS", "40"))
+        value = int(raw) if not isinstance(raw, bool) else 0
     except (TypeError, ValueError):
-        return 40
-    return value if value > 0 else 40
+        return sys.maxsize
+    return value if value > 0 else sys.maxsize
 
 
 def _create_agent(
@@ -1878,7 +1883,7 @@ def _create_agent(
     agent_params = _AIAgent_PARAMS
     agent_kwargs: dict[str, Any] = {
         "model": resolved_model,
-        "max_iterations": _agent_max_iterations(),
+        "max_iterations": _agent_max_iterations(cfg),
         "provider": resolved_provider,
         "base_url": resolved_base_url,
         "api_key": runtime.get("api_key"),
@@ -2433,6 +2438,14 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
             result_failure = _agent_result_failure(result)
             if result_failure:
                 message, code = result_failure
+                if code == "iteration_limit":
+                    saved_db, saved_session = open_session(string_or_none(getattr(agent, "session_id", None)) or session_id)
+                    if saved_turn_matches(result, load_agent_history(saved_db, saved_session)):
+                        # Hermes returned at a tool boundary and its complete replay history
+                        # is durable. Keep unfinished synthesis unacknowledged for recovery.
+                        if delivery_event is not None:
+                            journal.state(delivery_event["delegation_id"], "ready")
+                        journal.set_turn_state("pending")
                 raise WorkerError(message, code=code)
 
             completed_turn = True
@@ -2499,6 +2512,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
                         raise WorkerError("Child work is still pending; a durable continuation was saved.", code="recovery_pending")
                     time.sleep(0.1)
 
+            _send({"id": request_id, "type": "tool_progress", "tool": "delegate_task",
+                   "status": "completed", "label": "Waiting for saved child results"})
             notification = prepare_delivery(event)
             system_message = (base_system_message or "") + "\n\n" + journal.context()
 
