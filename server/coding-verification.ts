@@ -27,7 +27,7 @@ export async function cancelAllCodingVerifications(reason = 'Server shutting dow
   await Promise.all([...active.keys()].map(taskId => cancelCodingVerification(taskId, reason)));
 }
 async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
-  return (await exec('git', args, { cwd, signal, timeout: 10_000, maxBuffer: 8 * 1024 * 1024 })).stdout;
+  return (await exec('git', args, { cwd, signal, maxBuffer: 8 * 1024 * 1024 })).stdout;
 }
 function redact(text: string): string {
   return text.replace(/\bbearer\s+[a-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
@@ -87,14 +87,14 @@ async function commands(cwd: string): Promise<string[][]> {
     return ['test', 'typecheck', 'build'].filter(name => typeof pkg.scripts?.[name] === 'string').map(name => ['npm', 'run', name]);
   } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
 }
-async function runCheck(cwd: string, command: string[], timeoutMs: number, signal: AbortSignal, onProgress: (check: RunningCodingCheck) => void): Promise<CodingCheck> {
+async function runCheck(cwd: string, command: string[], signal: AbortSignal, onProgress: (check: RunningCodingCheck) => void): Promise<CodingCheck> {
   signal.throwIfAborted();
   const start = Date.now();
   return await new Promise(resolve => {
     let output = ''; let timedOut = false; let finished = false;
     const child = spawn(command[0], command.slice(1), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['ignore','pipe','pipe'] });
     const finish = (exitCode: number | null) => {
-      if (finished) return; finished = true; clearTimeout(timer); clearInterval(progressTimer); signal.removeEventListener('abort', abort);
+      if (finished) return; finished = true; clearInterval(progressTimer); signal.removeEventListener('abort', abort);
       resolve({ command, exitCode, output: redact(output), durationMs: Date.now() - start, timedOut });
     };
     const kill = () => {
@@ -102,11 +102,6 @@ async function runCheck(cwd: string, command: string[], timeoutMs: number, signa
     };
     const abort = () => { timedOut = signal.reason?.name === 'TimeoutError'; output += '\nVerification cancelled.'; kill(); };
     signal.addEventListener('abort', abort, { once: true });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      output += '\nVerification command exceeded its time budget.';
-      kill();
-    }, Math.max(1, timeoutMs));
     let lastProgress = 0;
     const publishProgress = () => {
       lastProgress = Date.now();
@@ -125,15 +120,13 @@ async function runCheck(cwd: string, command: string[], timeoutMs: number, signa
     child.on('close', code => finish(code));
   });
 }
-export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 * 60_000, options: { skipUnchanged?: boolean } = {}): Promise<boolean> {
+export async function verifyCodingRun(task: Task, runId: string, options: { skipUnchanged?: boolean } = {}): Promise<boolean> {
   if (active.has(task.id) || shuttingDown) return false;
   const controller = new AbortController();
   const signal = controller.signal;
   let settled!: () => void;
   active.set(task.id, { controller, done: new Promise<void>(resolve => { settled = resolve; }) });
   let evidence: CodingEvidence | null = null;
-  const deadline = Date.now() + Math.max(1, timeoutMs);
-  const timer = setTimeout(() => controller.abort(new DOMException('Verification budget exhausted', 'TimeoutError')), Math.max(1, timeoutMs));
   try {
     evidence = read(task.id, runId);
     const currentTask = getTask(task.id);
@@ -162,8 +155,7 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
     if (!required.length) { evidence.status = 'unconfigured'; evidence.reason = 'Configure .olympus/verification.json with the checks required for this project.'; return false; }
     for (const command of required) {
       signal.throwIfAborted();
-      if (Date.now() >= deadline) { evidence.status = 'failed'; evidence.reason = 'Verification budget exhausted'; return false; }
-      const result = await runCheck(workdir, command, deadline - Date.now(), signal, check => {
+      const result = await runCheck(workdir, command, signal, check => {
         evidence!.currentCheck = check; evidence!.updatedAt = Date.now(); save(evidence!);
       });
       evidence.currentCheck = null;
@@ -178,7 +170,6 @@ export async function verifyCodingRun(task: Task, runId: string, timeoutMs = 5 *
     if (!evidence) throw error;
     evidence.status = 'failed'; evidence.reason = redact(error instanceof Error ? error.message : 'Verification failed'); return false;
   } finally {
-    clearTimeout(timer);
     try { if (evidence) { evidence.currentCheck = null; evidence.updatedAt = Date.now(); save(evidence); } }
     finally { active.delete(task.id); settled(); }
   }
@@ -208,7 +199,7 @@ export async function readCodingEvidence(task: Task): Promise<CodingEvidence | n
 
 export function codingReviewAllowed(taskId: string, runId: string): boolean {
   const evidence = read(taskId, runId);
-  // verifyCodingRun checks source freshness under its deadline before emitting
+  // verifyCodingRun checks source freshness before emitting
   // done. Do not start another, uncancellable source scan after terminal delivery.
   if (!evidence) return true;
   const workdir = getTask(taskId)?.workdir;

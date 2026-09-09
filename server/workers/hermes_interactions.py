@@ -86,17 +86,18 @@ class InteractionBroker:
             result.append({"id": qid, "question": self._display(text), "choices": options, "multiSelect": multi})
         return result
 
-    def _wait(self, task_id: str, run_id: str, payload: dict, *, interrupt: Callable, timeout_seconds: float, deadline_monotonic: float | None = None) -> dict:
+    def _wait(self, task_id: str, run_id: str, payload: dict, *, interrupt: Callable, timeout_seconds: float | None, deadline_monotonic: float | None = None) -> dict:
         _text(task_id, 256)
         _text(run_id, 256)
-        timeout_seconds = min(1800, max(0.001, timeout_seconds))
+        if timeout_seconds is not None:
+            timeout_seconds = max(0.001, timeout_seconds)
         if deadline_monotonic is not None:
-            timeout_seconds = min(timeout_seconds, deadline_monotonic - time.monotonic())
+            timeout_seconds = min(timeout_seconds if timeout_seconds is not None else float("inf"), deadline_monotonic - time.monotonic())
             if timeout_seconds <= 0:
                 raise InteractionError("Run deadline expired; input cannot authorize further work", "interaction_stale")
         identity = uuid.uuid4().hex
-        payload = {**payload, "id": identity, "workerRunId": run_id, "expiresAt": int((time.time() + timeout_seconds) * 1000)}
-        deadline = time.monotonic() + timeout_seconds
+        payload = {**payload, "id": identity, "workerRunId": run_id, "expiresAt": int((time.time() + timeout_seconds) * 1000) if timeout_seconds is not None else 0}
+        deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else float("inf")
         if deadline_monotonic is not None:
             deadline = min(deadline, deadline_monotonic)
         pending = _Pending(task_id, run_id, payload, deadline)
@@ -125,7 +126,7 @@ class InteractionBroker:
                 self._pending.pop(identity, None)
 
     def clarify(self, task_id: str, run_id: str, question: str = "", choices=None, multi_select: bool = False,
-                *, questions=None, interrupt: Callable, timeout_seconds: float = 1800, deadline_monotonic: float | None = None):
+                *, questions=None, interrupt: Callable, timeout_seconds: float | None = None, deadline_monotonic: float | None = None):
         try:
             normalized = self._questions(question, choices, multi_select, questions)
             title = self._display(question[:1000]) if question else "Your decision is needed"
@@ -141,7 +142,7 @@ class InteractionBroker:
         return answer
 
     def approve(self, task_id: str, run_id: str, command: str, description: str, *, interrupt: Callable,
-                timeout_seconds: float = 1800, deadline_monotonic: float | None = None, **_native_options) -> str:
+                timeout_seconds: float | None = None, deadline_monotonic: float | None = None, **_native_options) -> str:
         try:
             response = self._wait(task_id, run_id, {
                 "kind": "approval", "title": "Approval required", "questions": [],

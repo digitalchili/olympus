@@ -48,7 +48,6 @@ export function buildChatWorkerRequest(
     taskId: options?.task?.id,
     taskTitle: options?.task?.title ?? null,
     workdir: options?.task?.workdir ?? null,
-    runBudget: options?.runBudget,
     ...(options?.bot ? { bot: options.bot } : {}),
     ...(options?.recoveryContinuation ? { recoveryContinuation: true } : {}),
   };
@@ -240,7 +239,6 @@ export class HermesWorkerClient {
         })
         .catch((error) => {
           this.ready = false;
-          if (this.child && !this.child.killed) this.child.kill();
           throw error;
         })
         .finally(() => {

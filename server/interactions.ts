@@ -1,6 +1,5 @@
 import type { NativeInteraction } from '../shared/interactions.js';
 
-const MAX_EXPIRY_MS = 30 * 60_000;
 const MAX_TEXT = 50_000;
 const MAX_TITLE = 2_000;
 const SAFE_ID = /^[A-Za-z0-9_.:@/-]{1,160}$/;
@@ -35,7 +34,7 @@ export function normalizeNativeInteraction(raw: unknown, eventId: string, now = 
   if (raw.command !== undefined && !boundedString(raw.command, MAX_TEXT)) return null;
   if (raw.reason !== undefined && !boundedString(raw.reason, MAX_TEXT)) return null;
   if (typeof raw.expiresAt !== 'number' || !Number.isFinite(raw.expiresAt)) return null;
-  if (raw.expiresAt <= now || raw.expiresAt > now + MAX_EXPIRY_MS) return null;
+  if (raw.expiresAt !== 0 && raw.expiresAt <= now) return null;
 
   const seen = new Set<string>();
   const questions = [];

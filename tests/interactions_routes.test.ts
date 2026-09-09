@@ -77,9 +77,10 @@ try {
     taskId: task.id,
     profileName: 'default',
     olympusRunId,
-    interaction: payload('clarify-1', 'worker-1'),
+    interaction: payload('clarify-1', 'worker-1', 0),
   });
 
+  interactionDb.expireWaitingInteractions(Date.now() + 24 * 60 * 60_000);
   const list = await (await fetch(`${base}/api/tasks/${task.id}/interactions?profile=default`)).json() as { interactions: NativeInteraction[] };
   assert.equal(list.interactions.length, 1, 'reload lists durable pending interactions');
   assert.equal(list.interactions[0]!.id, 'clarify-1');

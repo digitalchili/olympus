@@ -146,7 +146,7 @@ try {
     await git('init');
     await git('add', '.');
     await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Initial');
-    const checking = verifyCodingRun(owner, 'automatic-check', 10_000);
+    const checking = verifyCodingRun(owner, 'automatic-check');
     try {
       await waitFor(() => existsSync(ready));
       for (const route of routes) assert.equal((await post(route)).status, 200, route);

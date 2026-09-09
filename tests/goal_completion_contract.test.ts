@@ -27,15 +27,18 @@ const post = async (id: string) => fetch(`${api}/${id}/messages?profile=default`
 const wait = async (id: string) => { for (let i = 0; i < 100 && getLatestTaskAgentRun(id)?.status === 'streaming'; i++) await new Promise(r => setTimeout(r, 5)); };
 try {
   const cap = insertTask({ title: 'Goal cap', status: 'in_progress', profile_name: 'default' }); ids.push(cap.id);
-  adapter.evaluateGoal = async () => ({ status: 'active', shouldContinue: true, verdict: 'continue', reason: 'unfinished', message: '', continuationPrompt: 'Continue' });
+  let turns = 0;
+  adapter.evaluateGoal = async () => ++turns <= 22
+    ? { status: 'active', shouldContinue: true, verdict: 'continue', reason: 'unfinished', message: '', continuationPrompt: 'Continue' }
+    : { status: 'done', shouldContinue: false, verdict: 'done', reason: 'finished', message: '' };
   assert.equal((await post(cap.id)).status, 202); await wait(cap.id);
-  assert.equal(getLatestTaskAgentRun(cap.id)?.status, 'error', 'turn limit must remain unfinished');
-  assert.equal(getTask(cap.id)?.status, 'in_progress');
+  assert.equal(getLatestTaskAgentRun(cap.id)?.status, 'done', 'only native Hermes decides when the goal stops');
+  assert.equal(turns, 23);
+  assert.equal(getTask(cap.id)?.status, 'in_review');
   const stalled = insertTask({ title: 'Stalled evaluation', status: 'in_progress', profile_name: 'default' }); ids.push(stalled.id);
-  adapter.evaluateGoal = () => new Promise(() => {});
+  adapter.evaluateGoal = async () => { await new Promise(r => setTimeout(r, 200)); return { status: 'done', shouldContinue: false, verdict: 'done', reason: 'finished', message: '' }; };
   assert.equal((await post(stalled.id)).status, 202); await wait(stalled.id);
-  assert.equal(getLatestTaskAgentRun(stalled.id)?.errorCode, 'run_runtime_timeout', 'evaluation is inside hard deadline');
-  assert.equal(getTask(stalled.id)?.status, 'in_progress');
+  assert.equal(getLatestTaskAgentRun(stalled.id)?.status, 'done', 'quiet evaluation outlives legacy runtime cap');
   const inactive = insertTask({ title: 'Paused goal', status: 'in_progress', profile_name: 'default' }); ids.push(inactive.id);
   adapter.evaluateGoal = async () => ({ status: 'paused', shouldContinue: false, verdict: 'inactive', reason: 'paused', message: '' });
   assert.equal((await post(inactive.id)).status, 202); await wait(inactive.id);
@@ -50,9 +53,12 @@ try {
   assert.equal(getLatestTaskAgentRun(stopped.id)?.status, 'stopped', 'stop must promptly settle a stalled evaluation');
   process.env.OLYMPUS_CHAT_MAX_RUN_MS = '150';
   const setup = insertTask({ title: 'Stalled setup', status: 'in_progress', profile_name: 'default' }); ids.push(setup.id);
-  adapter.setGoal = () => new Promise(() => {});
+  adapter.setGoal = async () => { await new Promise(r => setTimeout(r, 200)); return { goal: 'objective', status: 'active', turnsUsed: 0, maxTurns: 20 }; };
+  adapter.evaluateGoal = async () => ({ status: 'done', shouldContinue: false, verdict: 'done', reason: 'finished', message: '' });
   const result = await Promise.race([post(setup.id), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('setup escaped deadline')), 500))]);
-  assert.notEqual(result.status, 202);
+  assert.equal(result.status, 202);
+  await wait(setup.id);
+  assert.equal(getLatestTaskAgentRun(setup.id)?.status, 'done');
 } finally {
   for (const id of ids) discardRun(id);
   server.close(); await once(server, 'close'); db.close(); await rm(root, { recursive: true, force: true });

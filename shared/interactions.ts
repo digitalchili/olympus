@@ -28,6 +28,7 @@ export interface NativeInteraction {
   questions: InteractionQuestion[];
   command?: string;
   reason?: string;
+  /** Zero means wait for an answer or explicit cancellation. */
   expiresAt: number;
 }
 

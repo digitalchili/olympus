@@ -61,7 +61,7 @@ const insertInteractionStmt = db.prepare(`
 const expireWaitingStmt = db.prepare(`
   UPDATE task_interactions
   SET status = 'expired', settled_at = ?
-  WHERE status = 'waiting' AND expires_at <= ?
+  WHERE status = 'waiting' AND expires_at > 0 AND expires_at <= ?
 `);
 const recoverInterruptedStmt = db.prepare(`
   UPDATE task_interactions
@@ -149,7 +149,7 @@ export const claimInteraction: (input: {
       AND worker_run_id = @workerRunId
       AND olympus_run_id = @olympusRunId
       AND status = 'waiting'
-      AND expires_at > @now
+      AND (expires_at = 0 OR expires_at > @now)
   `).run({ ...input, now, responseJson: JSON.stringify(input.response) });
   if (result.changes !== 1) return null;
   return getInteraction(input.interactionId);

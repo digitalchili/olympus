@@ -222,14 +222,12 @@ async function runExtractionWorker(path: string, extension: string, mimeType: st
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
   });
-  const timeout = setTimeout(() => child.kill('SIGKILL'), Number(process.env.OLYMPUS_PROJECT_REFERENCES_EXTRACT_TIMEOUT_MS ?? 15_000));
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
   child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
   child.stdin.end(JSON.stringify({ path, extension, mimeType }));
   const code = await new Promise<number | null>((resolvePromise) => child.on('close', resolvePromise));
-  clearTimeout(timeout);
   if (code !== 0) throw new Error(Buffer.concat(stderr).toString('utf8') || 'Project reference extraction failed');
   return JSON.parse(Buffer.concat(stdout).toString('utf8')) as ExtractionResult;
 }

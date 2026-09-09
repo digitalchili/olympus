@@ -21,13 +21,13 @@ try {
  assert.equal(starts, 1);
  await reconcileRecoveries(idle, async () => { starts++; fail('three', true); }, 202);
  await reconcileRecoveries(idle, async () => { starts++; }, 203);
- assert.equal(starts, 2, 'only two recovery attempts');
- assert.equal(getRecovery(task.id)?.state, 'exhausted');
+ assert.equal(starts, 3, 'safe recovery continues beyond two attempts');
+ assert.equal(getRecovery(task.id)?.state, 'dispatching');
  fail('iteration');
  finishTaskAgentRun('iteration', 'error', 102, 'iteration_limit');
  recoveryOutcome(task.id, 'iteration', 'error', 'iteration_limit');
  await reconcileRecoveries(idle, async () => { starts++; }, 203);
- assert.equal(starts, 3, 'a durably saved iteration limit uses bounded recovery');
+ assert.equal(starts, 4, 'a durably saved iteration limit uses recovery');
  starts = 2;
  fail('manual'); cancelRecovery(task.id);
  await reconcileRecoveries(idle, async () => { starts++; }, 204);
@@ -39,6 +39,6 @@ try {
  assert.equal(getRecovery(task.id)?.attempts, 1);
  fail('later');
  await reconcileRecoveries(idle, async () => { starts++; }, 100 + 2 * 60 * 60_000 + 1);
- assert.equal(starts, 2, 'recovery time window is finite');
+ assert.equal(starts, 3, 'safe recovery has no Olympus time window');
 } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 console.log('Automatic recovery tests passed');

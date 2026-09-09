@@ -21,7 +21,7 @@ export function beginRecovery(taskId: string, runId: string, at: number, automat
     db.prepare(`INSERT INTO task_recovery (task_id, run_id, started_at, deadline_at, attempts, state)
       VALUES (?, ?, ?, ?, 0, 'running') ON CONFLICT(task_id) DO UPDATE SET run_id=excluded.run_id,
       started_at=excluded.started_at, deadline_at=excluded.deadline_at, attempts=0, state='running', reason=NULL, checkpoint_json=NULL`)
-      .run(taskId, runId, at, at + 2 * 60 * 60_000);
+      .run(taskId, runId, at, 0);
   }
 }
 export function recoveryOutcome(taskId: string, runId: string, status: string, code?: string | null): void {
@@ -40,7 +40,7 @@ export function saveRecoveryCheckpoint(taskId: string, runId: string, checkpoint
 }
 export function recoverRecoveryRecords(): void {
   db.prepare(`UPDATE task_recovery SET state='pending', reason='worker_restarted'
-    WHERE state='dispatching' OR (state='running' AND run_id IN (SELECT run_id FROM task_agent_runs WHERE status='error' AND error_code='worker_restarted'))`).run();
+    WHERE state IN ('dispatching', 'exhausted') OR (state='running' AND run_id IN (SELECT run_id FROM task_agent_runs WHERE status='error' AND error_code='worker_restarted'))`).run();
 }
 function broadcastRecovery(taskId: string): void {
   const run = getLatestTaskAgentRun(taskId);
@@ -50,7 +50,7 @@ let reconciling = false;
 export async function reconcileRecoveries(
   adapter: Pick<AgentAdapter, 'getBackgroundWork'>,
   deliver: (taskId: string, runId: string) => Promise<void>,
-  now = Date.now(),
+  _now = Date.now(),
 ): Promise<void> {
   if (reconciling) return;
   reconciling = true;
@@ -60,11 +60,6 @@ export async function reconcileRecoveries(
       const latest = getLatestTaskAgentRun(row.task_id);
       if (!latest || latest.runId !== row.run_id || latest.status !== 'error' || getRunStatus(row.task_id)?.status === 'streaming') continue;
       if (!getTask(row.task_id) || !recoverable.has(latest.errorCode ?? '')) continue;
-      if (row.attempts >= 2 || now >= row.deadline_at) {
-        db.prepare("UPDATE task_recovery SET state='exhausted', reason='Automatic recovery budget exhausted; review unfinished work' WHERE task_id=? AND run_id=?").run(row.task_id, row.run_id);
-        broadcastRecovery(row.task_id);
-        continue;
-      }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const inventory = await Promise.race([
@@ -82,7 +77,7 @@ export async function reconcileRecoveries(
         if (!claimed.changes) continue;
         await deliver(row.task_id, row.run_id);
       } catch {
-        db.prepare("UPDATE task_recovery SET state='waiting', reason='Recovery check or startup failed; will retry within budget' WHERE task_id=? AND run_id=? AND state <> 'blocked'").run(row.task_id, row.run_id);
+        db.prepare("UPDATE task_recovery SET state='waiting', reason='Recovery check or startup failed; will retry' WHERE task_id=? AND run_id=? AND state <> 'blocked'").run(row.task_id, row.run_id);
       } finally {
         if (timer) clearTimeout(timer);
         const current = getRecovery(row.task_id);

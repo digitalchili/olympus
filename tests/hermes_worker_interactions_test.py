@@ -44,6 +44,7 @@ class InteractionTests(unittest.TestCase):
     def test_single_question_waits_for_exact_answer_not_assumptions(self):
         future, event = self.begin(question="Which?", choices=["One", "Two"])
         self.assertFalse(future.done())
+        self.assertEqual(event["expiresAt"], 0, "human input has no Olympus expiry")
         qid = event["questions"][0]["id"]
         self.assertEqual(self.answer(event, {"answers": {qid: "Other answer"}}), {"accepted": True})
         self.assertEqual(future.result(2), "Other answer")

@@ -66,9 +66,8 @@ class RecoveryTests(unittest.TestCase):
                     raise AssertionError('Previous user message replayed or unbounded synthesis')
                 return synthesis or {'final_response': 'Synthesized', 'completed': True}
         agent = Agent()
-        finalization = threading.Event()
         if finalized:
-            finalization.set()
+            ContinuationJournal('task-1').set_turn_state('pending')
         def create(**kwargs):
             agent.tool_progress_callback = kwargs['callbacks']['tool_progress_callback']
             return agent
@@ -77,7 +76,6 @@ class RecoveryTests(unittest.TestCase):
                 'open_session': lambda *_: (object(), 'task-1'),
                 'load_agent_history': lambda *_: saved_history or [], '_create_agent': create,
                 'native_approval_context': lambda *_: nullcontext(),
-                '_start_deadline_controls': lambda *_: types.SimpleNamespace(cancel=lambda: None, finalization_started=finalization),
                 'take_owned_delegation_notification': self.notification if not notification else lambda *_a, **_k: self.event,
                 '_send': lambda event: (self.sent.append(event), on_send(event) if on_send else None),
             }.items():
@@ -327,18 +325,23 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(ContinuationJournal('task-1').status(), {'status': 'none'})
 
 
-    def test_wait_is_bounded_and_reports_progress_with_pending_receipt(self):
-        self.native.get_durable_delegation = lambda ident: {
-            'origin_session': 'task-1', 'state': 'running', 'delivery_state': 'pending', 'result': None,
-        }
-        clock = iter(range(100))
+    def test_wait_keeps_child_running_beyond_former_cutoff(self):
+        native_result = self.native.get_durable_delegation
+        polls = 0
+        def delayed_result(ident):
+            nonlocal polls
+            polls += 1
+            if polls < 8:
+                return {'origin_session': 'task-1', 'state': 'running', 'delivery_state': 'pending', 'result': None}
+            return native_result(ident)
+        self.native.get_durable_delegation = delayed_result
+        self.notification = lambda *_a, **_k: None
+        clock = iter(range(0, 100000, 100))
         with patch.object(worker.time, 'monotonic', side_effect=lambda: next(clock)):
-            with self.assertRaises(worker.WorkerError) as error:
-                self.run_chat(notification=False)
-        self.assertEqual(error.exception.code, 'recovery_pending')
-        self.assertEqual(len(self.messages), 1)
-        self.assertTrue(any(event.get('label') == 'Waiting for saved child results' for event in self.sent))
-        self.assertEqual(self.sent[-1]['checkpoint']['continuation'], {'status': 'pending'})
+            self.run_chat(notification=False)
+        self.assertEqual(len(self.messages), 2)
+        self.assertTrue(self.completed)
+        self.assertFalse(any(event.get('type') == 'error' for event in self.sent))
 
     def test_automatic_timeout_does_not_mark_waiting_results_as_human_cancelled(self):
         journal = ContinuationJournal('task-1')
@@ -369,12 +372,9 @@ class RecoveryTests(unittest.TestCase):
 
 
     def test_completed_deadline_finalization_without_child_is_durably_recoverable(self):
-        self.run_chat(dispatch=False, finalized=True)
+        ContinuationJournal('task-1').set_turn_state('pending')
         restarted = ContinuationJournal('task-1')
         self.assertEqual(restarted.status()['status'], 'pending')
-        receipt = next(event['checkpoint'] for event in self.sent if event['type'] == 'checkpoint')
-        self.assertEqual(receipt['continuation']['status'], 'pending')
-        self.assertEqual(receipt['pendingDelegationIds'], [])
         self.messages.clear()
         self.run_chat(dispatch=False, recoveryContinuation=True)
         self.assertEqual(len(self.messages), 1)
@@ -382,7 +382,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(restarted.status(), {'status': 'none'})
 
     def test_failed_auto_continuation_of_finalized_turn_is_not_replayed(self):
-        self.run_chat(dispatch=False, finalized=True)
+        ContinuationJournal('task-1').set_turn_state('pending')
         self.messages.clear()
         with self.assertRaises(worker.WorkerError):
             self.run_chat({'completed': False, 'final_response': 'Partial'}, dispatch=False, recoveryContinuation=True)

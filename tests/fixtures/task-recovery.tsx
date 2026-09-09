@@ -1,3 +1,4 @@
+import { TaskActivityIndicator } from '../../client/src/components/TaskActivityIndicator';
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RunFailureBanner } from '../../client/src/components/RunFailureBanner';
@@ -14,14 +15,15 @@ function Fixture() {
       <h1 className="text-lg font-semibold">Verify Country Selection in Contacts</h1>
       <span role="status" className="rounded-full bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">{taskExecutionLabel('in_progress', run)}</span>
     </header>
-    <p className="mb-6 text-sm text-zinc-600">Changes are saved. Production build verification remains unfinished.</p>
+    <TaskActivityIndicator run={run} />
+    <p className="mt-6 mb-6 text-sm text-zinc-600">Changes are saved. Production build verification remains unfinished.</p>
     <RunFailureBanner notice={deriveRunFailureNotice(run)} recoveryState={run.recoveryState}
-      onContinue={() => setRun({ ...run, runId: 'run-2', status: 'streaming', recoveryState: 'running' })}
+      onContinue={() => setRun({ ...run, runId: 'run-2', status: 'streaming', startedAt: Date.now(), recoveryState: 'running' })}
       onPause={() => setRun({ ...run, recoveryState: 'blocked' })} />
     <textarea aria-label="Message" value={draft} onChange={e => setDraft(e.target.value)} className="w-full rounded-xl border border-zinc-200 p-3 text-sm" />
     <div style={{ display: 'flex', gap: 20, marginTop: 24 }}>
       <button onClick={() => setRun({ ...base, recoveryState: 'pending' })}>Simulate automatic recovery</button>
-      <button onClick={() => setRun({ ...base, recoveryState: 'exhausted' })}>Simulate retries exhausted</button>
+      <button onClick={() => setRun({ ...base, recoveryState: 'blocked' })}>Simulate stopped task</button>
     </div>
     <p className="mt-3 text-xs text-zinc-500">Disposable UI fixture. No live task or agent is started.</p>
   </main>;

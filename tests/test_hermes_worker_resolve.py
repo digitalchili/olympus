@@ -40,21 +40,21 @@ class ResolveModelProviderTest(unittest.TestCase):
     def test_olympus_uses_native_iteration_default_and_explicit_limits(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OLYMPUS_AGENT_MAX_ITERATIONS", None)
-            self.assertEqual(hermes_worker._agent_max_iterations(), sys.maxsize)
+            self.assertEqual(hermes_worker._agent_max_iterations(), None)
 
         with patch.dict(os.environ, {"OLYMPUS_AGENT_MAX_ITERATIONS": "12"}):
-            self.assertEqual(hermes_worker._agent_max_iterations(), 12)
+            self.assertEqual(hermes_worker._agent_max_iterations(), None)
 
         with patch.dict(os.environ, {"OLYMPUS_AGENT_MAX_ITERATIONS": "invalid"}):
-            self.assertEqual(hermes_worker._agent_max_iterations(), sys.maxsize)
+            self.assertEqual(hermes_worker._agent_max_iterations(), None)
 
     def test_hermes_profile_iteration_limit_is_respected(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OLYMPUS_AGENT_MAX_ITERATIONS", None)
             self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 90}}), 90)
-            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 'unlimited'}}), sys.maxsize)
+            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 'unlimited'}}), None)
         with patch.dict(os.environ, {'OLYMPUS_AGENT_MAX_ITERATIONS': '12'}):
-            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 90}}), 12)
+            self.assertEqual(hermes_worker._agent_max_iterations({'agent': {'max_turns': 90}}), 90)
 
     def test_incomplete_agent_result_is_not_reported_as_success(self):
         self.assertEqual(
@@ -63,7 +63,7 @@ class ResolveModelProviderTest(unittest.TestCase):
                 "failed": False,
                 "turn_exit_reason": "max_iterations_reached(40)",
             }),
-            ("Hermes reached the Olympus tool-iteration limit before completing this turn.", "iteration_limit"),
+            ("Hermes reached its configured tool-iteration limit before completing this turn.", "iteration_limit"),
         )
         self.assertEqual(
             hermes_worker._agent_result_failure({"completed": False, "failed": True, "error": "provider failed"}),

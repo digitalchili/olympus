@@ -56,15 +56,7 @@ import { LocalProfileError, localProfileRegistry } from '../local-profiles.js';
 import { acquireProfileWork } from '../profile-deletion.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
-import {
-  RunWatchdogError,
-  createRunBudget,
-  withinRunDeadline,
-  remainingRunWatchdogConfig,
-  withChatRunWatchdog,
-  type AgentRunBudget,
-  type RunWatchdogReason,
-} from '../run-watchdog.js';
+import { untilStopped } from '../run-cancellation.js';
 import { activeCollaborations, hasActiveTaskRun, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
@@ -77,7 +69,7 @@ import { acceptBotMessage, botRunOptions, botSystemMessage, stopBotTask } from '
 import { beginBotRun, botDeliveryContent, finishBotRun, getBotRun, requireQueuedBotMessage, type BotDelivery } from '../db/bot-messages.js';
 import { scheduleBotMessageDispatch } from '../bot-message-dispatcher.js';
 import type { StreamEvent } from '../adapters/types.js';
-import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, OLYMPUS_GOAL_MAX_TURNS, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
+import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
 
 export const chatRouter = Router();
 chatRouter.use('/:id', requireTaskForProfile(getTask));
@@ -325,21 +317,11 @@ function taskSystemMessage(task: Task, supplemental = ''): string {
   return `${base}${supplemental}`;
 }
 
-function taskRunBudget(taskId: string): AgentRunBudget {
-  const budget = createRunBudget();
-  const recovery = getRecovery(taskId);
-  if (recovery && recovery.attempts > 0) budget.hardDeadlineAtMs = Math.min(budget.hardDeadlineAtMs, recovery.deadline_at);
-  const run = getRunStatus(taskId);
-  const bot = run && getBotRun(run.runId);
-  if (bot) budget.hardDeadlineAtMs = Math.min(budget.hardDeadlineAtMs, bot.deadlineAt);
-  return budget;
-}
-
-async function captureBaselineWithinBudget(task: Task, runId: string, budget: AgentRunBudget): Promise<void> {
+async function captureBaselineUntilStopped(task: Task, runId: string): Promise<void> {
   const controller = new AbortController();
   let pending: Promise<void> | undefined;
   try {
-    await withinRunDeadline(() => pending = captureCodingBaseline(task, runId, controller.signal), budget,
+    await untilStopped(() => pending = captureCodingBaseline(task, runId, controller.signal),
       () => getRunStatus(task.id)?.status === 'stopped');
   } catch (error) {
     controller.abort(error);
@@ -348,19 +330,18 @@ async function captureBaselineWithinBudget(task: Task, runId: string, budget: Ag
   }
 }
 
-async function verifyBeforeReview(task: Task, runId: string, budget: AgentRunBudget): Promise<boolean> {
+async function verifyBeforeReview(task: Task, runId: string): Promise<boolean> {
   const run = getRun(task.id);
   const requested = run?.messages.some(message =>
     message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {
-    return await withinRunDeadline(
-      () => verifyCodingRun(task, runId, undefined, { skipUnchanged: !requested }),
-      budget,
+    return await untilStopped(
+      () => verifyCodingRun(task, runId, { skipUnchanged: !requested }),
       () => getRunStatus(task.id)?.status === 'stopped',
     );
   } catch (error) {
-    // A deadline must not release run ownership while checks or snapshots survive.
+    // Stop must not release run ownership while checks or snapshots survive.
     await cancelCodingVerification(task.id, error instanceof Error ? error.message : 'Verification stopped');
     throw error;
   }
@@ -375,7 +356,6 @@ async function streamChatTurn(
     captureResponseText?: boolean;
     supplementalSystemMessage?: string;
     hideInternalEvents?: boolean;
-    runBudget?: AgentRunBudget;
     recoveryContinuation?: boolean;
   },
 ): Promise<StreamChatTurnResult> {
@@ -385,32 +365,16 @@ async function streamChatTurn(
   let hadError = false;
   let interrupted = false;
   let pendingSteer: string | undefined;
-  const runBudget = options.runBudget ?? taskRunBudget(runTask.id);
-  const finalizationMinutes = Math.max(1, Math.round(runBudget.finalizeBeforeMs / 60_000));
-  const budgetMinutes = Math.max(1, Math.round(runBudget.maxRuntimeMs / 60_000));
-  const deadlineMessage = `\n\n<run_budget>\n  <absolute_minutes>${budgetMinutes}</absolute_minutes>\n  <hard_deadline_epoch_ms>${runBudget.hardDeadlineAtMs}</hard_deadline_epoch_ms>\n  <finalization_reserve_minutes>${finalizationMinutes}</finalization_reserve_minutes>\n  <max_delegated_children>${runBudget.maxDelegatedChildren}</max_delegated_children>\n  <rule>Finish implementation early enough to preserve the finalization reserve. Use delegation sparingly—normally one implementer and one independent reviewer—and never exceed the stated cumulative child cap. Before the reserve begins, stop opening new work, save durable checkpoints, reconcile existing child results, run the most important remaining verification, and send the user a truthful final status. Do not start replacement reviewers near the deadline.</rule>\n</run_budget>`;
   const interactionRunId = getRunStatus(runTask.id)?.runId;
-  const humanWaits = new Map<string, number>();
 
   try {
-    if (interactionRunId && runTask.kind !== 'bot') await captureBaselineWithinBudget(runTask, interactionRunId, runBudget);
-    const stream = withChatRunWatchdog(adapter.chatStream(sessionId, content, {
-      systemMessage: taskSystemMessage(runTask, `${options.supplementalSystemMessage ?? ''}${deadlineMessage}`),
+    if (interactionRunId && runTask.kind !== 'bot') await captureBaselineUntilStopped(runTask, interactionRunId);
+    const stream = adapter.chatStream(sessionId, content, {
+      systemMessage: taskSystemMessage(runTask, options.supplementalSystemMessage ?? ''),
       settings: taskRunSettings(runTask),
       task: { id: runTask.id, title: runTask.title, workdir: runTask.workdir },
-      runBudget,
       recoveryContinuation: options.recoveryContinuation === true,
       bot: botRunOptions(runTask),
-    }), {
-      ...remainingRunWatchdogConfig(runBudget),
-      hardDeadlineAtMs: runBudget.hardDeadlineAtMs,
-      pauseUntil: () => humanWaits.size ? Math.max(...humanWaits.values()) : null,
-      onTimeout: async (reason: RunWatchdogReason) => {
-        const message = reason === 'idle'
-          ? 'Stopped automatically because the run stopped producing activity.'
-          : 'Stopped automatically because the run exceeded the Olympus runtime limit.';
-        await adapter.interruptChat(sessionId, message);
-      },
     });
 
     for await (const rawEvent of stream) {
@@ -427,7 +391,7 @@ async function streamChatTurn(
         continue;
       }
       if (runTask.kind !== 'bot' && rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
-        const passed = await verifyBeforeReview(runTask, interactionRunId, runBudget);
+        const passed = await verifyBeforeReview(runTask, interactionRunId);
         if (!passed) {
           appendSystemMessage(runTask.id, 'Code verification did not pass. Review the saved checks and remaining work.');
         }
@@ -448,15 +412,13 @@ async function streamChatTurn(
             olympusRunId: activeRun.runId,
             interaction,
           });
-          humanWaits.set(interaction.id, interaction.expiresAt);
           broadcastLive(runTask.id, event);
         }
         continue;
       }
       if (event.type === 'interaction_settled') {
-        if (event.interactionId && event.interactionStatus && humanWaits.has(event.interactionId)) {
+        if (event.interactionId && event.interactionStatus) {
           markInteractionSettled(event.interactionId, event.interactionStatus);
-          humanWaits.delete(event.interactionId);
         }
         broadcastLive(runTask.id, event);
         continue;
@@ -490,7 +452,7 @@ async function streamChatTurn(
     const event: StreamEvent = {
       type: 'error',
       error: toErrorMessage(error, 'Hermes chat stream failed'),
-      code: error instanceof RunWatchdogError ? error.code : (error as { code?: string }).code,
+      code: (error as { code?: string }).code,
     };
     applyEvent(runTask.id, event);
     broadcastLive(runTask.id, event);
@@ -514,10 +476,9 @@ async function streamChatTurn(
 async function consumeChatRun(runTask: Task, sessionId: string, content: string, runId: string): Promise<void> {
   let turnContent = content;
   let finalContext: ContextUsage | null | undefined;
-  const runBudget = taskRunBudget(runTask.id);
   let recoveryContinuation = (getRecovery(runTask.id)?.attempts ?? 0) > 0;
   while (true) {
-    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true, runBudget, recoveryContinuation });
+    const result = await streamChatTurn(runTask, sessionId, turnContent, { completeOnDone: true, recoveryContinuation });
     recoveryContinuation = false;
     if (result.context !== undefined) finalContext = result.context;
     if (!result.pendingSteer || result.hadError || result.interrupted) break;
@@ -550,7 +511,6 @@ async function collectCollaborationPhase(
   phase: CollaborationContributionPhase,
   active: ActiveCollaboration,
   taskContext: string,
-  runBudget: AgentRunBudget,
 ): Promise<void> {
   const proposals = visiblePhaseResults(collaboration, 'proposal');
   const contributions = collaboration.contributions.filter((item) => item.phase === phase && item.status === 'running');
@@ -562,7 +522,7 @@ async function collectCollaborationPhase(
       message: taskContext + (phase === 'proposal'
         ? `Current collaboration question:\n${collaboration.question}`
         : reviewContributorMessage(collaboration.question, contribution.profile_id, proposals)),
-      options: { systemMessage: contributorSystemMessage(runTask.workdir, phase), runBudget },
+      options: { systemMessage: contributorSystemMessage(runTask.workdir, phase) },
     })),
     async (invocation) => withProfileWork(invocation.profileId, () => adapter.chatForProfile(
       invocation.profileId,
@@ -590,7 +550,6 @@ async function consumeCollaborationRun(
   active: ActiveCollaboration,
 ): Promise<void> {
   let finalContext: ContextUsage | null | undefined;
-  const runBudget = taskRunBudget(runTask.id);
   try {
     let collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run was not persisted');
@@ -602,7 +561,7 @@ async function consumeCollaborationRun(
       // still proceed from the current question without inventing other context.
     }
 
-    await collectCollaborationPhase(runTask, collaboration, 'proposal', active, taskContext, runBudget);
+    await collectCollaborationPhase(runTask, collaboration, 'proposal', active, taskContext);
     if (active.cancelled) return;
     collaboration = getCollaborationRun(collaborationRunId);
     if (!collaboration) throw new Error('Collaboration run disappeared');
@@ -616,7 +575,7 @@ async function consumeCollaborationRun(
       collaboration = startCollaborationPhase(collaborationRunId, 'review');
       if (!collaboration) throw new Error('Could not start collaboration review phase');
       active.phase = 'review';
-      await collectCollaborationPhase(runTask, collaboration, 'review', active, taskContext, runBudget);
+      await collectCollaborationPhase(runTask, collaboration, 'review', active, taskContext);
       if (active.cancelled) return;
     }
 
@@ -638,7 +597,6 @@ async function consumeCollaborationRun(
       completeOnDone: true,
       supplementalSystemMessage: supplemental,
       hideInternalEvents: true,
-      runBudget,
     });
     if (chair.context !== undefined) finalContext = chair.context;
     if (active.cancelled || chair.interrupted || getRunStatus(runTask.id)?.status === 'stopped') {
@@ -675,7 +633,7 @@ async function consumeCollaborationRun(
   }
 }
 
-async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: string, runId: string, runBudget = taskRunBudget(runTask.id)): Promise<void> {
+async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: string, runId: string): Promise<void> {
   let finalContext: ContextUsage | null | undefined;
   let hadError = false;
   let wasInterrupted = false;
@@ -686,9 +644,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
 
   try {
     while (turnContent) {
-      if (++turnCount > OLYMPUS_GOAL_MAX_TURNS) {
-        throw Object.assign(new Error('Goal turn limit reached before completion'), { code: 'goal_incomplete' });
-      }
+      turnCount++;
       if (!turnAlreadyVisible) {
         appendUserMessage(runTask.id, turnContent);
         startAssistantMessage(runTask.id);
@@ -698,7 +654,6 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
       const turn = await streamChatTurn(runTask, sessionId, turnContent, {
         completeOnDone: false,
         captureResponseText: true,
-        runBudget,
         recoveryContinuation: turnCount === 1 && (getRecovery(runTask.id)?.attempts ?? 0) > 0,
       });
       if (turn.context !== undefined) finalContext = turn.context;
@@ -717,7 +672,7 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
         continue;
       }
 
-      const decision = await withinRunDeadline(() => adapter.evaluateGoal(sessionId, turn.responseText), runBudget, () => getRunStatus(runTask.id)?.status === 'stopped');
+      const decision = await untilStopped(() => adapter.evaluateGoal(sessionId, turn.responseText), () => getRunStatus(runTask.id)?.status === 'stopped');
       if (getRunStatus(runTask.id)?.status === 'stopped') { wasInterrupted = true; break; }
       goalCompleted = decision.verdict === 'done' && decision.status === 'done';
       let shouldBroadcastSnapshot = false;
@@ -736,14 +691,14 @@ async function consumeGoalRun(runTask: Task, sessionId: string, initialContent: 
 
       turnContent = decision.continuationPrompt?.trim() ? decision.continuationPrompt : null;
     }
-    if (goalCompleted && !hadError && !wasInterrupted) await verifyBeforeReview(runTask, runId, runBudget);
+    if (goalCompleted && !hadError && !wasInterrupted) await verifyBeforeReview(runTask, runId);
     if (!goalCompleted && !hadError && !wasInterrupted) throw Object.assign(new Error('Goal remains unfinished'), { code: 'goal_incomplete' });
   } catch (error) {
     if (getRunStatus(runTask.id)?.status === 'stopped') {
       wasInterrupted = true;
     } else {
       hadError = true;
-      const event: StreamEvent = { type: 'error', code: error instanceof RunWatchdogError ? error.code : (error as { code?: string }).code ?? 'goal_incomplete', error: toErrorMessage(error, 'Hermes goal loop failed') };
+      const event: StreamEvent = { type: 'error', code: (error as { code?: string }).code ?? 'goal_incomplete', error: toErrorMessage(error, 'Hermes goal loop failed') };
       applyEvent(runTask.id, event);
       broadcastLive(runTask.id, event);
     }
@@ -774,7 +729,6 @@ function beginGoalRunOperation(
     resolveSetup = resolve;
     rejectSetup = reject;
   });
-  const runBudget = automatic ? taskRunBudget(runTask.id) : createRunBudget();
   const work = (async () => {
     const started = startGoalRun(runTask.id, sessionId, null);
     try {
@@ -788,15 +742,15 @@ function beginGoalRunOperation(
       beginRecovery(runTask.id, started.snapshot.runId, started.snapshot.startedAt, automatic);
       broadcast({ type: 'task_run_updated', run: started.state });
       broadcastLive(runTask.id, { type: 'snapshot', run: started.snapshot });
-      const goalState = await withinRunDeadline(() => automatic ? adapter.getGoalStatus(sessionId) : adapter.setGoal(sessionId, content), runBudget, () => getRunStatus(runTask.id)?.status === 'stopped');
+      const goalState = await untilStopped(() => automatic ? adapter.getGoalStatus(sessionId) : adapter.setGoal(sessionId, content), () => getRunStatus(runTask.id)?.status === 'stopped');
       if (getRunStatus(runTask.id)?.status === 'stopped') throw new Error('Goal setup stopped by user');
       if (!goalState || (automatic && goalState.status !== 'active')) throw Object.assign(new Error('Saved goal is unavailable or no longer active; automatic recovery stopped'), { code: 'recovery_blocked' });
       updateRunGoal(runTask.id, goalState);
       resolveSetup(started);
-      await consumeGoalRun(runTask, sessionId, content, started.snapshot.runId, runBudget);
+      await consumeGoalRun(runTask, sessionId, content, started.snapshot.runId);
     } catch (error) {
       if (getRunStatus(runTask.id)?.status !== 'stopped') {
-        applyEvent(runTask.id, { type: 'error', code: error instanceof RunWatchdogError ? error.code : (error as { code?: string }).code, error: toErrorMessage(error, 'Goal setup failed') });
+        applyEvent(runTask.id, { type: 'error', code: (error as { code?: string }).code, error: toErrorMessage(error, 'Goal setup failed') });
       }
       broadcastRunSnapshot(runTask.id);
       settleRun(runTask.id, started.snapshot.runId, null);
@@ -1016,7 +970,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
   // until this synchronous startup section creates the replacement run.
   if (res.locals.recoveryContinuation === true) {
     const recovery = getRecovery(task.id);
-    if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || recovery.deadline_at <= Date.now() || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id) {
+    if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id) {
       restoreConsumedQueue();
       return res.status(409).json({ error: 'Recovery was paused or changed; nothing new was started.' });
     }
@@ -1087,7 +1041,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     });
     if (runTask.kind === 'bot') {
       try {
-        beginBotRun(runTask.id, snapshot.runId, createRunBudget().hardDeadlineAtMs, botDelivery?.id,
+        beginBotRun(runTask.id, snapshot.runId, Number.MAX_SAFE_INTEGER, botDelivery?.id,
           res.locals.recoveryContinuation === true ? String(requestBody.recoveryOfRunId) : undefined);
       } catch (error) {
         const message = toErrorMessage(error, 'Bot exchange could not start');

@@ -1,3 +1,4 @@
+import { TaskActivityIndicator } from './TaskActivityIndicator';
 import { taskExecutionLabel } from '../lib/runFailurePresentation';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useParams } from 'react-router';
@@ -338,6 +339,7 @@ export function TaskDetailPage() {
                 <Pencil size={15} />
               </button>
             </div>
+            <TaskActivityIndicator run={executionRun} />
             {routingLabel && (
               <p className="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
                 {routingLabel}

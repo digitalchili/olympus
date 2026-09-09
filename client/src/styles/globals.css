@@ -145,3 +145,12 @@
     color: inherit;
   }
 }
+
+@keyframes task-activity {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+.task-activity-bar { animation: task-activity 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .task-activity-bar { animation: none; width: 100%; opacity: 0.65; }
+}

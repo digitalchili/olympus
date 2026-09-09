@@ -352,7 +352,7 @@ try {
     assert.equal(getTask(task.id)?.status, 'in_progress');
   });
 
-  for (const phase of ['baseline', 'verification']) await test(`hard deadline awaits cancellation of a stalled ${phase} snapshot`, async () => {
+  for (const phase of ['baseline', 'verification']) await test(`explicit Stop awaits cancellation of a stalled ${phase} snapshot`, async () => {
     const { task, cwd } = await fixture(`snapshot-deadline-${phase}`);
     await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'process.exit(0)']] }));
     const bin = join(root, `slow-git-${phase}`); await mkdir(bin);
@@ -389,14 +389,17 @@ exec ${quote(realGit)} "$@"
       assert.equal((await post(task.id, { content: 'Verify' })).status, 202);
       await wait(() => existsSync(snapshotStarted) || getLatestTaskAgentRun(task.id)?.status !== 'streaming');
       assert.equal(existsSync(snapshotStarted), true, JSON.stringify(getLatestTaskAgentRun(task.id)));
+      await new Promise(resolve => setTimeout(resolve, 2100));
+      assert.equal(getLatestTaskAgentRun(task.id)?.status, 'streaming', 'legacy runtime cap must not stop the snapshot');
+      assert.equal(snapshotAlive(), true);
+      await post(task.id, {}, 'interrupt');
       await wait(() => getLatestTaskAgentRun(task.id)?.status !== 'streaming');
-      assert.equal(getLatestTaskAgentRun(task.id)?.status, 'error', JSON.stringify(getLatestTaskAgentRun(task.id)));
+      assert.equal(getLatestTaskAgentRun(task.id)?.status, 'stopped');
       const activeAtSettlement = isVerifying(task.id);
       await wait(() => !isVerifying(task.id));
       await wait(() => !snapshotAlive());
       assert.equal(activeAtSettlement, false, 'a settled run cannot leave its verification behind');
-      assert.equal(existsSync(marker), false, 'deadline must terminate the pending Git snapshot');
-      assert.equal(getLatestTaskAgentRun(task.id)?.errorCode, 'run_runtime_timeout');
+      assert.equal(existsSync(marker), false, 'explicit Stop cancels the pending Git snapshot');
     } finally {
       if (snapshotAlive()) process.kill(Number(readFileSync(snapshotStarted, 'utf8')), 'SIGKILL');
       process.env.PATH = originalPath;

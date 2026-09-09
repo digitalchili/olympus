@@ -1,6 +1,6 @@
-# Coding and recovery in v0.6.0
+# Coding and recovery
 
-Olympus keeps Hermes as its execution engine. This release adds persisted continuation bookkeeping, bounded automatic recovery and Git verification evidence around that engine.
+Olympus keeps Hermes as its execution engine. Olympus provides persisted continuation bookkeeping, safe automatic recovery and Git verification evidence around that engine.
 
 ## Coding tasks
 
@@ -20,9 +20,9 @@ Add `.olympus/verification.json` at the repository root to select commands:
 }
 ```
 
-Each entry is an executable followed by arguments, executed in the repository root without an implicit shell. Up to eight commands run sequentially with a combined five-minute ceiling, further limited by the agent run's remaining deadline. Without this file, Olympus uses existing `test`, `typecheck` and `build` scripts from `package.json`. Other projects need explicit commands. Commands are ordinary local project code, with the same access as Olympus; this is not a sandbox.
+Each entry is an executable followed by arguments, executed in the repository root without an implicit shell. Up to eight configured commands run sequentially until they finish or the user stops them. Olympus does not impose a verification time limit. Without this file, Olympus uses existing `test`, `typecheck` and `build` scripts from `package.json`. Other projects need explicit commands. Commands are ordinary local project code, with the same access as Olympus; this is not a sandbox.
 
-The task's **Code verification** panel shows the checked revision, changed paths, tracked-file diff and check output. While checks run, it shows the active command, recent output and elapsed time, including a heartbeat for quiet commands. Use **Run checks** after correcting a failed check. Passing evidence becomes stale when the source changes, including edits without a new commit. Verification that modifies source cannot attest its starting source; rerun after reviewing those changes. The final source comparison runs before terminal delivery, within the same cancellation and time budget as the checks. Checks operate in that task's checkout. Tasks outside Git retain their normal completion flow.
+The task's **Code verification** panel shows the checked revision, changed paths, tracked-file diff and check output. While checks run, it shows the active command, recent output and elapsed time, including a heartbeat for quiet commands. Use **Run checks** after correcting a failed check. Passing evidence becomes stale when the source changes, including edits without a new commit. Verification that modifies source cannot attest its starting source; rerun after reviewing those changes. The final source comparison runs before terminal delivery, with the same explicit cancellation handling as the checks. Checks operate in that task's checkout. Tasks outside Git retain their normal completion flow.
 
 Evidence does not establish functional completeness or replace human review. Ignored files are excluded from the fingerprint; submodules require separate verification. Output and tracked diffs are size limited and common secret assignments are redacted, but the panel remains local project data. Olympus does not publish or push a Git change through this feature.
 
@@ -44,11 +44,11 @@ See [Project task workspace contracts](project-task-workspaces.md) for storage a
 
 The worker stores continuation state in a profile-scoped SQLite journal under `OLYMPUS_DISPATCH_HOME/data/continuations-*.db`. Hermes continues to own transcripts, child execution and native results. Queue notifications are hints: the worker also reconciles native durable child records, so a missed notification need not lose a completed result.
 
-Successful synthesis is saved before native acknowledgement. If acknowledgement fails or its response is lost, a later run repairs acknowledgement without repeating synthesis. Busy delivery claims retain pending state rather than replaying the original request. A completed partial turn at the finalization reserve can continue from saved Hermes history.
+Successful synthesis is saved before native acknowledgement. If acknowledgement fails or its response is lost, a later run repairs acknowledgement without repeating synthesis. Busy delivery claims retain pending state rather than replaying the original request. A safely saved partial turn can continue from saved Hermes history.
 
-The server checks recoverable failures every ten seconds and at startup. It starts at most two automatic continuations within two hours of the original run start, and caps each continuation at that same deadline. It waits while owned background work remains active or cannot be verified. Goal continuations retain the original active goal and still require the goal evaluator to confirm completion. Setup, evaluation and streaming share an absolute deadline. Native goal operations run off the JSONL reader and retain a task lock until they finish; new work waits for any late operation instead of racing its state writes; reaching the twenty-turn goal limit is an unfinished result.
+The server checks recoverable failures every ten seconds and at startup, without an Olympus attempt or elapsed-time cap. It waits while owned background work remains active or cannot be verified. Goal continuations retain the original active goal and require the native Hermes goal evaluator to confirm completion. Olympus does not add a separate goal-turn cap. Native goal operations run off the JSONL reader and retain a task lock until they finish; new work waits for any late operation instead of racing its state writes.
 
-Explicit stop, unanswered interactions and ambiguous interrupted model/tool execution block automatic continuation. These states need user input because a journal cannot prove whether arbitrary external tool effects happened. **Pause automatic recovery** prevents a pending dispatch from starting; an already running continuation uses the normal Stop control. Exhausted recovery remains visible and retryable. User-queued follow-ups are stored separately and preserve their existing dispatch semantics.
+Explicit stop, unanswered interactions and ambiguous interrupted model/tool execution block automatic continuation. These states need user input because a journal cannot prove whether arbitrary external tool effects happened. **Pause automatic recovery** prevents a pending dispatch from starting; an already running continuation uses the normal Stop control. Recovery records exhausted by older releases are rechecked against native continuation evidence at startup. User-queued follow-ups are stored separately and preserve their existing dispatch semantics.
 
 After an SSE reconnect, the browser reloads persisted history and run status even if the live snapshot expired. Connection trouble is visible. A displayed continuation receipt proves saved recovery metadata or session history; it is not a project-file backup or proof of a native model checkpoint.
 
@@ -82,3 +82,12 @@ Olympus no longer imposes a 40-step limit. It uses Hermes's unlimited step defau
 A foreground tool such as an installer can be silent for more than five minutes. Its running/completed lifecycle now suspends only the idle timeout; the absolute run deadline still applies. After the tool or child-result wait finishes, the model idle timeout applies again.
 
 A tool-iteration limit can now continue automatically if Hermes returned normally at that boundary and its returned conversation matches durable session history, with every tool call resolved and no unknown effects or cleanup failures. The child result remains unacknowledged until synthesis succeeds. Recovery still checks every ten seconds, permits at most two automatic attempts within two hours, and never treats a partial result as completion. User stops, crashes, interrupted tools and uncertain effects remain explicit blockers; no arbitrary actions are replayed automatically.
+
+
+## Native execution and activity in v0.7.8
+
+Hermes owns task execution limits. Olympus no longer injects an idle timeout, wall-clock deadline, finalization steer, cumulative child quota, 30-second child-result cutoff, or goal-turn ceiling. It uses Hermes's constructor defaults and honors the selected Hermes profile's `agent.max_turns`; legacy `OLYMPUS_CHAT_*` budget settings and `OLYMPUS_AGENT_MAX_ITERATIONS` no longer impose limits. Safe recovery has no attempt or time window cap. An unanswered clarification or approval stays waiting until answered or explicitly cancelled; silence never grants approval.
+
+Task cards and the task header show an animated, indeterminate activity bar only while a run is active. The header includes elapsed time. The indicator stops when execution settles, and respects reduced-motion preferences. It is activity, not an estimate of percentage complete.
+
+Olympus does not automatically kill slow task, verification, or reference-extraction processes. Explicit Stop and installation shutdown still cancel their owned work. Worker readiness failure reports unavailability without killing the worker. Hermes's native tool policies and limits continue to apply. Bot messaging retains its separate exchange/transport policy.

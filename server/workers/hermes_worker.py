@@ -60,8 +60,6 @@ from hermes_scheduled_tasks import (
 
 PROTOCOL_OUT = sys.stdout
 PROTOCOL_LOCK = threading.Lock()
-# Keep in sync with OLYMPUS_GOAL_MAX_TURNS in shared/types.ts.
-OLYMPUS_GOAL_MAX_TURNS = 20
 
 # Cap on concurrent AIAgent.run_conversation calls.
 AGENT_RUN_LIMIT = int(os.environ.get("HERMES_AGENT_RUN_LIMIT", "10"))
@@ -163,31 +161,6 @@ _MODEL_LIST_CACHE_LOCK = threading.Lock()
 _CURATED_MODEL_CATALOG_CACHE: tuple[dict[str, Any] | None, float] | None = None
 _CURATED_MODEL_CATALOG_LOCK = threading.Lock()
 _DELEGATE_CHILD_REASONING_COMPAT_LOCK = threading.RLock()
-_DELEGATE_RUN_BUDGET_LOCK = threading.RLock()
-
-
-@dataclasses.dataclass(frozen=True)
-class RunBudget:
-    max_runtime_seconds: float = 60 * 60
-    finalize_before_seconds: float = 5 * 60
-    child_drain_before_seconds: float = 2 * 60
-    max_delegated_children: int = 4
-
-
-class DeadlineControls:
-    def __init__(
-        self,
-        timers: list[threading.Timer],
-        finalization_started: threading.Event,
-        drain_started: threading.Event,
-    ) -> None:
-        self._timers = timers
-        self.finalization_started = finalization_started
-        self.drain_started = drain_started
-
-    def cancel(self) -> None:
-        for timer in self._timers:
-            timer.cancel()
 
 
 OLYMPUS_DEADLINE_FINALIZE_MESSAGE = (
@@ -211,158 +184,6 @@ def _strip_internal_deadline_steers(value: str | None) -> str | None:
     return clean or None
 
 
-def _positive_number(value: Any, fallback: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return fallback
-    number = float(value)
-    return number if number > 0 and number == number and number != float("inf") else fallback
-
-
-def _run_budget(request: dict[str, Any]) -> RunBudget:
-    candidate = request.get("runBudget")
-    raw: dict[str, Any] = candidate if isinstance(candidate, dict) else {}
-    configured_max_runtime = _positive_number(raw.get("maxRuntimeMs"), 60 * 60_000) / 1000
-    finalize_before = _positive_number(raw.get("finalizeBeforeMs"), 5 * 60_000) / 1000
-    if finalize_before >= configured_max_runtime:
-        finalize_before = configured_max_runtime / 2
-    child_drain_before = _positive_number(raw.get("childDrainBeforeMs"), 2 * 60_000) / 1000
-    if child_drain_before >= finalize_before:
-        child_drain_before = finalize_before / 2
-    max_runtime = configured_max_runtime
-    hard_deadline_ms = _positive_number(raw.get("hardDeadlineAtMs"), 0)
-    if hard_deadline_ms > 0:
-        max_runtime = min(max_runtime, max(0.001, hard_deadline_ms / 1000 - time.time()))
-    raw_limit = raw.get("maxDelegatedChildren", 4)
-    max_children = int(raw_limit) if isinstance(raw_limit, (int, float)) and not isinstance(raw_limit, bool) else 4
-    if max_children <= 0:
-        max_children = 4
-    return RunBudget(max_runtime, finalize_before, child_drain_before, max_children)
-
-
-def _reserve_delegation_capacity(parent_agent: Any, requested_children: int, *, now: float | None = None) -> tuple[bool, str]:
-    requested = max(0, int(requested_children))
-    if requested == 0:
-        return True, ""
-    with _DELEGATE_RUN_BUDGET_LOCK:
-        deadline = getattr(parent_agent, "_olympus_delegate_spawn_deadline", None)
-        current = time.monotonic() if now is None else now
-        if bool(getattr(parent_agent, "_olympus_delegate_closed", False)) or (
-            isinstance(deadline, (int, float)) and current >= deadline
-        ):
-            return False, "Olympus is in its finalization reserve; reconcile existing work instead of starting new delegated work."
-        limit = max(1, int(getattr(parent_agent, "_olympus_delegate_limit", 4)))
-        used = max(0, int(getattr(parent_agent, "_olympus_delegated_children_used", 0)))
-        if used + requested > limit:
-            return False, f"This Olympus run allows at most {limit} delegated children in total; reconcile existing work instead."
-        setattr(parent_agent, "_olympus_delegated_children_used", used + requested)
-    return True, ""
-
-
-def _release_delegation_capacity(parent_agent: Any, requested_children: int) -> None:
-    requested = max(0, int(requested_children))
-    if requested == 0:
-        return
-    with _DELEGATE_RUN_BUDGET_LOCK:
-        used = max(0, int(getattr(parent_agent, "_olympus_delegated_children_used", 0)))
-        setattr(parent_agent, "_olympus_delegated_children_used", max(0, used - requested))
-
-
-def _requested_delegation_children(tasks: Any, goal: Any) -> int:
-    candidate = tasks
-    if isinstance(candidate, str):
-        try:
-            candidate = json.loads(candidate)
-        except (TypeError, ValueError):
-            return 1
-    if isinstance(candidate, list) and candidate:
-        return len(candidate)
-    return 1 if goal or tasks else 0
-
-
-def _delegate_result_failed(result: Any) -> bool:
-    if not isinstance(result, str):
-        return False
-    try:
-        payload = json.loads(result)
-    except (TypeError, ValueError):
-        return False
-    return isinstance(payload, dict) and isinstance(payload.get("error"), str)
-
-
-def _start_deadline_controls(
-    parent_agent: Any,
-    child_ids: Callable[[], set[str]],
-    budget: RunBudget,
-    *,
-    delegate_tool: Any | None = None,
-) -> DeadlineControls:
-    if delegate_tool is None:
-        try:
-            delegate_tool = importlib.import_module("tools.delegate_tool")
-        except Exception:
-            delegate_tool = None
-
-    finalization_started = threading.Event()
-    drain_started = threading.Event()
-
-    def begin_finalization() -> None:
-        finalization_started.set()
-        setattr(parent_agent, "_olympus_delegate_closed", True)
-        try:
-            parent_agent.steer(OLYMPUS_DEADLINE_FINALIZE_MESSAGE)
-        except Exception:
-            pass
-        if delegate_tool is not None:
-            for child_id in sorted(child_ids()):
-                try:
-                    delegate_tool.steer_subagent(child_id, OLYMPUS_DEADLINE_FINALIZE_MESSAGE)
-                except Exception:
-                    pass
-
-    def drain_children() -> None:
-        drain_started.set()
-        setattr(parent_agent, "_olympus_delegate_closed", True)
-        active_children = sorted(child_ids())
-        if delegate_tool is not None:
-            for child_id in active_children:
-                try:
-                    delegate_tool.interrupt_subagent(child_id)
-                except Exception:
-                    pass
-        if active_children:
-            try:
-                parent_agent.steer(OLYMPUS_DEADLINE_DRAIN_MESSAGE)
-            except Exception:
-                pass
-
-    timers: list[threading.Timer] = []
-    for delay, callback in (
-        (budget.max_runtime_seconds - budget.finalize_before_seconds, begin_finalization),
-        (budget.max_runtime_seconds - budget.child_drain_before_seconds, drain_children),
-    ):
-        timer = threading.Timer(max(0, delay), callback)
-        timer.daemon = True
-        timer.start()
-        timers.append(timer)
-    return DeadlineControls(timers, finalization_started, drain_started)
-
-
-def _apply_native_run_budget_kwargs(
-    agent_kwargs: dict[str, Any],
-    agent_params: set[str],
-    budget: RunBudget | None,
-) -> None:
-    """Use native Hermes budget/checkpoint support when the installed version exposes it."""
-    if budget is None:
-        return
-    if "run_budget_seconds" in agent_params:
-        agent_kwargs["run_budget_seconds"] = budget.max_runtime_seconds
-    if "checkpoints_enabled" in agent_params:
-        agent_kwargs["checkpoints_enabled"] = True
-    if "checkpoint_max_snapshots" in agent_params:
-        agent_kwargs["checkpoint_max_snapshots"] = 20
-
-
 INTERACTIONS = InteractionBroker(lambda event: _send(event))
 BOT_MESSAGES = BotMessageBroker(lambda event: _send(event))
 
@@ -371,16 +192,6 @@ def _send(payload: dict[str, Any]) -> None:
     with PROTOCOL_LOCK:
         PROTOCOL_OUT.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
         PROTOCOL_OUT.flush()
-
-
-def _deadline_finalized_event() -> dict[str, Any]:
-    return {
-        "type": "error",
-        "error": {
-            "code": "deadline_finalized",
-            "message": "Olympus reached the finalization reserve. Partial progress was preserved; continue the unfinished work in a fresh run.",
-        },
-    }
 
 
 def _safe_protocol_identifier(value: Any, max_length: int = 160) -> str | None:
@@ -902,50 +713,6 @@ def _install_delegate_child_reasoning_compat() -> None:
         setattr(wrapped_build_child_agent, "_olympus_child_reasoning_compat", True)
         setattr(wrapped_build_child_agent, "_olympus_original", original)
         setattr(delegate_tool, "_build_child_agent", wrapped_build_child_agent)
-
-
-def _install_delegate_run_budget_guard() -> None:
-    """Enforce Olympus's per-run delegation budget without changing Hermes globally."""
-    try:
-        delegate_tool = importlib.import_module("tools.delegate_tool")
-    except Exception:
-        return
-
-    with _DELEGATE_RUN_BUDGET_LOCK:
-        original = getattr(delegate_tool, "delegate_task", None)
-        if not callable(original) or getattr(original, "_olympus_run_budget_guard", False):
-            return
-
-        def guarded_delegate_task(*args: Any, **kwargs: Any) -> Any:
-            try:
-                arguments = inspect.signature(original).bind_partial(*args, **kwargs).arguments
-            except (TypeError, ValueError):
-                return original(*args, **kwargs)
-            action = arguments.get("action")
-            if action not in (None, "spawn"):
-                return original(*args, **kwargs)
-            parent_agent = arguments.get("parent_agent")
-            if parent_agent is None:
-                return original(*args, **kwargs)
-            tasks = arguments.get("tasks")
-            goal = arguments.get("goal")
-            requested_children = _requested_delegation_children(tasks, goal)
-            allowed, message = _reserve_delegation_capacity(parent_agent, requested_children)
-            if not allowed:
-                tool_error = getattr(delegate_tool, "tool_error", None)
-                return tool_error(message) if callable(tool_error) else json.dumps({"error": message})
-            try:
-                result = original(*args, **kwargs)
-            except Exception:
-                _release_delegation_capacity(parent_agent, requested_children)
-                raise
-            if _delegate_result_failed(result):
-                _release_delegation_capacity(parent_agent, requested_children)
-            return result
-
-        setattr(guarded_delegate_task, "_olympus_run_budget_guard", True)
-        setattr(guarded_delegate_task, "_olympus_original", original)
-        setattr(delegate_tool, "delegate_task", guarded_delegate_task)
 
 
 def _default_reasoning(cfg: dict[str, Any]) -> str | None:
@@ -1815,17 +1582,14 @@ def _model_resolution_payload(
     return payload
 
 
-def _agent_max_iterations(config: dict[str, Any] | None = None) -> int:
-    # Match Hermes's default: work until completion or the wall-clock deadline.
-    # Respect an explicit Olympus override or the selected Hermes profile limit.
-    raw = os.environ.get("OLYMPUS_AGENT_MAX_ITERATIONS")
-    if raw is None:
-        raw = ((config or {}).get("agent") or {}).get("max_turns")
+def _agent_max_iterations(config: dict[str, Any] | None = None) -> int | None:
+    # Only the selected Hermes profile may impose a step limit.
+    raw = ((config or {}).get("agent") or {}).get("max_turns")
     try:
         value = int(raw) if not isinstance(raw, bool) else 0
     except (TypeError, ValueError):
-        return sys.maxsize
-    return value if value > 0 else sys.maxsize
+        return None
+    return value if value > 0 else None
 
 
 def _create_agent(
@@ -1835,12 +1599,10 @@ def _create_agent(
     reasoning_effort: str | None,
     requested_provider: str | None = None,
     callbacks: dict[str, Any] | None = None,
-    run_budget: RunBudget | None = None,
 ) -> Any:
     _ensure_imports()
     install_native_guard()
     _install_delegate_child_reasoning_compat()
-    _install_delegate_run_budget_guard()
     cfg = _load_config()
     _register_mcp_servers(cfg)
     defaults = _defaults_from_config(cfg)
@@ -1883,7 +1645,6 @@ def _create_agent(
     agent_params = _AIAgent_PARAMS
     agent_kwargs: dict[str, Any] = {
         "model": resolved_model,
-        "max_iterations": _agent_max_iterations(cfg),
         "provider": resolved_provider,
         "base_url": resolved_base_url,
         "api_key": runtime.get("api_key"),
@@ -1897,9 +1658,11 @@ def _create_agent(
         "fallback_model": _fallback_model(cfg),
         "clarify_callback": clarify_callback,
     }
+    profile_limit = _agent_max_iterations(cfg)
+    if profile_limit is not None:
+        agent_kwargs["max_iterations"] = profile_limit
     if callbacks:
         agent_kwargs.update(callbacks)
-    _apply_native_run_budget_kwargs(agent_kwargs, agent_params, run_budget)
 
     reasoning_config = _parse_reasoning(resolved_reasoning_effort)
     if "reasoning_config" in agent_params and reasoning_config is not None:
@@ -1955,7 +1718,7 @@ def _agent_result_failure(result: dict[str, Any]) -> tuple[str, str] | None:
         reason = str(result.get("turn_exit_reason") or "")
         if reason.startswith("max_iterations_reached("):
             return (
-                "Hermes reached the Olympus tool-iteration limit before completing this turn.",
+                "Hermes reached its configured tool-iteration limit before completing this turn.",
                 "iteration_limit",
             )
         message = str(result.get("error") or result.get("final_response") or "Hermes agent did not complete the turn")
@@ -2029,7 +1792,7 @@ def _goal_manager(session_id: str) -> Any:
         raise WorkerError("Session ID is required.", code="bad_request")
     from hermes_cli.goals import GoalManager
 
-    return GoalManager(session_id=session_id, default_max_turns=OLYMPUS_GOAL_MAX_TURNS)
+    return GoalManager(session_id=session_id)
 
 
 def _project_goal_state(state: Any) -> dict[str, Any] | None:
@@ -2116,8 +1879,7 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
     requested_model = string_or_none(settings.get("model"))
     requested_provider = string_or_none(settings.get("provider"))
     requested_effort = _normalize_reasoning(settings.get("reasoningEffort"))
-    run_budget = _run_budget(request)
-    interaction_deadline = time.monotonic() + run_budget.max_runtime_seconds
+    interaction_deadline = None
 
     session_id = string_or_none(request.get("sessionId")) or request_id
     message = request.get("message")
@@ -2160,10 +1922,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
     child_last_emit_at: dict[str, float] = {}
     active_child_ids: set[str] = set()
     active_child_ids_lock = threading.Lock()
-
-    def deadline_child_ids() -> set[str]:
-        with active_child_ids_lock:
-            return set(active_child_ids)
 
     def on_text_delta(text: Any) -> None:
         if text is None:
@@ -2301,22 +2059,13 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
                 interrupt=lambda reason: _try_interrupt_agent(agent_ref["agent"], reason) if agent_ref.get("agent") else None,
             ),
         },
-        run_budget=run_budget,
     )
     agent_ref["agent"] = agent
     if request.get("bot") is not None:
         try:
-            configure_bot_agent(agent, request["bot"], BOT_MESSAGES, task_id, request_id, interaction_deadline)
+            configure_bot_agent(agent, request["bot"], BOT_MESSAGES, task_id, request_id, float("inf"))
         except BotMessageError as exc:
             raise WorkerError(str(exc), code=exc.code) from exc
-    setattr(agent, "_olympus_delegate_limit", run_budget.max_delegated_children)
-    setattr(agent, "_olympus_delegated_children_used", 0)
-    setattr(agent, "_olympus_delegate_closed", False)
-    setattr(
-        agent,
-        "_olympus_delegate_spawn_deadline",
-        time.monotonic() + run_budget.max_runtime_seconds - run_budget.finalize_before_seconds,
-    )
     requested_resolution.update(
         _requested_model_resolution(
             agent,
@@ -2349,7 +2098,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
     delivery_claim = None
     next_message = message
     completed_turn = False
-    deadline_controls = _start_deadline_controls(agent, deadline_child_ids, run_budget)
 
     def save_interrupt():
         reason = str(getattr(agent, "_olympus_interrupt_reason", ""))
@@ -2364,8 +2112,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         from tools.process_registry import format_process_notification
 
         journal.save_event(event)
-        if time.monotonic() >= interaction_deadline:
-            raise WorkerError("The run deadline was reached; its child result remains saved.", code="recovery_pending")
         claim = claim_event_delivery(event, "olympus-worker")
         if claim is None:
             # A failed claim is never another agent turn with the old message.
@@ -2467,7 +2213,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
                 break
 
             event = None
-            wait_started = time.monotonic()
             _send({"id": request_id, "type": "tool_progress", "tool": "delegate_task",
                    "status": "running", "label": "Waiting for saved child results"})
             while event is None:
@@ -2508,8 +2253,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
                 journal.reconcile(async_delegation)
                 event = journal.ready_event()
                 if event is None:
-                    if time.monotonic() >= interaction_deadline or time.monotonic() - wait_started >= 30:
-                        raise WorkerError("Child work is still pending; a durable continuation was saved.", code="recovery_pending")
                     time.sleep(0.1)
 
             _send({"id": request_id, "type": "tool_progress", "tool": "delegate_task",
@@ -2528,9 +2271,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         journal.block("Native child recovery is unavailable or incompatible; explicit continuation is required.")
         raise WorkerError(str(exc) if isinstance(exc, RecoveryBlocked) else "Native child recovery is unavailable.", code="recovery_blocked") from exc
     finally:
-        deadline_controls.cancel()
-        if deadline_controls.finalization_started.is_set() and completed_turn:
-            journal.set_turn_state("pending")
         if delivery_event is not None and delivery_claim is not None:
             try:
                 from tools.async_delegation import release_event_delivery
@@ -2551,8 +2291,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         _unregister_active_agent(_task_key_for(request), request_id)
 
     terminal_events = []
-    if deadline_controls.finalization_started.is_set():
-        terminal_events.append({"id": request_id, **_deadline_finalized_event()})
 
     context_engine = getattr(agent, "context_compressor", None)
     context_used = int(result.get("last_prompt_tokens") or 0)

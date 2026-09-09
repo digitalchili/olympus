@@ -20,7 +20,7 @@ try {
   await git(oldRoot, 'add', '.'); await git(oldRoot, 'commit', '-m', 'Published'); await git(root, 'clone', oldRoot, newRoot);
   const originalTask = insertTask({ title: 'Task with old evidence', status: 'in_progress', workdir: oldRoot });
   await captureCodingBaseline(originalTask, 'old-run');
-  assert.equal(await verifyCodingRun(originalTask, 'old-run', 2000), true);
+  assert.equal(await verifyCodingRun(originalTask, 'old-run'), true);
   assert.equal(codingReviewAllowed(originalTask.id, 'old-run'), true);
   await rm(marker);
   const currentTask = updateTask(originalTask.id, { workdir: newRoot })!;
@@ -28,17 +28,17 @@ try {
   const historical = await readCodingEvidence(originalTask);
   assert.equal(historical?.status, 'stale', 'freshness reads use the current task binding, not an older task object or evidence directory');
   assert.match(historical?.reason ?? '', /workspace.*changed/i);
-  assert.equal(await verifyCodingRun(originalTask, 'old-run', 2000), false, 'manual checks cannot execute an old workspace under a new task lock');
+  assert.equal(await verifyCodingRun(originalTask, 'old-run'), false, 'manual checks cannot execute an old workspace under a new task lock');
   await assert.rejects(readFile(marker), 'neither old nor new commands run against a mismatched agent baseline');
   await captureCodingBaseline(currentTask, 'new-run');
-  assert.equal(await verifyCodingRun(currentTask, 'new-run', 2000), true, 'a new turn safely establishes evidence for the current workspace');
+  assert.equal(await verifyCodingRun(currentTask, 'new-run'), true, 'a new turn safely establishes evidence for the current workspace');
   assert.equal(await readFile(marker, 'utf8'), await realpath(newRoot));
   assert.equal(codingReviewAllowed(currentTask.id, 'new-run'), true);
   await rm(marker);
   updateTask(currentTask.id, { workdir: null });
   assert.equal(codingReviewAllowed(currentTask.id, 'new-run'), false);
   assert.equal((await readCodingEvidence(currentTask))?.status, 'stale');
-  assert.equal(await verifyCodingRun(currentTask, 'new-run', 2000), false);
+  assert.equal(await verifyCodingRun(currentTask, 'new-run'), false);
   await assert.rejects(readFile(marker));
 } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 console.log('Verification task workspace binding tests passed');

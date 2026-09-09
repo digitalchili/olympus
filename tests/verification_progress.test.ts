@@ -22,7 +22,7 @@ try {
   await git('add', '.'); await git('commit', '-m', 'Checks');
   const task = insertTask({ title: 'Progress', status: 'in_progress', workdir: cwd });
   await captureCodingBaseline(task, 'progress');
-  pending = verifyCodingRun(task, 'progress', 5000);
+  pending = verifyCodingRun(task, 'progress');
   let evidence;
   for (let i = 0; i < 100; i++) {
     evidence = await readCodingEvidence(task);

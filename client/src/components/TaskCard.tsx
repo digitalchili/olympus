@@ -1,3 +1,4 @@
+import { TaskActivityIndicator } from './TaskActivityIndicator';
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { AlertTriangle, FolderKanban, Loader2, MoreHorizontal, Target } from 'lucide-react';
@@ -88,6 +89,7 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
           </span>
         )}
       </div>
+      <TaskActivityIndicator run={run} compact />
       {routingLabel && (
         <p className="mt-2 truncate text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
           {routingLabel}
