@@ -71,6 +71,13 @@ class ResolveModelProviderTest(unittest.TestCase):
         )
         self.assertIsNone(hermes_worker._agent_result_failure({"completed": True, "failed": False}))
 
+    def test_new_custom_model_does_not_hijack_selected_or_default_provider(self):
+        cfg = {"model": {"provider": "openai", "default": "shared-model"},
+               "custom_providers": [{"name": "Other", "base_url": "https://other.example/v1", "models": ["shared-model"]}]}
+        self.assertEqual(hermes_worker._resolve_model_provider("shared-model", cfg)[:2], ("shared-model", "openai"))
+        self.assertEqual(hermes_worker._resolve_model_provider("shared-model", cfg, requested_provider="openrouter")[:2], ("shared-model", "openrouter"))
+        self.assertEqual(hermes_worker._resolve_model_provider("shared-model", cfg, requested_provider="custom:other"), ("shared-model", "custom:other", "https://other.example/v1"))
+
     def test_explicit_custom_provider_honored_for_catalog_model(self):
         result = hermes_worker._resolve_model_provider(
             "anthropic/claude-sonnet-5", MANAGED_CFG, requested_provider="custom:agent37"

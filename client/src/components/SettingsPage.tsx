@@ -12,6 +12,7 @@ import { ChannelSettings } from './ChannelSettings';
 import { StorageSettings } from './StorageSettings';
 import { UpdateSettings } from './UpdateSettings';
 import { GitHubSettings } from './GitHubSettings';
+import { ProvidersSettings } from './ProvidersSettings';
 import { UsageSettings } from './UsageSettings';
 import { ModelPicker, parseQualifiedModelValue, REASONING_LABELS, type ModelPickerSelection } from './InputToolbar';
 import {
@@ -19,10 +20,11 @@ import {
   type ReasoningEffort,
 } from '@shared/types';
 
-export type SettingsTab = 'general' | 'usage' | 'profiles' | 'git' | 'integrations' | 'storage' | 'updates';
+export type SettingsTab = 'general' | 'providers' | 'usage' | 'profiles' | 'git' | 'integrations' | 'storage' | 'updates';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: 'General Settings' },
+  { id: 'providers', label: 'Providers' },
   { id: 'usage', label: 'Usage' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'git', label: 'Git Connections' },
@@ -32,7 +34,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 function resolveTab(hash: string, searchTab: string | null): SettingsTab {
-  if (searchTab && ['general', 'usage', 'profiles', 'git', 'integrations', 'storage', 'updates'].includes(searchTab)) {
+  if (searchTab && ['general', 'providers', 'usage', 'profiles', 'git', 'integrations', 'storage', 'updates'].includes(searchTab)) {
     return searchTab as SettingsTab;
   }
   const cleanHash = hash.replace(/^#/, '').toLowerCase();
@@ -42,6 +44,7 @@ function resolveTab(hash: string, searchTab: string | null): SettingsTab {
   if (cleanHash === 'profiles') return 'profiles';
   if (cleanHash === 'updates') return 'updates';
   if (cleanHash === 'general') return 'general';
+  if (cleanHash === 'providers') return 'providers';
   if (cleanHash === 'usage') return 'usage';
   return 'general';
 }
@@ -284,6 +287,8 @@ export function SettingsPage() {
             </div>
           </div>
         )}
+
+        {activeTab === 'providers' && <ProvidersSettings />}
 
         {activeTab === 'usage' && <UsageSettings />}
 

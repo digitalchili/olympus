@@ -12,6 +12,17 @@ export function useAgentConfig(taskId?: string, initialSettings?: AgentRunSettin
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(initialSettings?.reasoningEffort ?? null);
   const [isLoading, setIsLoading] = useState(true);
   const initialRef = useRef(initialSettings);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void fetchAgentModels().then(result => { if (active) setModelGroups(result.groups); }).catch(() => {});
+      void fetchAgentDefaults().then(result => {
+        if (active) { writeCachedAgentDefaults(result); setDefaults(result); }
+      }).catch(() => {});
+    };
+    window.addEventListener('olympus:models-changed', refresh);
+    return () => { active = false; window.removeEventListener('olympus:models-changed', refresh); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

@@ -1,3 +1,4 @@
+import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { Router } from 'express';
 import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import { getTask } from '../db/queries.js';
@@ -9,6 +10,7 @@ import { LocalProfileError } from '../local-profiles.js';
 import type { AgentDefaults, Task, TaskAgentSettings, ReasoningEffort } from '../../shared/types.js';
 
 interface AgentSettingsAdapter {
+  manageProviders?(input: ProviderSetupRequest, profileId?: string | null): Promise<ProviderSetupResponse>;
   getUsage?(profileId?: string | null, refresh?: boolean): Promise<ProviderUsageResponse>;
   getDefaults(profileId?: string | null): Promise<AgentDefaults>;
   setDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: string | null }, profileId?: string | null): Promise<AgentDefaults>;
@@ -51,6 +53,33 @@ function buildTaskSettings(task: Task, defaults: AgentDefaults): TaskAgentSettin
 
 export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
+
+  router.post('/providers', profileRequestGate(), async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const body = req.body;
+    if (!isRecord(body) || !['list', 'discover', 'save', 'remove'].includes(String(body.action))) {
+      return res.status(400).json({ error: 'Select a provider action.' });
+    }
+    const input: ProviderSetupRequest = { action: body.action as ProviderSetupRequest['action'] };
+    for (const key of ['id', 'revision', 'name', 'baseUrl', 'apiKey'] as const) {
+      if (key in body) {
+        if (typeof body[key] !== 'string' || body[key].length > 4096) return res.status(400).json({ error: 'Provider details are invalid.' });
+        input[key] = body[key];
+      }
+    }
+    if ('models' in body) {
+      if (!Array.isArray(body.models) || body.models.some(m => typeof m !== 'string' || m.length > 512)) return res.status(400).json({ error: 'Select valid model IDs.' });
+      input.models = body.models;
+    }
+    try {
+      if (!adapter.manageProviders) throw new Error('Unavailable');
+      res.json(await adapter.manageProviders(input, requestProfile(req).id));
+    } catch (error) {
+      // Only this worker operation's fixed, sanitized errors may reach the browser.
+      const safe = error instanceof Error && 'code' in error && error.code === 'provider_setup_failed';
+      res.status(safe ? 400 : 503).json({ error: safe ? error.message.replace(/^\[provider_setup_failed\] /, '') : 'Provider setup is unavailable. Check the profile connection and try again.' });
+    }
+  });
 
   router.get('/usage', async (req, res) => {
     res.set('Cache-Control', 'no-store');

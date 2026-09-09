@@ -9,6 +9,7 @@ import hashlib
 import importlib
 import inspect
 from functools import partial
+from contextlib import contextmanager
 import json
 import os
 import queue
@@ -68,6 +69,7 @@ ACTIVE_TASKS: dict[str, str] = {}
 ACTIVE_AGENTS: dict[str, Any] = {}
 PENDING_INTERRUPTS: dict[str, str] = {}
 ACTIVE_TASKS_LOCK = threading.Lock()
+PROVIDER_CONFIG_LOCK = threading.Lock()
 DEFAULT_INTERRUPT_REASON = "Stopped by user"
 
 ALLOWED_REASONING = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -1300,6 +1302,8 @@ def _list_authenticated_model_groups(
         slug = string_or_none(provider_info.get("slug"))
         group_name = string_or_none(provider_info.get("name")) or slug or "configured"
         is_user_defined = bool(provider_info.get("is_user_defined"))
+        if is_user_defined:
+            slug = "custom:" + group_name.lower().replace(" ", "-")
         # Inventory view — runtime validation happens in _create_agent().
         source = "custom" if is_user_defined else "catalog"
         models = provider_info.get("models")
@@ -1389,28 +1393,25 @@ def _resolve_model_provider(
     if not model_id:
         return model_id, config_provider, config_base_url
 
+    parsed = _parse_provider_model(model_id)
+    if parsed:
+        provider_hint, bare_model = parsed
+        return bare_model, provider_hint or config_provider, None
+
     for entry in _custom_providers(cfg):
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
         if not name:
             continue
-        if model_id in _custom_provider_models(entry):
-            return model_id, f"custom:{name.lower().replace(' ', '-')}", string_or_none(entry.get("base_url"))
-
-    parsed = _parse_provider_model(model_id)
-    if parsed:
-        provider_hint, bare_model = parsed
-        return bare_model, provider_hint or config_provider, None
-
-    if config_provider_l.startswith("custom:"):
-        slug = config_provider_l[len("custom:"):]
-        for entry in _custom_providers(cfg):
-            if not isinstance(entry, dict):
-                continue
-            name = str(entry.get("name") or "").strip()
-            if name and name.lower().replace(" ", "-") == slug:
-                return model_id, f"custom:{name.lower().replace(' ', '-')}", string_or_none(entry.get("base_url"))
+        slug = name.lower().replace(' ', '-')
+        key = str(entry.get('provider_key') or slug).lower()
+        # Explicit/default provider identity wins over a shared model name.
+        matches = config_provider_l in (f'custom:{slug}', f'custom:{key}')
+        if config_provider_l and config_provider_l not in KNOWN_PROVIDER_PREFIXES:
+            matches = matches or config_provider_l == key
+        if matches or (not config_provider and model_id in _custom_provider_models(entry)):
+            return model_id, f'custom:{slug}', string_or_none(entry.get('base_url'))
 
     if "/" in model_id:
         prefix, bare = model_id.split("/", 1)
@@ -2551,6 +2552,31 @@ def _handle_usage_request(request_id: str, refresh: bool) -> None:
         _send_error(request_id, WorkerError('Account usage is unavailable. Check the profile connection and try again.', code='usage_unavailable'))
 
 
+@contextmanager
+def _provider_mutation():
+    from hermes_providers import ProviderError
+    with PROVIDER_CONFIG_LOCK, ACTIVE_TASKS_LOCK:
+        if ACTIVE_TASKS:
+            raise ProviderError('This profile has running tasks. Let them finish before saving provider changes.')
+        yield
+
+
+def _handle_provider_request(request_id: str, request: dict[str, Any]) -> None:
+    global _CONFIG_CACHE
+    try:
+        _ensure_imports()
+        from hermes_providers import manage, ProviderError
+        result = manage({**request, 'id': request.get('providerId')}, _provider_mutation)
+        if request.get('action') in ('save', 'remove'):
+            _CONFIG_CACHE = None
+            _clear_model_list_cache()
+        _result(request_id, result)
+    except Exception as error:
+        from hermes_providers import ProviderError
+        message = str(error) if isinstance(error, ProviderError) else 'Provider setup is unavailable. Check the Hermes installation.'
+        _send_error(request_id, WorkerError(message, code='provider_setup_failed'))
+
+
 def _handle_request(request: dict[str, Any]) -> None:
     request_id = str(request.get("id") or "")
     if not request_id:
@@ -2569,9 +2595,12 @@ def _handle_request(request: dict[str, Any]) -> None:
         elif request_type == "settings.get":
             _result(request_id, _defaults_from_config())
         elif request_type == "settings.set":
-            _result(request_id, _set_defaults(request))
+            with PROVIDER_CONFIG_LOCK:
+                _result(request_id, _set_defaults(request))
         elif request_type == "models.list":
             _result(request_id, _list_models())
+        elif request_type == "providers.manage":
+            threading.Thread(target=_handle_provider_request, args=(request_id, request), daemon=True).start()
         elif request_type == "usage.get":
             threading.Thread(target=_handle_usage_request, args=(request_id, request.get('refresh') is True), daemon=True).start()
         elif request_type == "scheduledTasks.list":

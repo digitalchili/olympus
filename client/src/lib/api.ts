@@ -743,8 +743,8 @@ export function fetchAgentModels(profileId?: string) {
   return request<AgentModelsResponse>(path);
 }
 
-export function updateAgentDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: ReasoningEffort | null }) {
-  return request<AgentDefaults>('/agent/defaults', {
+export function updateAgentDefaults(updates: { provider?: string | null; model?: string | null; reasoningEffort?: ReasoningEffort | null }, profileId?: string) {
+  return request<AgentDefaults>(profileId ? apiPathWithProfile('/agent/defaults', profileId) : '/agent/defaults', {
     method: 'PATCH',
     body: JSON.stringify(updates),
   });
@@ -1021,3 +1021,9 @@ export const fetchTaskBackgroundWork = (taskId: string) => request<import('@shar
 export const stopTaskBackgroundWork = (taskId: string, runId: string | null, processIds: string[]) => request<{ cleared: true }>(`/tasks/${encodeURIComponent(taskId)}/background-work/stop`, {
   method: 'POST', body: JSON.stringify({ runId, processIds }),
 });
+
+export function manageHermesProviders(profileId: string, input: import('@shared/provider-settings').ProviderSetupRequest) {
+  return request<import('@shared/provider-settings').ProviderSetupResponse>(apiPathWithProfile('/agent/providers', profileId), {
+    method: 'POST', body: JSON.stringify(input),
+  });
+}

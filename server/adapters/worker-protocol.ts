@@ -1,3 +1,4 @@
+import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import type {
   AgentDefaults,
   AgentModelResolution,
@@ -22,6 +23,7 @@ export type WorkerRequest =
   | { id: string; type: 'settings.set'; provider?: string | null; model?: string | null; reasoningEffort?: string | null }
   | { id: string; type: 'models.list' }
   | { id: string; type: 'usage.get'; refresh?: boolean }
+  | ({ id: string; type: 'providers.manage' } & Omit<ProviderSetupRequest, 'id'> & { providerId?: string })
   | { id: string; type: 'scheduledTasks.list'; includeDisabled?: boolean; limit?: number }
   | { id: string; type: 'scheduledTasks.get'; scheduledTaskId: string }
   | { id: string; type: 'scheduledTasks.create' } & ScheduledTaskInput
@@ -87,6 +89,7 @@ export type WorkerResult =
   | AgentDefaults
   | AgentModelsResponse
   | ProviderUsageResponse
+  | ProviderSetupResponse
   | { scheduledTasks: ScheduledTask[] }
   | { scheduledTask: ScheduledTask | null }
   | { executed: number }

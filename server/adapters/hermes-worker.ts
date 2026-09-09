@@ -1,3 +1,4 @@
+import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -718,6 +719,11 @@ export class HermesWorkerAdapter implements AgentAdapter {
 
   async getModels(): Promise<AgentModelsResponse> {
     return await this.client.request<AgentModelsResponse>('models.list');
+  }
+
+  async manageProviders(input: ProviderSetupRequest): Promise<ProviderSetupResponse> {
+    const { id: providerId, ...fields } = input;
+    return this.client.request<ProviderSetupResponse>({ type: 'providers.manage', ...fields, providerId });
   }
 
   async getUsage(refresh = false): Promise<ProviderUsageResponse> {

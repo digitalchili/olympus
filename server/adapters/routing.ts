@@ -1,3 +1,4 @@
+import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { getTask } from '../db/queries.js';
 import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
@@ -257,6 +258,14 @@ export class ProfileAgentAdapter implements AgentAdapter {
   async getModels(profileId?: string | null): Promise<AgentModelsResponse> {
     const worker = await this.adapterForProfileId(profileId);
     return (worker as AgentAdapter & { getModels: () => Promise<AgentModelsResponse> }).getModels();
+  }
+
+  async manageProviders(input: ProviderSetupRequest, profileId?: string | null): Promise<ProviderSetupResponse> {
+    const release = acquireProfileWork(profileId ?? 'default');
+    try {
+      const worker = await this.adapterForProfileId(profileId);
+      return await (worker as AgentAdapter & { manageProviders: (input: ProviderSetupRequest) => Promise<ProviderSetupResponse> }).manageProviders(input);
+    } finally { release(); }
   }
 
   async getUsage(profileId?: string | null, refresh = false): Promise<ProviderUsageResponse> {
