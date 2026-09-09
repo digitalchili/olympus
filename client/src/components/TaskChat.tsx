@@ -45,6 +45,7 @@ interface TaskChatProps {
   taskId: string;
   conversationKind?: 'task' | 'bot';
   projectId?: string | null;
+  originalRequest?: string | null;
   initialMessage?: string;
   initialSettings?: AgentRunSettings;
   initialInvitedProfileIds?: string[];
@@ -265,6 +266,7 @@ export function TaskChat({
   taskId,
   conversationKind = 'task',
   projectId,
+  originalRequest,
   initialMessage,
   initialSettings,
   initialInvitedProfileIds,
@@ -519,6 +521,18 @@ export function TaskChat({
     return () => { cancelled = true; };
   }, [activeProfileId, isBot, taskId, loadMessages, sendMessage, clearFiles]);
 
+  // The server can consume a queued request without this browser sending it.
+  useEffect(() => {
+    if (queueHydratedTaskId !== taskId) return;
+    let cancelled = false;
+    const expected = queuedMessage;
+    void fetchQueuedTaskMessage(taskId).then(({ queuedMessage: persisted }) => {
+      if (cancelled) return;
+      setQueuedMessage(current => current?.id === expected?.id && current?.updatedAt === expected?.updatedAt ? persisted : current);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeProfileId, taskId, queueHydratedTaskId, queuedMessage?.id, queuedMessage?.updatedAt, taskRun?.runId, taskRun?.status, taskOutcome?.runId, taskOutcome?.status]);
+
   useEffect(() => {
     if (!configPending) inputRef.current?.focus();
   }, [configPending, taskId]);
@@ -641,12 +655,17 @@ export function TaskChat({
     } else if (queuedMessageRef.current?.id === message.id) {
       pendingRevealRef.current = false;
       setOutgoingRevealActive(false);
-      setQueuedSendError(result.error);
+      try {
+        const { queuedMessage: persisted } = await fetchQueuedTaskMessage(taskId);
+        if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) return;
+        setQueuedMessage(current => current?.id === message.id && current.updatedAt === message.updatedAt ? persisted : current);
+        setQueuedSendError(persisted?.id === message.id ? result.error : null);
+      } catch { setQueuedSendError(result.error); }
     }
 
     if (pendingAutoSendRef.current === message.id) pendingAutoSendRef.current = null;
     setAutoSendingQueuedId((current) => current === message.id ? null : current);
-  }, [isBot, refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
+  }, [activeProfileId, isBot, refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
 
   useEffect(() => {
     if (!queuedMessage) return;
@@ -980,7 +999,16 @@ export function TaskChat({
             ) : messageLoadError ? (
               <p className={PLACEHOLDER_CLASS}>Unable to load conversation.</p>
             ) : messages.length === 0 ? (
-              <p className={PLACEHOLDER_CLASS}>Start a conversation with your assistant.</p>
+              isStreaming ? <p className={PLACEHOLDER_CLASS}>Waiting for the first response…</p>
+                : queuedMessage ? <p className={PLACEHOLDER_CLASS}>Your request is saved and waiting to start.</p>
+                : originalRequest && !taskRun && !taskOutcome && queueHydratedTaskId === taskId ? (
+                  <div className="mx-auto my-8 max-w-[760px] rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-700">
+                    <p className="font-medium text-zinc-800 dark:text-zinc-200">This task has no saved conversation.</p>
+                    <p className="mt-2 whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">{originalRequest}</p>
+                    <button type="button" disabled={Boolean(input.trim())} onClick={() => { setInput(originalRequest); inputRef.current?.focus(); }}
+                      className="mt-3 rounded-lg border border-zinc-300 px-3 py-1.5 font-medium disabled:opacity-50 dark:border-zinc-600">Use original request</button>
+                  </div>
+                ) : <p className={PLACEHOLDER_CLASS}>Start a conversation with your assistant.</p>
             ) : null}
             {visibleMessages.map((msg, visibleIdx) => {
               // Keep every index below meaning "position in the full thread" so the

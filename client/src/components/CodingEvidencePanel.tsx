@@ -21,14 +21,16 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
   const visibleEvidence = evidence && !(evidence.status === 'pending' && isStreaming) ? evidence : null;
   if (!visibleEvidence) return null;
   const running = busy || evidence?.status === 'running';
+  const skippedChanges = evidence?.status === 'skipped' && Boolean(evidence.source?.changedFiles.length);
+  const needsAttention = skippedChanges || ['failed', 'stale', 'unconfigured'].includes(evidence?.status ?? '');
   const labels = {
-    pending: 'Task details', skipped: 'Task details', running: 'Checking project…',
+    pending: 'Task details', skipped: skippedChanges ? 'Verification needed' : 'Checks not needed for this turn', running: 'Checking project…',
     passed: 'Checks passed', failed: 'Checks need attention', stale: 'Changes need rechecking',
     unconfigured: 'Project checks not set up',
   };
   return <section aria-label="Task checks and recovery" className="mx-auto mb-3 w-full min-w-0 max-w-[760px] text-xs text-zinc-600 dark:text-zinc-300">
     {visibleEvidence && evidence && <div className="flex items-start gap-3">
-      <details key={evidence.runId} className="min-w-0 flex-1">
+      <details key={`${evidence.runId}:${needsAttention}`} open={needsAttention || undefined} className="min-w-0 flex-1">
       <summary aria-label={labels[evidence.status]} className="flex min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 py-1 [&::-webkit-details-marker]:hidden">
         <span role="status" className={`font-medium ${evidence.status === 'pending' || evidence.status === 'skipped' ? 'underline' : ''}`}>{labels[evidence.status]}</span>
         {evidence.status === 'running' && evidence.currentCheck && <>
@@ -39,6 +41,7 @@ export function CodingEvidencePanel({ taskId, isStreaming }: { taskId: string; i
       </summary>
       <div className="mt-2 max-h-[40vh] overflow-y-auto rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
       {(evidence.status === 'pending' || evidence.status === 'skipped') && <p>Checks were not run.</p>}
+      {skippedChanges && <p className="mt-1 font-medium">The response is finished, but existing code changes still need verification before this task moves to review. Run checks below.</p>}
       <p className="mt-2 break-all text-zinc-500">Starting revision {evidence.baseline.head.slice(0, 12)}{evidence.source && <><br />{evidence.status === 'skipped' ? 'Unchanged revision' : 'Checked revision'} {evidence.source.head.slice(0, 12)}</>}</p>
       {evidence.reason && <p className="mt-1">{evidence.reason}</p>}
       {evidence.status !== 'passed' && evidence.status !== 'skipped' && <p className="mt-1">Changed code stays in progress until the required checks pass.</p>}

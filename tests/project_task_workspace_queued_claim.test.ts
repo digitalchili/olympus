@@ -113,7 +113,7 @@ try {
   });
 
   assert.equal(result.status, 503, JSON.stringify(result.body));
-  assert.equal(queueSeenByPrepare, undefined, 'repository preparation must run only after the queued row is claimed');
+  assert.equal(queueSeenByPrepare, 'queue-old', 'the first request stays durable throughout asynchronous preparation');
   assert.equal(getQueuedTaskMessage(task.id)?.id, 'queue-current', 'pre-start restore must not overwrite a newer queued replacement');
 
   server.close();

@@ -181,6 +181,7 @@ export function createTask(
     projectId?: string | null;
     handlingProfileId?: string | null;
     routingProfileId?: string | null;
+    initialMessage?: { content: string; settings?: AgentRunSettings; invitedProfileIds?: string[] };
   },
 ) {
   const routingProfileId = options?.routingProfileId ?? options?.handlingProfileId;
@@ -195,6 +196,7 @@ export function createTask(
       workdir,
       projectId: options?.projectId ?? null,
       handlingProfileId: options?.handlingProfileId ?? null,
+      initialMessage: options?.initialMessage,
     }),
   }, !routingProfileId);
 }

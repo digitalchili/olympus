@@ -1,3 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import db from '../db/index.js';
+import { putQueuedTaskMessage } from '../db/task-message-queue.js';
+import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
+import { parseTaskStart } from '../task-start.js';
 import { Router } from 'express';
 import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed, assertTaskFieldsAllowed, PermanentBotTaskError } from '../db/queries.js';
 import { getProject } from '../db/projects.js';
@@ -129,19 +134,34 @@ tasksRouter.post('/', async (req, res) => {
     }
     return res.status(500).json({ error: 'Could not resolve local Hermes profile' });
   }
-  const task = insertTask({
-    title: resolvedTitle,
-    description,
-    status: 'in_progress',
-    workdir,
-    project_id: projectId,
-    handling_profile_id: profile.id,
-    delegated_worker_id: null,
-    profile_name: profile.id,
-    routing_source: 'manual',
-  });
+  let initialMessage: ReturnType<typeof parseTaskStart>;
+  try { initialMessage = parseTaskStart(req.body.initialMessage, profile.id); }
+  catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid initial message' }); }
+  let task: Task;
+  try {
+    task = db.transaction(() => {
+      const created = insertTask({
+        title: resolvedTitle,
+        description,
+        status: 'in_progress',
+        workdir,
+        project_id: projectId,
+        handling_profile_id: profile.id,
+        delegated_worker_id: null,
+        profile_name: profile.id,
+        routing_source: 'manual',
+      });
+      if (initialMessage) {
+        const now = Date.now();
+        putQueuedTaskMessage({ ...initialMessage, taskId: created.id, id: randomUUID(),
+          collaborationScope: 'discussion', confirmPersistentCollaboration: false, createdAt: now, updatedAt: now });
+      }
+      return created;
+    })();
+  } catch { return res.status(500).json({ error: 'Could not save the task and initial request. Please try again.' }); }
   broadcast({ type: 'task_created', task });
   res.status(201).json({ task });
+  if (initialMessage) scheduleQueuedMessageDispatch(task.id);
 
   if (!userTitle) {
     void enrichTaskTitle(task.id, resolvedTitle, description, profile.id);

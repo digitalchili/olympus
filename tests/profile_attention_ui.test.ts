@@ -21,7 +21,7 @@ assert.match(picker, /bottom-\[calc\(100%\+0\.5rem\)\].*w-full/,
   'the expanded picker must stay inside the horizontally clipped sidebar scroller');
 assert.doesNotMatch(picker, /\bw-72\b/,
   'a fixed 18rem popup is clipped by the 14rem sidebar');
-assert.match(picker, /className="flex min-w-0 items-center gap-1\.5"/,
-  'profile labels must shrink before review counts and selection marks');
+assert.match(picker, /block break-words text-xs font-semibold/,
+  'profile names must wrap instead of collapsing beside badges');
 
 console.log('Profile attention UI contracts passed');

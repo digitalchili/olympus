@@ -122,19 +122,15 @@ export function ProfilePicker({ profiles, activeProfileId, loading, attentionByP
                     />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="min-w-0 truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">{profile.label}</span>
-                      {profile.isDefault && (
-                        <span className="shrink-0 rounded bg-zinc-200/70 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">
-                          Default
-                        </span>
-                      )}
-                    </span>
+                    <span className="block break-words text-xs font-semibold text-zinc-800 dark:text-zinc-100">{profile.label}</span>
+                    {profile.isDefault && (
+                      <span className="mt-1 inline-block rounded bg-zinc-200/70 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">Default</span>
+                    )}
                     <span className="mt-0.5 block truncate text-[10px] text-zinc-400 dark:text-zinc-500">
                       {profile.description || profile.id}
                     </span>
                   </span>
-                  <span className="flex shrink-0 items-center gap-2">
+                  <span className="flex shrink-0 flex-col items-end gap-1">
                     {reviewCount > 0 && (
                       <span
                         aria-label={`${reviewCount} task${reviewCount === 1 ? '' : 's'} ready for review`}

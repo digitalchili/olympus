@@ -339,12 +339,6 @@ export function TaskDetailPage() {
                 <Pencil size={15} />
               </button>
             </div>
-            <TaskActivityIndicator run={executionRun} />
-            {routingLabel && (
-              <p className="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                {routingLabel}
-              </p>
-            )}
           </div>
 
           <div className="flex items-center justify-between gap-2.5 sm:shrink-0 sm:justify-start sm:pt-1.5">
@@ -447,6 +441,12 @@ export function TaskDetailPage() {
             </div>
           </div>
         </div>
+        <TaskActivityIndicator run={executionRun} />
+        {routingLabel && (
+          <p className="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            {routingLabel}
+          </p>
+        )}
       </div>
 
       <div className="border-b border-zinc-100 px-3 dark:border-zinc-800 sm:px-6">
@@ -495,6 +495,7 @@ export function TaskDetailPage() {
           <TaskChat
             taskId={task.id}
             projectId={task.project_id}
+            originalRequest={task.description}
             initialMessage={initialMessage}
             initialSettings={initialSettings}
             initialInvitedProfileIds={initialInvitedProfileIds}

@@ -118,6 +118,7 @@ async function main() {
     },
     onError: (taskId, error) => {
       console.error(`Queued message dispatch failed for task ${taskId}:`, error instanceof Error ? error.message : error);
+      if (!shuttingDown) setTimeout(() => { if (!shuttingDown) queuedMessageDispatcher.schedule(taskId); }, 10_000).unref();
     },
   });
   const botDispatcher = createBotMessageDispatcher({

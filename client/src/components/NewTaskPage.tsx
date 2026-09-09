@@ -7,7 +7,7 @@ import { createTask, fetchHermesProfiles, fetchProjects, type HermesProfile } fr
 import { useAgentConfig } from '../hooks/useAgentConfig';
 import { useFileAttachments } from '../hooks/useFileAttachments';
 import { isEditableTarget, handleChatKeyDown, toggleRunMode } from '../lib/keyboard';
-import { GOAL_MODE_PLACEHOLDER, toErrorMessage } from '../lib/format';
+import { GOAL_MODE_PLACEHOLDER, attachmentMessage, toErrorMessage } from '../lib/format';
 import { createUuid } from '../lib/uuid';
 import {
   addProfileInvite,
@@ -69,7 +69,7 @@ export function NewTaskPage() {
     removeFile,
     retryFile,
     restoreTextFile,
-    submitWithAttachments,
+    clearFiles,
     dragHandlers,
     handlePaste,
   } = useFileAttachments(uploadBucketId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
@@ -142,29 +142,25 @@ export function NewTaskPage() {
     setUploadError(null);
     try {
       const description = text || pendingFiles.map((f) => f.file.name).join(', ');
+      const initialMessage = attachmentMessage(text, pendingFiles.flatMap(file => file.uploadedPath ? [file.uploadedPath] : []));
       const { task } = await createTask(description, undefined, null, {
         projectId: selectedProject?.id ?? null,
         handlingProfileId: selectedProject ? null : handlerProfileId,
         routingProfileId: handlerProfileId,
+        initialMessage: { content: initialMessage,
+          settings: selectedProject ? { mode: runMode } : { model, provider, reasoningEffort, mode: runMode },
+          invitedProfileIds: selectedProfiles.map(profile => profile.id) },
       });
-      const initialMessage = submitWithAttachments(text);
+      clearFiles();
       const taskPath = selectedProject
         ? `/projects/${encodeURIComponent(selectedProject.id)}/tasks/${encodeURIComponent(task.id)}`
         : `/tasks/${encodeURIComponent(task.id)}`;
-      navigate(toWithProfile(taskPath, task.handling_profile_id ?? handlerProfileId), {
-        state: {
-          initialMessage,
-          initialSettings: selectedProject
-            ? { mode: runMode }
-            : { model, provider, reasoningEffort, mode: runMode },
-          initialInvitedProfileIds: selectedProfiles.map((profile) => profile.id),
-        },
-      });
+      navigate(toWithProfile(taskPath, task.handling_profile_id ?? handlerProfileId));
     } catch (err) {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, submitWithAttachments, setUploadError]);
+  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;

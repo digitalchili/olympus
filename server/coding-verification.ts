@@ -182,7 +182,7 @@ export async function readCodingEvidence(task: Task): Promise<CodingEvidence | n
       const currentTask = getTask(task.id);
       const workdir = currentTask?.workdir ? await realpath((await git(currentTask.workdir, ['rev-parse', '--show-toplevel'])).trim()) : null;
       if (!workdir || workdir !== evidence.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; }
-      else if (evidence.source && evidence.status === 'passed' && (await sourceSnapshot(workdir)).fingerprint !== evidence.source.fingerprint) {
+      else if (evidence.source && ['passed', 'skipped'].includes(evidence.status) && (await sourceSnapshot(workdir)).fingerprint !== evidence.source.fingerprint) {
         evidence.status = 'stale'; evidence.reason = 'Source changed or is unavailable. Run checks again.';
       }
     } catch { evidence.status = 'stale'; evidence.reason = 'The task workspace is unavailable. Restore it or send a new message before running checks.'; }
@@ -203,6 +203,8 @@ export function codingReviewAllowed(taskId: string, runId: string): boolean {
   // done. Do not start another, uncancellable source scan after terminal delivery.
   if (!evidence) return true;
   const workdir = getTask(taskId)?.workdir;
-  return evidence.status === 'passed' && evidence.source !== null && Boolean(workdir)
+  const reviewable = evidence.status === 'passed' || (evidence.status === 'skipped'
+    && evidence.source?.fingerprint === evidence.baseline.fingerprint && evidence.source.changedFiles.length === 0);
+  return reviewable && evidence.source !== null && Boolean(workdir)
     && (evidence.taskWorkdir ?? evidence.workdir) === workdir;
 }

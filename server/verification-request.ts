@@ -12,7 +12,7 @@ export function requestsCodingVerification(content: string): boolean {
   return prose.split(/[\n.!?]+/).some(part => {
     const request = normalize(part);
     return /^(fix|implement|refactor|debug|patch)\b/i.test(request)
-      || /^(?:run|rerun|execute|perform)\s+(?:(?:the|all|project|required|existing|configured|automated|unit|integration|regression)\s+)*(?:tests?|checks?|verification|validation|lint|typecheck|build|compile|pytest)\b/i.test(request)
+      || /^(?:run|rerun|execute|perform|finish|complete)\s+(?:(?:the|all|project|required|existing|configured|automated|unit|integration|regression|remaining|outstanding)\s+)*(?:tests?|checks?|verification|validation|lint|typecheck|build|compile|pytest)\b/i.test(request)
       || /^(?:(?:run|rerun|execute)\s+)?`?(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|typecheck|lint|build)\b/i.test(request)
       || /^(?:verify|validate|check)\s+(?:(?:the|this|our)\s+)?(?:code|changes|implementation)\b/i.test(request)
       || /^(?:verify|validate)\s+(?:the\s+)?(?:build|tests?)\b/i.test(request)

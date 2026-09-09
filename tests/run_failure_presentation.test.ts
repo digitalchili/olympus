@@ -172,6 +172,8 @@ assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recovery
 assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recoveryState: 'exhausted' }), 'Needs attention');
 assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, status: 'streaming' }), 'Running');
 assert.equal(taskExecutionLabel('in_progress', undefined), 'Not running');
+assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, status: 'done' }), 'Needs attention');
+assert.equal(taskExecutionLabel('in_review', { ...failedPersistedRun, status: 'done' }), 'In Review');
 assert.equal(taskExecutionLabel('done', failedPersistedRun), 'Done');
 const resuming = renderToStaticMarkup(createElement(RunFailureBanner, {
   notice: iterationNotice, recoveryState: 'pending', onContinue: () => {},

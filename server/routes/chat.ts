@@ -965,7 +965,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     return res.status(400).json({ error: toErrorMessage(error, 'Invalid run settings') });
   }
 
-  if (res.destroyed) return;
+  if (res.destroyed) { restoreConsumedQueue(); return; }
   // Project preparation can await I/O after the first preflight. Pause must win
   // until this synchronous startup section creates the replacement run.
   if (res.locals.recoveryContinuation === true) {

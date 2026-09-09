@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { ProjectCpService } from '../project-cp.js';
 import { ProjectRepositoryBusyError, ProjectRepositoryMergeConflictError, ProjectRepositoryCheckpointError } from '../project-cp.js';
-import { consumeQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
+import { getQueuedTaskMessage, consumeQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { getProjectRepositoryLink } from '../db/projects.js';
 import { getTask, updateTask } from '../db/queries.js';
 import { broadcast } from '../events.js';
@@ -49,8 +49,9 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
     }
 
     let consumedQueue: QueuedTaskMessage | undefined;
+    let queueClaimed = false;
     const restoreConsumedQueue = () => {
-      if (!consumedQueue) return;
+      if (!consumedQueue || !queueClaimed) return;
       restoreQueuedTaskMessage(consumedQueue);
       delete res.locals.claimedQueuedTaskMessage;
     };
@@ -58,7 +59,8 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       if (typeof queuedMessageId !== 'string' || !queuedMessageId.trim()) {
         return res.status(400).json({ error: 'queuedMessageId must be a non-empty string' });
       }
-      consumedQueue = consumeQueuedTaskMessage(task.id, queuedMessageId);
+      const saved = getQueuedTaskMessage(task.id);
+      consumedQueue = saved?.id === queuedMessageId ? saved : undefined;
       if (!consumedQueue) {
         return res.status(409).json({ error: 'Queued message changed or no longer exists' });
       }
@@ -66,7 +68,6 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
         restoreConsumedQueue();
         return res.status(409).json({ error: 'Queued message changed or no longer exists' });
       }
-      res.locals.claimedQueuedTaskMessage = consumedQueue;
     }
 
     res.locals.preparingProjectTask = true;
@@ -114,6 +115,16 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
     if (hasTaskOperation(task.id) && !claimPreparedTaskWorkspace(task.id, preparedTask?.workdir)) {
       restoreConsumedQueue();
       return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This workspace still has work in progress. Try again after it finishes.' });
+    }
+    if (consumedQueue) {
+      const claimed = consumeQueuedTaskMessage(task.id, consumedQueue.id);
+      if (!claimed || claimed.content !== consumedQueue.content) {
+        if (claimed) restoreQueuedTaskMessage(claimed);
+        return res.status(409).json({ error: 'Queued message changed or no longer exists' });
+      }
+      consumedQueue = claimed;
+      queueClaimed = true;
+      res.locals.claimedQueuedTaskMessage = claimed;
     }
     if (!command) return next();
 

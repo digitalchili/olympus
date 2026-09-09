@@ -110,7 +110,7 @@ try {
     assert.deepEqual(evidence.checks, []);
     assert.equal(evidence.baseline.fingerprint, evidence.source.fingerprint);
     assert.deepEqual(evidence.source.changedFiles, []);
-    assert.equal(getTask(task.id)?.status, 'in_progress', 'skipping is not passing code review evidence');
+    assert.equal(getTask(task.id)?.status, 'in_review', 'a completed conversation on unchanged clean source is ready for review without claiming checks passed');
 
     const manual = await (await post(task.id, {}, 'verification')).json();
     assert.equal(existsSync(ready), true, 'manual Run checks must still execute on the same source');
@@ -143,6 +143,7 @@ try {
     const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
     assert.equal(evidence.status, 'skipped');
     const { getRun } = await import('../server/live-chat.js');
+    assert.equal(getTask(task.id)?.status, 'in_review', 'standalone output is reviewable without repository checks');
     const published = getRun(task.id)?.messages.flatMap(message => message.attachments ?? []);
     assert.ok(published?.some(attachment => attachment.name === 'morning-coffee.png'), 'the output still uses the native artifact publisher');
   });
@@ -176,6 +177,24 @@ try {
       });
     }
   }
+
+  await test('Continue verifies existing changes and moves the finished task to review', async () => {
+    const { task, cwd } = await fixture('continue-existing-changes');
+    const { ready } = await slowCheck(cwd, 'continue-existing-changes');
+    await git(cwd, 'add', '.'); await git(cwd, 'commit', '-m', 'Configure checks');
+    await writeFile(join(cwd, 'source'), 'previous turn changes');
+    adapter.getBackgroundWork = idle;
+    adapter.chatStream = async function* (sessionId) {
+      yield { type: 'text_delta', content: 'Completed. The existing changes are ready.' };
+      yield { type: 'done', sessionId };
+    };
+    assert.equal((await post(task.id, { content: 'Continue the unfinished task from saved progress. Reconcile existing changes and completed child results first. Do not repeat completed actions. Finish remaining verification and report a truthful result.' })).status, 202);
+    await wait(() => getLatestTaskAgentRun(task.id)?.status === 'done');
+    assert.equal(existsSync(ready), true, 'the built-in Continue prompt must run the required checks');
+    const { evidence } = await (await fetch(`${api}/${task.id}/verification`)).json();
+    assert.equal(evidence.status, 'passed');
+    assert.equal(getTask(task.id)?.status, 'in_review');
+  });
 
   for (const activity of ['source edit', 'terminal edit']) {
     await test(`automatic verification detects ${activity} without a coding keyword in the prompt`, async () => {

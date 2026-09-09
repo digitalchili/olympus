@@ -23,6 +23,8 @@ for (const request of [
   'I want you to run the tests', 'Run pytest',
   'The implementation is ready. Please run the tests.',
   'Explain the changes. Run the tests.',
+  'Continue the unfinished task from saved progress. Reconcile existing changes and completed child results first. Do not repeat completed actions. Finish remaining verification and report a truthful result.',
+  'Complete the outstanding checks.',
 ]) assert.equal(requestsCodingVerification(request), true, request);
 
 console.log('Verification request classification tests passed');
