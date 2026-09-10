@@ -15,6 +15,9 @@ interface ColumnProps {
   taskRuns: Map<string, TaskRunState>;
   isLast?: boolean;
   onRequestDeleteAll: (status: TaskStatus) => void;
+  onCompleteAll?: () => void;
+  isCompleting?: boolean;
+  completionMessage?: string | null;
   createTaskTo: To;
   onMoveTask: (task: Task, status: TaskStatus) => Promise<void>;
   onDeleteTask: (task: Task) => Promise<void>;
@@ -22,7 +25,7 @@ interface ColumnProps {
   showTaskLocation?: boolean;
 }
 
-export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll, createTaskTo, onMoveTask, onDeleteTask, projectById, showTaskLocation = false }: ColumnProps) {
+export function Column({ status, tasks, taskRuns, isLast = false, onRequestDeleteAll, onCompleteAll, isCompleting, completionMessage, createTaskTo, onMoveTask, onDeleteTask, projectById, showTaskLocation = false }: ColumnProps) {
   const { label } = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const navigate = useNavigate();
@@ -70,6 +73,7 @@ export function Column({ status, tasks, taskRuns, isLast = false, onRequestDelet
           )}
         </div>
       </div>
+      {completionMessage && <p role="status" className="mb-3 px-1 text-xs text-zinc-600 dark:text-zinc-300">{completionMessage}</p>}
       <div
         ref={setNodeRef}
         className={`group/body flex flex-col gap-2 flex-1 rounded-lg transition-[background-color,box-shadow] duration-200 min-h-[120px] ${
@@ -111,6 +115,8 @@ export function Column({ status, tasks, taskRuns, isLast = false, onRequestDelet
           taskCount={tasks.length}
           onClose={() => setMenuPosition(null)}
           onDeleteAll={() => onRequestDeleteAll(status)}
+          onCompleteAll={onCompleteAll}
+          isCompleting={isCompleting}
         />
       )}
     </div>

@@ -134,6 +134,8 @@ export function TaskKanban({
   const [deleteAllStatus, setDeleteAllStatus] = useState<TaskStatus | null>(null);
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
+  const [completionMessage, setCompletionMessage] = useState<string | null>(null);
 
   useEffect(() => setVisibleTasks(tasks), [tasks]);
 
@@ -161,6 +163,26 @@ export function TaskKanban({
   async function handleDeleteTask(task: Task) {
     await onDeleteTask(task);
     setVisibleTasks((current) => current.filter((item) => item.id !== task.id));
+  }
+
+  async function handleCompleteAll() {
+    if (isCompleting || grouped.in_review.length === 0) return;
+    const targets = grouped.in_review;
+    setIsCompleting(true);
+    setCompletionMessage(`Moving ${targets.length} tasks to Complete…`);
+    try {
+      const results = await Promise.allSettled(targets.map(async (task) => {
+        const updated = await onMoveTask(task, 'done');
+        setVisibleTasks(current => current.map(item => item.id === task.id ? updated : item));
+      }));
+      const failed = results.filter(result => result.status === 'rejected').length;
+      const moved = targets.length - failed;
+      setCompletionMessage(failed
+        ? `Moved ${moved} to Complete. ${failed} could not be moved; try again for the remaining tasks.`
+        : `Moved ${moved} ${moved === 1 ? 'task' : 'tasks'} to Complete.`);
+    } finally {
+      setIsCompleting(false);
+    }
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -231,6 +253,9 @@ export function TaskKanban({
             taskRuns={taskRuns}
             isLast={index === TASK_STATUSES.length - 1}
             onRequestDeleteAll={handleRequestDeleteAll}
+            onCompleteAll={status === 'in_review' ? handleCompleteAll : undefined}
+            isCompleting={isCompleting}
+            completionMessage={status === 'in_review' ? completionMessage : null}
             createTaskTo={createTaskTo}
             onMoveTask={handleMoveTask}
             onDeleteTask={handleDeleteTask}
