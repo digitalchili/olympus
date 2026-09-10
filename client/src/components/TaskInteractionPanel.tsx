@@ -109,7 +109,7 @@ export function TaskInteractionPanel({ taskId, isStreaming, className = '' }: { 
     <section aria-label="Task questions and approvals" className={`${className} mb-2 max-h-[55vh] overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900/70`}>
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0 break-words">
-          <div className="font-semibold text-zinc-800 dark:text-zinc-100">{item?.title ?? 'Task questions'}</div>
+          <div className="font-semibold text-zinc-800 dark:text-zinc-100">{item?.status === 'answered' ? 'Answer submitted' : item?.status === 'claimed' ? 'Sending your answer' : item?.status === 'denied' ? 'Request declined' : item?.status === 'cancelled' || item?.status === 'expired' ? 'Request closed' : item?.title ?? 'Task questions'}</div>
           <p role="status" className="text-xs text-zinc-500 dark:text-zinc-400">{item ? statusLabels[item.status] : 'Questions could not be loaded.'}</p>
         </div>
         <button type="button" onClick={() => { setError(null); void refresh(); }} className="min-h-9 shrink-0 rounded-md px-2 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800">Refresh</button>

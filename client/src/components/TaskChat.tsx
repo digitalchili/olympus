@@ -548,6 +548,13 @@ export function TaskChat({
     container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }, []);
 
+  const viewAgentReply = useCallback(() => {
+    const replies = messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-agent-reply]');
+    const reply = replies?.[replies.length - 1];
+    reply?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    reply?.focus({ preventScroll: true });
+  }, []);
+
   const handleLoadOlderMessages = useCallback(async () => {
     const container = messagesContainerRef.current;
     const previousHeight = container?.scrollHeight ?? 0;
@@ -1083,6 +1090,7 @@ export function TaskChat({
                   {compactDivider}
                   <div
                     tabIndex={0}
+                    data-agent-reply={assistantText ? true : undefined}
                     className="group/message flex min-w-0 justify-start rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400"
                   >
                     <div className="min-w-0 w-full sm:px-2">
@@ -1182,7 +1190,7 @@ export function TaskChat({
           }} />
         {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
         <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
-        {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} />}
+        {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} onViewAgentReply={viewAgentReply} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>

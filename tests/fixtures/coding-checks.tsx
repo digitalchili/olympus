@@ -2,6 +2,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { CodingEvidencePanel } from '../../client/src/components/CodingEvidencePanel';
+import { TaskInteractionPanel } from '../../client/src/components/TaskInteractionPanel';
 import type { CodingEvidence } from '../../shared/coding-evidence';
 import type { TaskRecoveryStatus } from '../../client/src/lib/api';
 import '../../client/src/styles/globals.css';
@@ -9,13 +10,14 @@ import '../../client/src/styles/globals.css';
 const source = { head: 'fb1e0f6fb096', fingerprint: 'fixture', changedFiles: ['M example.ts'], diff: '' };
 let evidence: CodingEvidence = { taskId: 'fixture', runId: 'run-1', workdir: '/fixture',
   status: 'failed', baseline: source, source, reason: 'A required verification command failed',
-  checks: [{ command: ['npm', 'test'], exitCode: 1, output: 'Passed unrelated test\n'.repeat(400) + '\u001b[31mFAIL example.test.ts\u001b[39m\nExpected 03:06, received 10:06', durationMs: 4000, timedOut: false }],
+  checks: [{ command: ['npm', 'test'], exitCode: 1, output: 'Passed unrelated test\n'.repeat(400) + '\u001b[31mFAIL example.test.ts\u001b[39m\nExpected 03:06, received 10:06\n Tests 1 failed | 569 passed (570)\n' + 'npm notice New version available\n'.repeat(100), durationMs: 4000, timedOut: false }],
   updatedAt: 1700000000000 };
 let settle: (() => void) | undefined;
 let rejectRequest = false;
 const automaticRepair = new URLSearchParams(location.search).has('repair');
 let recovery: TaskRecoveryStatus | null = null;
 window.fetch = async (input, init) => {
+  if (String(input).includes('/interactions')) return new Response(JSON.stringify({ interactions: [{ id: 'answered', kind: 'clarification', title: 'Your decision is needed', status: 'answered', questions: [], response: { answers: { scope: 'Authorize timezone fixes' } } }] }));
   if (String(input).includes('/recovery/stop')) {
     recovery = { ...recovery!, state: 'blocked', reason: 'Stopped by user' };
     return new Response(JSON.stringify({ paused: true }));
@@ -30,7 +32,7 @@ window.fetch = async (input, init) => {
   return new Response(JSON.stringify({ evidence }), { headers: { 'Content-Type': 'application/json' } });
 };
 const root = document.getElementById('root')!;
-createRoot(root).render(<main className="mx-auto max-w-4xl p-6"><h1 className="mb-6 text-lg">Verification result fixture</h1><CodingEvidencePanel taskId="fixture" isStreaming={false} /><p id="test-result" className="mt-5" /></main>);
+createRoot(root).render(<main className="mx-auto max-w-4xl p-6"><h1 className="mb-6 text-lg">Verification result fixture</h1><CodingEvidencePanel taskId="fixture" isStreaming={false} onViewAgentReply={() => { root.dataset.replyRequested = 'true'; }} /><TaskInteractionPanel taskId="fixture" isStreaming={false} /><p id="test-result" className="mt-5" /></main>);
 
 const waitFor = async (predicate: () => boolean) => {
   const until = Date.now() + 3000;
@@ -58,9 +60,14 @@ void (async () => {
   check(root.innerText.includes('Finished'), 'Rerun must show a completion time');
   const output = Array.from(root.querySelectorAll('pre')).find(node => node.textContent?.includes('Expected 03:06'));
   check(output?.checkVisibility(), 'Failed output must be visible without opening a disclosure');
-  check(output && output.scrollHeight - output.clientHeight - output.scrollTop < 2, 'Failure excerpt must start at the final result, not earlier passing logs');
+  check(output?.scrollTop === 0, 'Failure excerpt must start at the actual error');
+  check(!output?.textContent?.includes('npm notice'), 'Failure excerpt must omit trailing package-manager notices');
+  check(root.innerText.includes('1 test failed · 569 passed'), 'Failure count must explain the result');
+  check(root.innerText.includes('Answer submitted') && !root.innerText.includes('Your decision is needed'), 'Answered questions must not still request a decision');
   check(!output?.textContent?.includes('\u001b'), 'Failure output must not show terminal color escapes');
   check(root.innerText.includes('Full command output'), 'Long output must remain available beyond the failure excerpt');
+  Array.from(root.querySelectorAll('button')).find(node => node.textContent === 'Read the agent’s explanation')!.click();
+  check(root.dataset.replyRequested === 'true', 'Failed checks must link to the agent explanation');
   rejectRequest = true;
   button().click();
   await waitFor(() => !!root.querySelector('[role="alert"]'));
