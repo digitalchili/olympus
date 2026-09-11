@@ -19,6 +19,7 @@ import { getTask, updateTask } from './db/queries.js';
 const execFile = promisify(execFileCallback);
 const MAX_DIFF_BYTES = 60_000;
 const MAX_CHANGED_FILES = 200;
+const EMPTY_REPOSITORY_BASE = 'olympus.emptyRepositoryBase';
 
 type GitRunResult = { stdout: string; stderr: string };
 export type GitRunner = (cwd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => Promise<GitRunResult>;
@@ -261,7 +262,18 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       ? [`HEAD:refs/heads/${input.lease.branchName}`, `HEAD:refs/heads/${targetBranch}`]
       : [`HEAD:refs/heads/${input.lease.branchName}`];
     try {
-      await git(input.lease.workdir, ['push', ...(refspecs.length > 1 ? ['--atomic'] : []), 'origin', ...refspecs], { env: gitHubAuthEnv(token) });
+      const emptyBase = await emptyRepositoryBase(input.lease.workdir);
+      const initializeDefault = emptyBase && !(await git(input.lease.workdir, ['ls-remote', 'origin'], { env: gitHubAuthEnv(token) })).stdout.trim();
+      if (initializeDefault && !input.deployToDefaultBranch) {
+        // Keep code on the task branch until the user explicitly deploys or merges.
+        refspecs.push(`${emptyBase}:refs/heads/${input.repositoryLink.defaultBranch}`);
+      }
+      await git(input.lease.workdir, [
+        'push', ...(refspecs.length > 1 ? ['--atomic'] : []),
+        // Create only: a concurrent first push must never be overwritten.
+        ...(initializeDefault ? [`--force-with-lease=refs/heads/${input.repositoryLink.defaultBranch}:`] : []),
+        'origin', ...refspecs,
+      ], { env: gitHubAuthEnv(token) });
     } catch (error) {
       try {
         const remote = await git(
@@ -308,6 +320,15 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     return (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
   }
 
+  async function emptyRepositoryBase(workdir: string): Promise<string | null> {
+    try {
+      return (await git(workdir, ['config', '--local', '--get', EMPTY_REPOSITORY_BASE])).stdout.trim() || null;
+    } catch (error) {
+      if ((error as { code?: number }).code === 1) return null;
+      throw error;
+    }
+  }
+
   async function refreshBaseline(projectId: string, repositoryLink: ProjectRepositoryLink, tokenProvider?: InstallationTokenProvider): Promise<ProjectCpSyncResult> {
     const workdir = projectBaselineWorkdir(options.rootDir, projectId, repositoryLink);
     await ensureManagedParents(workdir);
@@ -322,14 +343,41 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         await git(dirname(workdir), ['clone', '--no-hardlinks', '--branch', repositoryLink.defaultBranch, '--single-branch', repositoryLink.cloneUrl, workdir], auth);
       } catch (error) {
         await rm(workdir, { recursive: true, force: true });
-        throw error;
+        // A successful, completely empty ref listing distinguishes a new repository
+        // from an inaccessible remote or a missing branch in an existing repository.
+        const refs = await git(dirname(workdir), ['ls-remote', repositoryLink.cloneUrl], auth).catch(() => { throw error; });
+        if (refs.stdout.trim()) throw error;
+        try {
+          await git(dirname(workdir), ['init', '-b', repositoryLink.defaultBranch, workdir]);
+          await git(workdir, ['remote', 'add', 'origin', repositoryLink.cloneUrl]);
+          await ensureIdentity(git, workdir);
+          await git(workdir, ['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Initialize empty Project repository']);
+          const baseSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+          await git(workdir, ['config', '--local', EMPTY_REPOSITORY_BASE, baseSha]);
+        } catch (initializationError) {
+          await rm(workdir, { recursive: true, force: true });
+          throw initializationError;
+        }
       }
     } else {
+      const emptyBase = await emptyRepositoryBase(workdir);
+      if (emptyBase === before && !(await git(workdir, ['ls-remote', 'origin'], auth)).stdout.trim()) {
+        return { updated: false, currentSha: before!, message: 'Empty GitHub repository; local starting commit is ready for tasks' };
+      }
       await git(workdir, ['fetch', 'origin', `refs/heads/${repositoryLink.defaultBranch}:refs/remotes/origin/${repositoryLink.defaultBranch}`], auth);
-      await git(workdir, ['merge', '--ff-only', `origin/${repositoryLink.defaultBranch}`]);
+      if (emptyBase === before) {
+        // Only the untouched local starting commit may be replaced, never task work.
+        await git(workdir, ['reset', '--hard', `origin/${repositoryLink.defaultBranch}`]);
+        await git(workdir, ['config', '--local', '--unset', EMPTY_REPOSITORY_BASE]);
+      } else {
+        await git(workdir, ['merge', '--ff-only', `origin/${repositoryLink.defaultBranch}`]);
+      }
     }
     const currentSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
     const updated = before !== currentSha;
+    if (await emptyRepositoryBase(workdir) === currentSha) {
+      return { updated, currentSha, message: 'Empty GitHub repository; local starting commit is ready for tasks' };
+    }
     return { updated, currentSha, message: updated ? `Updated Project source from GitHub (${currentSha.slice(0, 7)})` : `Already up to date with GitHub (${currentSha.slice(0, 7)})` };
   }
 
@@ -363,6 +411,8 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         else await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
         cloning = true;
         await git(dirname(workdir), ['clone', '--no-hardlinks', '--single-branch', '--branch', input.repositoryLink.defaultBranch, baseline, workdir]);
+        const emptyBase = await emptyRepositoryBase(baseline);
+        if (emptyBase) await git(workdir, ['config', '--local', EMPTY_REPOSITORY_BASE, emptyBase]);
       });
       await git(workdir, ['remote', 'set-url', 'origin', input.repositoryLink.cloneUrl]);
       const branchName = generatedBranch(`${input.projectId}-${input.taskId}`);

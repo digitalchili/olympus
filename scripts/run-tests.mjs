@@ -18,6 +18,7 @@ const pythonTests = [
   'test_scheduled_task_drain.py',
   'hermes_worker_interactions_test.py',
   'test_bot_messaging.py',
+  'test_project_github_worker.py',
 ];
 const selected = process.argv.slice(2);
 const tests = selected.length ? selected : [

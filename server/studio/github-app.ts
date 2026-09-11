@@ -92,17 +92,23 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
         ...githubHeaders(appJwt(activeConfig, now())),
         ...init?.headers as Record<string, string> | undefined,
       },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`GitHub App request failed (${response.status}).`);
     return response;
   }
 
-  async function installationToken(installationId: number): Promise<string> {
+  async function installationToken(installationId: number, scope?: { readOnly?: boolean; repositoryId?: number; signal?: AbortSignal }): Promise<string> {
     const response = await appRequest(`/app/installations/${installationId}/access_tokens`, {
       method: 'POST',
+      signal: scope?.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' } }),
+      body: JSON.stringify({
+        permissions: scope?.readOnly ? { metadata: 'read', contents: 'read' } : { metadata: 'read', contents: 'write', pull_requests: 'write' },
+        ...(scope?.repositoryId ? { repository_ids: [requiredSafeInteger(scope.repositoryId, 'repository id')] } : {}),
+      }),
     });
     const payload = await response.json() as { token?: unknown };
     return requiredString(payload.token, 'installation token');
@@ -258,19 +264,21 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
       return installationDetails(installationId);
     },
 
-    async installationToken(installationId: number): Promise<string> {
-      return installationToken(installationId);
+    async installationToken(installationId: number, scope?: { readOnly?: boolean; repositoryId?: number; signal?: AbortSignal }): Promise<string> {
+      return installationToken(installationId, scope);
     },
 
-    async listRepositories(installationId: number): Promise<StudioGitHubRepository[]> {
-      const token = await installationToken(installationId);
+    async listRepositories(installationId: number, scope?: { readOnly?: boolean; signal?: AbortSignal }): Promise<StudioGitHubRepository[]> {
+      const token = await installationToken(installationId, scope);
       const repositories: StudioGitHubRepository[] = [];
       let expectedTotal = Number.POSITIVE_INFINITY;
 
       for (let page = 1; repositories.length < expectedTotal; page += 1) {
         const response = await fetchImpl(`${GITHUB_API}/installation/repositories?per_page=100&page=${page}`, {
           headers: githubHeaders(token),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: scope?.signal
+            ? AbortSignal.any([scope.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+            : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         if (!response.ok) throw new Error(`GitHub installation request failed (${response.status}).`);
         const payload = await response.json() as {

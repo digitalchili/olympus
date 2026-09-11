@@ -50,7 +50,7 @@ class RecoveryTests(unittest.TestCase):
             raise AssertionError('Missing notification never reconciled native state')
         return None
 
-    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, saved_history=None, **request_extra):
+    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, saved_history=None, on_turn=None, **request_extra):
         outer = self
         class Agent:
             session_id = 'task-1'
@@ -58,6 +58,8 @@ class RecoveryTests(unittest.TestCase):
             _interrupt_requested = False
             def run_conversation(self, *, user_message, **kwargs):
                 outer.messages.append((user_message, kwargs.get('system_message')))
+                if on_turn:
+                    on_turn(self, kwargs)
                 if len(outer.messages) == 1 and dispatch:
                     self.tool_progress_callback('tool.completed', 'delegate_task', None, None,
                         result='{"status":"dispatched","delegation_id":"deleg-1"}')
@@ -73,7 +75,7 @@ class RecoveryTests(unittest.TestCase):
             return agent
         with ExitStack() as stack:
             for name, value in {
-                'open_session': lambda *_: (object(), 'task-1'),
+                'open_session': lambda session_id: (object(), session_id),
                 'load_agent_history': lambda *_: saved_history or [], '_create_agent': create,
                 'native_approval_context': lambda *_: nullcontext(),
                 'take_owned_delegation_notification': self.notification if not notification else lambda *_a, **_k: self.event,
@@ -89,6 +91,42 @@ class RecoveryTests(unittest.TestCase):
                 terminal = worker._run_chat('request-1', request)
                 if terminal:
                     self.sent.extend(terminal)
+
+    def test_project_github_survives_rotated_session_before_child_synthesis(self):
+        import json
+        from hermes_project_github import ProjectGitHubBroker
+        from unittest.mock import Mock
+        registry = types.ModuleType('tools.registry')
+        registry.registry = types.SimpleNamespace(register=Mock())
+        mcp = types.ModuleType('tools.mcp_tool')
+        mcp._reinject_post_build_tools = lambda *args: set()
+        def send(event):
+            broker.respond({'taskId': 'task-1', **event['projectGitHub'], 'result': {'ok': True}})
+        broker = ProjectGitHubBroker(send)
+        calls = []
+        def turn(agent, kwargs):
+            calls.append(kwargs['task_id'])
+            self.assertTrue(json.loads(broker.dispatch({'action': 'list'}, task_id=kwargs['task_id']))['ok'])
+            if len(calls) == 1:
+                agent.session_id = 'compacted-session'
+            else:
+                self.assertFalse(json.loads(broker.dispatch({'action': 'list'}, task_id='task-1'))['ok'])
+                self.assertFalse(json.loads(broker.dispatch({'action': 'list'}, task_id='arbitrary-child'))['ok'])
+        # Configure uses agent.tools; provide the empty native initial snapshot
+        # through the same constructor seam as the existing recovery harness.
+        configure = worker.configure_project_github_agent
+        def configure_agent(agent, *args):
+            agent.tools, agent.valid_tool_names = [], set()
+            configure(agent, *args)
+        try:
+            with patch.object(worker, 'PROJECT_GITHUB', broker), \
+                    patch.object(worker, 'configure_project_github_agent', configure_agent), \
+                    patch.dict(sys.modules, {'tools.registry': registry, 'tools.mcp_tool': mcp}):
+                self.run_chat(projectGitHub=True, on_turn=turn)
+        finally:
+            broker.cancel_run('request-1')
+        self.assertEqual(calls, ['task-1', 'compacted-session'])
+        self.assertEqual(len(self.completed), 1)
 
     def test_claim_busy_never_replays_user_request(self):
         self.native.claim_event_delivery = lambda *_: None

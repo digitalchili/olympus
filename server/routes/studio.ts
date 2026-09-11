@@ -30,8 +30,8 @@ export interface StudioGitHubGateway {
     accountType: 'User' | 'Organization';
     permissionMode: 'read_write' | 'upgrade_required';
   }>;
-  listRepositories(installationId: number): Promise<StudioGitHubRepository[]>;
-  installationToken?(installationId: number): Promise<string>;
+  listRepositories(installationId: number, options?: { readOnly?: boolean; signal?: AbortSignal }): Promise<StudioGitHubRepository[]>;
+  installationToken?(installationId: number, options?: { readOnly?: boolean; repositoryId?: number; signal?: AbortSignal }): Promise<string>;
 }
 
 interface StudioRouterOptions {

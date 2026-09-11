@@ -20,6 +20,9 @@ import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { createStudioRouter } from './routes/studio.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createProjectTaskWorkspaceRouter } from './routes/project-task-workspace.js';
+import { createProjectGitHubAccessRouter } from './routes/project-github-access.js';
+import { createProjectGitHubService } from './project-github.js';
+import { localProfileRegistry } from './local-profiles.js';
 import { createInteractionRouter } from './routes/interactions.js';
 import { createProjectCpService } from './project-cp.js';
 import { resolveOlympusDataDir } from './paths.js';
@@ -137,6 +140,10 @@ app.use('/api/search', searchRouter);
 app.use(express.json());
 
 const studioGitHubGateway = createGitHubAppGateway({ credentialStore: createGitHubCredentialStore() });
+const projectGitHub = createProjectGitHubService({
+  github: studioGitHubGateway,
+  workspaceForTask: task => localProfileRegistry.require(task.profile_name ?? 'default').workspaceDir,
+});
 const projectCp = createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts') });
 app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
@@ -152,6 +159,7 @@ app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/storage', createStorageRouter(() => drainController.status().ready));
 app.use('/api/updates', createUpdatesRouter());
+app.use('/api/projects', createProjectGitHubAccessRouter(studioGitHubGateway));
 app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp, adapter }));
 app.use('/api/studio', createStudioRouter({
   github: studioGitHubGateway,
@@ -171,5 +179,5 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   next(error);
 });
 
-export { adapter, drainController };
+export { adapter, drainController, projectGitHub };
 export default app;

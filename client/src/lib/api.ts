@@ -374,6 +374,22 @@ export function updateProject(projectId: string, input: { name?: string; purpose
   }, false);
 }
 
+export interface ProjectGitHubAccess {
+  installationIds: number[];
+  accounts: StudioGitHubInstallation[];
+}
+
+export function fetchProjectGitHubAccess(projectId: string) {
+  return request<ProjectGitHubAccess>(`/projects/${encodeURIComponent(projectId)}/github-access`);
+}
+
+export function saveProjectGitHubAccess(projectId: string, installationIds: number[]) {
+  return request<ProjectGitHubAccess>(`/projects/${encodeURIComponent(projectId)}/github-access`, {
+    method: 'PUT',
+    body: JSON.stringify({ installationIds }),
+  });
+}
+
 
 export function fetchProjectRepositoryLink(projectId: string) {
   return request<{ repositoryLink: ProjectRepositoryLink | null }>(

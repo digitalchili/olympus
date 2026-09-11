@@ -154,10 +154,13 @@ export function listGitHubInstallationProjects(id: number): Array<{ id: string; 
       JOIN projects p ON p.id = l.project_id
       WHERE l.installation_id = ?
       UNION
+      SELECT p.id, p.name FROM project_github_access a
+      JOIN projects p ON p.id = a.project_id WHERE a.installation_id = ?
+      UNION
       SELECT id, name FROM studio_projects WHERE installation_id = ?
     )
     ORDER BY name COLLATE NOCASE, id
-  `).all(id, id) as Array<{ id: string; name: string }>;
+  `).all(id, id, id) as Array<{ id: string; name: string }>;
 }
 
 export function deleteGitHubInstallation(id: number): boolean {

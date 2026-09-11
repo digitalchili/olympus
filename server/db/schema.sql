@@ -296,6 +296,12 @@ CREATE TABLE IF NOT EXISTS project_repository_links (
   UNIQUE(provider, provider_repository_id)
 );
 
+CREATE TABLE IF NOT EXISTS project_github_access (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  installation_id INTEGER NOT NULL REFERENCES studio_github_installations(id),
+  PRIMARY KEY(project_id, installation_id)
+);
+
 CREATE TABLE IF NOT EXISTS project_repository_sync (
   project_id     TEXT PRIMARY KEY REFERENCES project_repository_links(project_id) ON DELETE CASCADE,
   repository_key TEXT NOT NULL,

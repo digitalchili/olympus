@@ -38,7 +38,22 @@ export interface BotMessageRespondRequest {
   result: { accepted: boolean; messageId?: string; error?: string };
 }
 
+export interface ProjectGitHubRequest {
+  requestId: string;
+  workerRunId: string;
+  action: 'list' | 'check' | 'clone';
+  repository?: string;
+}
+
+export interface ProjectGitHubRespondRequest {
+  taskId: string;
+  requestId: string;
+  workerRunId: string;
+  result: Record<string, unknown>;
+}
+
 export interface AgentRunOptions {
+  projectGitHub?: boolean;
   bot?: { profileId: string; peers: Array<{ id: string; label: string; description?: string }> };
   recoveryContinuation?: boolean;
   systemMessage?: string;
@@ -51,8 +66,9 @@ export interface AgentRunOptions {
 }
 
 export interface StreamEvent {
-  type: 'bot_message_requested' | 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
+  type: 'project_github_requested' | 'bot_message_requested' | 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
   botMessage?: BotMessageRequest;
+  projectGitHub?: ProjectGitHubRequest;
   checkpoint?: unknown;
   content?: string;
   error?: string;
@@ -99,6 +115,8 @@ export interface AgentAdapter {
   stopBackgroundWork?(sessionId: string, processIds: string[]): Promise<TaskBackgroundWork>;
 
   steerChat(sessionId: string, message: string): Promise<boolean>;
+
+  respondProjectGitHub?(request: ProjectGitHubRespondRequest): Promise<void>;
 
   respondBotMessage?(request: BotMessageRespondRequest): Promise<void>;
 

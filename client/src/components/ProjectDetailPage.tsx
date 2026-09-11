@@ -50,6 +50,7 @@ import { selectableStudioRepositories } from '../lib/studio-projects';
 import { TaskKanban } from './Board';
 import { usePageHeader } from './Header';
 import { ProjectGitHubSync } from './ProjectGitHubSync';
+import { ProjectGitHubAccess } from './ProjectGitHubAccess';
 import { ProjectTaskSelector } from './ProjectTaskSelector';
 import { projectTaskCodeView, selectProjectCodeTask } from '../lib/projectCodeSelection';
 
@@ -59,7 +60,7 @@ type ProjectTab = typeof projectTabs[number];
 
 export function ProjectDetailPage() {
   const { projectId = '' } = useParams();
-  const { profiles } = useProfile();
+  const { profiles, activeProfileId } = useProfile();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
   const activeTab: ProjectTab = projectTabs.includes(requestedTab as ProjectTab) ? requestedTab as ProjectTab : 'board';
@@ -183,6 +184,9 @@ export function ProjectDetailPage() {
     () => profiles.filter((profile) => profile.active && profile.id !== project?.managerProfileId),
     [profiles, project?.managerProfileId],
   );
+
+  const canManage = project?.managerProfileId === activeProfileId
+    || grants.some(grant => grant.profileId === activeProfileId && grant.role === 'manage');
 
   const profileName = (profileId: string) => (
     profiles.find((profile) => profile.id === profileId)?.displayName ?? profileId
@@ -672,6 +676,7 @@ export function ProjectDetailPage() {
 
           <aside className="grid gap-4 lg:grid-cols-2">
             {activeTab === 'settings' && (<>
+            <ProjectGitHubAccess key={`${project.id}:${activeProfileId}`} projectId={project.id} canManage={canManage} disabled={busy} />
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
               <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Project owner & task routing</h2>
               <p className="mt-1 text-xs leading-5 text-zinc-500">Controls who owns this Project and becomes the default handler for new tasks.</p>
