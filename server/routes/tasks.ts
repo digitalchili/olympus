@@ -3,7 +3,7 @@ import db from '../db/index.js';
 import { putQueuedTaskMessage } from '../db/task-message-queue.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { parseTaskStart } from '../task-start.js';
-import { Router } from 'express';
+import { Router, type ErrorRequestHandler } from 'express';
 import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed, assertTaskFieldsAllowed, PermanentBotTaskError } from '../db/queries.js';
 import { getProject } from '../db/projects.js';
 import { broadcast } from '../events.js';
@@ -168,12 +168,12 @@ tasksRouter.post('/', async (req, res) => {
   }
 });
 
-tasksRouter.patch('/:id', requireTask, async (req, res) => {
+tasksRouter.patch('/:id', requireTask, async (req, res, next) => {
   const task = res.locals.task as Task;
   try { assertTaskFieldsAllowed(task, req.body); }
   catch (error) {
     if (error instanceof PermanentBotTaskError) return res.status(409).json({ error: error.message, code: 'BOT_TASK_PERMANENT' });
-    throw error;
+    return next(error);
   }
   const allowed = ['title', 'description', 'status'] as const;
   const fields: Record<string, unknown> = {};
@@ -192,10 +192,12 @@ tasksRouter.patch('/:id', requireTask, async (req, res) => {
     return res.status(400).json({ error: `status must be one of: ${TASK_STATUSES.join(', ')}` });
   }
 
-  const updated = updateTask(task.id, fields);
-  if (!updated) return res.status(404).json({ error: 'Task not found' });
-  broadcast({ type: 'task_updated', task: updated });
-  res.json({ task: updated });
+  try {
+    const updated = updateTask(task.id, fields);
+    if (!updated) return res.status(404).json({ error: 'Task not found' });
+    broadcast({ type: 'task_updated', task: updated });
+    res.json({ task: updated });
+  } catch (error) { next(error); }
 });
 
 tasksRouter.post('/:id/viewed', requireTask, (_req, res) => {
@@ -206,7 +208,7 @@ tasksRouter.post('/:id/viewed', requireTask, (_req, res) => {
   res.json({ task });
 });
 
-tasksRouter.delete('/:id', requireTask, async (_req, res) => {
+tasksRouter.delete('/:id', requireTask, async (_req, res, next) => {
   const task = res.locals.task as Task;
   if (task.kind === 'bot') return res.status(409).json({ error: new PermanentBotTaskError().message, code: 'BOT_TASK_PERMANENT' });
   if (getActiveProjectEditorForTask(task.id)) {
@@ -215,13 +217,15 @@ tasksRouter.delete('/:id', requireTask, async (_req, res) => {
       code: 'PROJECT_EDITOR_ACTIVE',
     });
   }
-  await cancelTaskRunForDeletion(task, adapter);
-  discardRun(task.id);
-  closeSubscribersForTasks([task.id]);
-  const deleted = deleteTask(task.id);
-  if (!deleted) return res.status(404).json({ error: 'Task not found' });
-  broadcast({ type: 'task_deleted', taskId: task.id }, task);
-  res.json({ ok: true });
+  try {
+    await cancelTaskRunForDeletion(task, adapter);
+    discardRun(task.id);
+    closeSubscribersForTasks([task.id]);
+    const deleted = deleteTask(task.id);
+    if (!deleted) return res.status(404).json({ error: 'Task not found' });
+    broadcast({ type: 'task_deleted', taskId: task.id }, task);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
 });
 
 tasksRouter.post('/:id/move', requireTask, (req, res) => {
@@ -237,3 +241,16 @@ tasksRouter.post('/:id/move', requireTask, (req, res) => {
   broadcast({ type: 'task_updated', task: updated });
   res.json({ task: updated });
 });
+
+const taskMutationErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
+  const messages: Record<string, string> = {
+    TASK_NOT_RELEASABLE: 'This task has protected approval history that blocks completion. An administrator must repair its legacy control record before it can be completed.',
+    TASK_CONTROL_EVENT_IMMUTABLE: 'This task has protected history and cannot be permanently deleted. An administrator must review its legacy control record; its history has been preserved.',
+  };
+  if (error?.code === 'SQLITE_CONSTRAINT_TRIGGER' && Object.hasOwn(messages, error.message)) {
+    res.status(409).json({ error: messages[error.message], code: error.message });
+    return;
+  }
+  next(error);
+};
+tasksRouter.use(taskMutationErrorHandler);

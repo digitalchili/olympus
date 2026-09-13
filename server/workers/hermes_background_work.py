@@ -269,7 +269,9 @@ def stop_background_work(
         # task's process just because it shares a session, or resolve an ID prefix.
         for process_id in ids:
             session = registry.get(process_id)
-            task_owner = getattr(session, "task_id", None)
+            # Session-scoped previews use task_id="session:<id>"; Hermes keeps
+            # their actual originating task in owner_task_id.
+            task_owner = getattr(session, "owner_task_id", None) or getattr(session, "task_id", None)
             owner = task_owner or getattr(session, "session_key", None)
             if getattr(session, "id", None) != process_id or owner not in owners:
                 return {**inventory, "errorCode": "BACKGROUND_WORK_CHANGED"}

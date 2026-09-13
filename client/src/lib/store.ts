@@ -147,8 +147,9 @@ export async function optimisticMoveTask(
   try {
     const res = await apiMove(task.id, status);
     upsertTask(res.task);
-  } catch {
+  } catch (error) {
     upsertTask(task);
+    throw error;
   }
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import type { TaskBackgroundWorkStatus } from '@shared/background-work';
 import { fetchTaskBackgroundWork, stopTaskBackgroundWork } from '../lib/api';
 import { toErrorMessage } from '../lib/format';
@@ -51,7 +52,13 @@ export function BackgroundWorkNotice({ taskId, isStreaming }: { taskId: string; 
     finally { setBusy(false); }
   };
   const blocked = Boolean(inventory?.work.length);
-  return <section aria-label="Task recovery" className="mx-auto mb-3 max-w-[760px] rounded-lg border border-zinc-200 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+  return <section aria-label="Task recovery" className="min-w-0 rounded-xl border border-zinc-200 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+    <details className="group/background">
+    <summary className="flex cursor-pointer list-none items-center gap-2 p-3 [&::-webkit-details-marker]:hidden">
+      <span className="min-w-0 flex-1 font-medium">Background work <span className="text-zinc-500">{error ? '· Needs attention' : blocked ? `· ${inventory!.work.length} active` : cleared ? '· Clear' : '· Check status'}</span></span>
+      <ChevronRight size={14} className="shrink-0 transition-transform group-open/background:rotate-90" />
+    </summary>
+    <div className="border-t border-zinc-100 p-3 dark:border-zinc-800">
     <p role="status" className="font-medium">{busy ? (confirming ? 'Stopping background work…' : 'Checking background work…')
       : cleared && !blocked ? 'Ready to continue — send your message below.'
       : inventory?.canStop ? 'Background work is keeping this task open.'
@@ -59,9 +66,11 @@ export function BackgroundWorkNotice({ taskId, isStreaming }: { taskId: string; 
     {blocked && <p className="mt-1">{inventory!.work.filter(item => item.kind === 'process').length} background command(s){inventory!.work.some(item => item.kind !== 'process') ? ' · Agent or delegated work is still active.' : ''}</p>}
     {confirming && <p className="mt-2">Stop this task’s background commands, including any preview server? This interrupts those commands. Saved files and chat are kept. Your message will not be sent automatically.</p>}
     {error && <p role="alert" className="mt-1 text-red-600">{error}</p>}
-    {(!cleared || blocked || error) && <div className="mt-2 flex gap-3">
+    {(!cleared || blocked || error) && <div className="mt-2 flex flex-wrap gap-3">
       <button disabled={busy} className="underline disabled:opacity-40" onClick={() => void checkAgain()}>{confirming ? 'Cancel' : 'Check again'}</button>
       {inventory?.canStop && <button disabled={busy} className="font-medium underline disabled:opacity-40" onClick={() => confirming ? void stop() : setConfirmation(inventory)}>{confirming ? 'Confirm stop' : 'Stop background work'}</button>}
     </div>}
+    </div>
+    </details>
   </section>;
 }

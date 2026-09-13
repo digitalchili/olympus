@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import type { CodingEvidence } from '@shared/coding-evidence';
 import { codingFailureDetails } from '@shared/coding-failure';
 import { fetchCodingEvidence, fetchTaskRecovery, pauseTaskRecovery, interruptTask, runCodingVerification, type TaskRecoveryStatus } from '../lib/api';
 
-export function CodingEvidencePanel({ taskId, isStreaming, onViewAgentReply }: { taskId: string; isStreaming: boolean; onViewAgentReply?: () => void }) {
+export function CodingEvidencePanel({ taskId, isStreaming, collapsed = false, onViewAgentReply }: { taskId: string; isStreaming: boolean; collapsed?: boolean; onViewAgentReply?: () => void }) {
   const [evidence, setEvidence] = useState<CodingEvidence | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -33,19 +34,21 @@ export function CodingEvidencePanel({ taskId, isStreaming, onViewAgentReply }: {
     passed: 'Checks passed', failed: 'Checks failed', stale: 'Changes need rechecking',
     unconfigured: 'Project checks not set up',
   };
-  return <section aria-label="Task checks and recovery" className="mx-auto mb-3 w-full min-w-0 max-w-[760px] text-xs text-zinc-600 dark:text-zinc-300">
+  return <section aria-label="Task checks and recovery" className={`w-full min-w-0 text-xs text-zinc-600 dark:text-zinc-300 ${collapsed ? 'rounded-xl border border-zinc-200 p-3 dark:border-zinc-700' : 'mx-auto mb-3 max-w-[760px]'}`}>
     {visibleEvidence && evidence && <div className="flex items-start gap-3">
-      <details key={`${evidence.runId}:${running}`} open={running || needsAttention || undefined} className="min-w-0 flex-1">
+      <details key={collapsed ? evidence.runId : `${evidence.runId}:${running}`} open={(!collapsed && (running || needsAttention)) || undefined} className="group/checks min-w-0 flex-1">
       <summary aria-label={running ? 'Running checks' : labels[evidence.status]} className="flex min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 py-1 [&::-webkit-details-marker]:hidden">
-        <span role="status" className={`font-medium ${evidence.status === 'pending' || evidence.status === 'skipped' ? 'underline' : ''}`}>{running ? 'Running checks…' : labels[evidence.status]}</span>
-        {finished && <span className="text-zinc-500">Finished <time dateTime={new Date(evidence.updatedAt).toISOString()}>{new Date(evidence.updatedAt).toLocaleString()}</time></span>}
-        {evidence.status === 'running' && evidence.currentCheck && <>
+        <span role="status" className={`font-medium ${needsAttention ? 'text-amber-700 dark:text-amber-400' : ''}`}>{running ? 'Running checks…' : labels[evidence.status]}</span>
+        {!collapsed && finished && <span className="text-zinc-500">Finished <time dateTime={new Date(evidence.updatedAt).toISOString()}>{new Date(evidence.updatedAt).toLocaleString()}</time></span>}
+        {!collapsed && evidence.status === 'running' && evidence.currentCheck && <>
           <span className="min-w-0 max-w-[50%] truncate" title={evidence.currentCheck.command.join(' ')}>{evidence.currentCheck.command.join(' ')}</span>
           <span className="text-zinc-500">· {Math.floor(evidence.currentCheck.durationMs / 1000)}s</span>
         </>}
-        {evidence.status !== 'pending' && evidence.status !== 'skipped' && <span className="text-zinc-500 underline">Details</span>}
+        {!collapsed && evidence.status !== 'pending' && evidence.status !== 'skipped' && <span className="text-zinc-500 underline">Details</span>}
+        {collapsed && <ChevronRight size={14} className="ml-auto shrink-0 text-zinc-500 transition-transform group-open/checks:rotate-90" />}
       </summary>
       <div className="mt-2 max-h-[40vh] overflow-y-auto rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+      {collapsed && finished && <p className="mb-2 text-zinc-500">Finished <time dateTime={new Date(evidence.updatedAt).toISOString()}>{new Date(evidence.updatedAt).toLocaleString()}</time></p>}
       {running && <p role="status" className="mb-3 font-medium">{evidence.status === 'running' ? 'Checking the project. Results will appear here.' : 'Starting checks. Waiting for the project…'}</p>}
       {!running && <ul className="mt-2 space-y-2">{evidence.checks.map((check, i) => {
         const failed = check.exitCode !== 0 || check.timedOut;
@@ -83,11 +86,12 @@ export function CodingEvidencePanel({ taskId, isStreaming, onViewAgentReply }: {
       {repairQueued && <button disabled={stopping} className="ml-3 underline disabled:opacity-40" onClick={() => {
         setStopping(true); setError(''); void pauseTaskRecovery(taskId).then(refresh).catch(e => setError(String(e))).finally(() => setStopping(false));
       }}>{stopping ? 'Pausing…' : 'Pause automatic repair'}</button>}
-      </details>
-      {running && <button disabled={stopping} className="shrink-0 py-1 underline disabled:opacity-40" onClick={() => {
+      {running && <button disabled={stopping} className="ml-3 py-1 underline disabled:opacity-40" onClick={() => {
         setStopping(true); setError('');
         void interruptTask(taskId, 'Verification stopped by user').then(refresh).catch(e => setError(String(e))).finally(() => setStopping(false));
       }}>{stopping ? 'Stopping…' : 'Stop checks'}</button>}
+      </details>
+
     </div>}
     {error && <p role="alert" className="mt-2 text-red-600">{error}</p>}
   </section>;

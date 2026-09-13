@@ -972,10 +972,11 @@ export function TaskChat({
 
   return (
     <div
-      className="relative flex w-full flex-col flex-1 min-h-0"
+      className="relative flex w-full flex-1 min-h-0 flex-col xl:flex-row"
       {...dragHandlers}
     >
       {dragOver && <AttachDropOverlay />}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex-1 min-h-0">
         <div
           ref={messagesContainerRef}
@@ -1144,7 +1145,6 @@ export function TaskChat({
                 </Fragment>
               );
             })}
-            <DelegationActivity runs={delegationRuns ?? []} />
             {runStopped && <ConversationDivider>Stopped by you</ConversationDivider>}
             {compactInFlight && (
               <ConversationDivider>
@@ -1189,8 +1189,6 @@ export function TaskChat({
               .finally(() => setContinuing(false));
           }} />
         {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
-        <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
-        {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} onViewAgentReply={viewAgentReply} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
@@ -1339,6 +1337,12 @@ export function TaskChat({
           </div>
         </div>
       </div>
+      </div>
+      <aside aria-label="Task activity" className="order-first grid max-h-[30vh] shrink-0 grid-cols-1 gap-2 overflow-y-auto border-b border-zinc-100 p-3 dark:border-zinc-800 sm:grid-cols-3 xl:order-last xl:max-h-none xl:w-72 xl:grid-cols-1 xl:content-start xl:border-b-0 xl:border-l [&:not(:has(section))]:hidden">
+        <DelegationActivity key={`delegation:${taskId}`} runs={delegationRuns ?? []} />
+        <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
+        {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} collapsed onViewAgentReply={viewAgentReply} />}
+      </aside>
     </div>
   );
 }

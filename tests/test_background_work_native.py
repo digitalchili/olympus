@@ -257,6 +257,34 @@ class BackgroundWorkNativeTests(unittest.TestCase):
             self.assertEqual(stopped, ["proc-owned"])
             self.assertNotIn("SECRET", json.dumps(result))
 
+    def test_stop_uses_native_owner_for_session_scoped_preview(self):
+        registry = FakeProcessRegistry({"task-1": [{"session_id": "proc-preview", "status": "running"}]})
+        session = types.SimpleNamespace(id="proc-preview", task_id="session:task-1",
+                                        owner_task_id="task-1", session_key="task-1")
+        registry.get = lambda process_id: session
+        stopped = []
+        def kill(process_id):
+            stopped.append(process_id)
+            registry.by_scope["task-1"] = []
+            return {"status": "killed"}
+        registry.kill_process = kill
+        delegates = FakeAsyncDelegation()
+        delegates._records = {}
+        with isolated_hermes_home():
+            request = {"sessionId": "task-1", "processIds": ["proc-preview"]}
+            # A shared session key must never override another task's native owner.
+            session.owner_task_id = "other-task"
+            rejected = hermes_background_work.stop_background_work(
+                request, process_registry=registry, async_delegation=delegates)
+            self.assertEqual(rejected["errorCode"], "BACKGROUND_WORK_CHANGED")
+            self.assertEqual(stopped, [])
+            session.owner_task_id = "task-1"
+            result = hermes_background_work.stop_background_work(
+                request, process_registry=registry, async_delegation=delegates)
+            self.assertNotIn("errorCode", result)
+            self.assertEqual(result["work"], [])
+            self.assertEqual(stopped, ["proc-preview"])
+
     @unittest.skipUnless(NATIVE_SOURCE, "native Hermes source not selected")
     def test_cold_worker_jsonl_inventory_rpc_without_model_calls(self):
         import subprocess

@@ -19,7 +19,7 @@ import {
 } from '../lib/api';
 import { TASK_STATUSES } from '@shared/types';
 import { STATUS_META } from '../lib/constants';
-import { timeAgo } from '../lib/format';
+import { timeAgo, toErrorMessage } from '../lib/format';
 import { isEditableTarget } from '../lib/keyboard';
 import { TaskChat } from './TaskChat';
 import {
@@ -222,24 +222,30 @@ export function TaskDetailPage() {
   const handleStatusChange = useCallback(async (status: TaskStatus) => {
     if (!task) return;
     setShowMenu(false);
+    try {
+      await optimisticMoveTask(task, status, upsertTask, moveTask);
+    } catch (error) {
+      toast.error(toErrorMessage(error, 'Could not change task status'));
+      return;
+    }
     if (status === 'done') {
       const previousStatus = task.status;
       const taskId = task.id;
-      optimisticMoveTask(task, 'done', upsertTask, moveTask);
       navigate(parentPath);
       toast('Task completed', {
         icon: <Check size={14} strokeWidth={2.5} className="text-zinc-500 dark:text-zinc-400" />,
         action: {
           label: 'Undo',
-          onClick: () => {
+          onClick: async () => {
             const { tasks, upsertTask: storeUpsert } = useStore.getState();
             const current = tasks.find((t) => t.id === taskId);
-            if (current) optimisticMoveTask(current, previousStatus, storeUpsert, moveTask);
+            if (current) {
+              try { await optimisticMoveTask(current, previousStatus, storeUpsert, moveTask); }
+              catch (error) { toast.error(toErrorMessage(error, 'Could not undo task completion')); }
+            }
           },
         },
       });
-    } else {
-      await optimisticMoveTask(task, status, upsertTask, moveTask);
     }
   }, [task, upsertTask, navigate, parentPath]);
 
@@ -265,7 +271,9 @@ export function TaskDetailPage() {
       await deleteTask(task.id);
       removeTask(task.id);
       navigate(parentPath);
-    } catch {}
+    } catch (error) {
+      toast.error(toErrorMessage(error, 'Could not delete task'));
+    }
   }, [task, removeTask, navigate, parentPath]);
 
   if (!task) {

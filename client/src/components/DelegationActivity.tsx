@@ -59,7 +59,7 @@ function WorkerRow({ run, now, detailed = false }: { run: DelegationRun; now: nu
       <div className="flex min-w-0 items-start gap-2">
         <StatusIcon run={run} />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-200">
               Delegated worker {run.child_index + 1}
             </span>
@@ -67,7 +67,7 @@ function WorkerRow({ run, now, detailed = false }: { run: DelegationRun; now: nu
               {STATUS_LABELS[run.status]}
             </span>
           </div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-zinc-500 dark:text-zinc-400">
             <span className="truncate">{formatAction(run)}</span>
             <span className="shrink-0">· {formatLastActivity(run, now)}</span>
           </div>
@@ -126,10 +126,15 @@ export function DelegationActivity({ runs }: { runs: DelegationRun[] }) {
 
   return (
     <>
-      <section aria-label="Delegated worker activity" className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-700 dark:bg-zinc-900/60">
+      <section aria-label="Delegated worker activity" className="min-w-0 rounded-xl border border-zinc-200 text-xs dark:border-zinc-700">
+        <details className="group/workers">
+        <summary className="flex cursor-pointer list-none items-center gap-2 p-3 [&::-webkit-details-marker]:hidden">
+          <Activity size={14} className="shrink-0 text-sky-500" />
+          <span className="min-w-0 flex-1 font-medium text-zinc-700 dark:text-zinc-200">{summary.title}</span>
+          <ChevronRight size={14} className="shrink-0 text-zinc-500 transition-transform group-open/workers:rotate-90" />
+        </summary>
+        <div className="border-t border-zinc-100 p-3 dark:border-zinc-800">
         <div className="flex items-center gap-2">
-          <Activity size={15} className="shrink-0 text-sky-500" />
-          <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{summary.title}</span>
           <button
             ref={triggerRef}
             type="button"
@@ -142,6 +147,8 @@ export function DelegationActivity({ runs }: { runs: DelegationRun[] }) {
         <div className="mt-2 space-y-2">
           {sorted.slice(0, 3).map((run) => <WorkerRow key={run.id} run={run} now={now} />)}
         </div>
+        </div>
+        </details>
       </section>
 
       {open && (

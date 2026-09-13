@@ -100,7 +100,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
         return res.status(503).json({ code: 'BACKGROUND_WORK_UNAVAILABLE', error: 'Could not verify whether this task still has background work. Nothing new was started. Retry the check before continuing.' });
       }
       if (inventory.work.length > 0) {
-        return res.status(409).json({ code: 'BACKGROUND_WORK_ACTIVE', error: 'This task has background work. Use the recovery controls above the message box to check or stop it, then send your message again.' });
+        return res.status(409).json({ code: 'BACKGROUND_WORK_ACTIVE', error: 'This task has background work. Open the Background work card to check or stop it, then send your message again.' });
       }
       if (req.body.recoveryOfRunId !== undefined) {
         const recovery = getRecovery(task.id);
