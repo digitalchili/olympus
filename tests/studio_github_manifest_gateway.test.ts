@@ -61,6 +61,7 @@ try {
     metadata: 'read',
     contents: 'write',
     pull_requests: 'write',
+    workflows: 'write',
   });
   assert.deepEqual(manifest.default_events, []);
   assert.equal(manifest.request_oauth_on_install, false);

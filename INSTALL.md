@@ -14,6 +14,14 @@ If you gave a Hermes Agent this repository URL, use this prompt:
 
 The agent should not paste credentials into chat, expose secrets, or enable public network access by default.
 
+## GitHub publishing permissions
+
+The Olympus GitHub App needs **Contents**, **Pull requests**, and **Workflows** repository permissions set to **Read and write** for Project publishing. Workflows permission is needed to push repositories containing `.github/workflows/*`; new App registrations request it automatically. Read-only Project source connections still use only Metadata and Contents read access.
+
+For an App created with v0.7.16 or earlier, updating Olympus does not change the existing GitHub grant. In the App owner's GitHub settings, open the Olympus App's **Permissions & events**, add **Workflows: Read and write**, and save. The installation's account owner must then approve the additional permission. Reconnect the account in Olympus **Settings → GitHub** to refresh its permission status. Keep the same App and installation; do not recreate Projects or remove workflow files to work around a rejected push.
+
+The updated Olympus code must also be running: v0.7.16 explicitly omits Workflows from its installation-token requests even if GitHub has granted it. After both changes, retry the saved Commit & Push and verify its result. GitHub permission approval does not itself publish code or deploy an application.
+
 ## macOS
 
 Requirements: Node.js 22.22–25 (Node 22 LTS recommended) and an installed Hermes Agent checkout/venv.

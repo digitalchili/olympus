@@ -15,6 +15,7 @@ import {
   reactivateProjectEditor,
 } from './db/project-cp.js';
 import { getTask, updateTask } from './db/queries.js';
+import { GitHubPermissionUpgradeError } from './studio/github-permissions.js';
 
 const execFile = promisify(execFileCallback);
 const MAX_DIFF_BYTES = 60_000;
@@ -287,6 +288,9 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         // Preserve the original push error; an unreachable remote is not proof of success.
       }
       await git(input.lease.workdir, ['reset', '--soft', input.parentSha]);
+      if (error instanceof Error && /refusing to allow a GitHub App to create or update workflow .*without [`']?workflows[`']? permission/i.test(error.message)) {
+        throw new GitHubPermissionUpgradeError();
+      }
       throw error;
     }
   }

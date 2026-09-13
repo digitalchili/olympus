@@ -10,6 +10,7 @@ import { hasActiveTaskRun, hasTaskOperation, claimPreparedTaskWorkspace } from '
 import { requireTaskForProfile } from '../profile-context.js';
 import type { StudioGitHubGateway } from './studio.js';
 import { DEFAULT_PROFILE_NAME, type QueuedTaskMessage, type Task } from '../../shared/types.js';
+import { GitHubPermissionUpgradeError } from '../studio/github-permissions.js';
 
 interface ProjectTaskWorkspaceRouterOptions {
   projectCp: ProjectCpService;
@@ -81,6 +82,9 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       });
     } catch (error) {
       restoreConsumedQueue();
+      if (error instanceof GitHubPermissionUpgradeError) {
+        return res.status(409).json({ error: error.message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
+      }
       if (error instanceof ProjectRepositoryCheckpointError) {
         return res.status(409).json({ error: error.message, code: 'PROJECT_CHECKPOINT_PENDING', activeTaskId: error.activeTaskId });
       }
@@ -152,6 +156,9 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       });
     } catch (error) {
       restoreConsumedQueue();
+      if (error instanceof GitHubPermissionUpgradeError) {
+        return res.status(409).json({ error: error.message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
+      }
       const message = error instanceof Error ? error.message : 'Project commit and push failed';
       const expectedConflict = /There are no changes|not the Project editor|will not push directly|Commit message/i.test(message);
       return res.status(expectedConflict ? 409 : 503).json({

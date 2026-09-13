@@ -190,7 +190,7 @@ function QueuedMessageBar({
             <span className="shrink-0 rounded-md bg-zinc-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
               Queued
             </span>
-            <span className={`min-w-0 truncate text-xs ${error ? 'text-red-500' : 'text-zinc-500 dark:text-zinc-400'}`}>
+            <span role={error ? 'alert' : undefined} className={`min-w-0 text-xs ${error ? 'whitespace-pre-wrap break-words text-red-500' : 'truncate text-zinc-500 dark:text-zinc-400'}`}>
               {statusLabel}
             </span>
           </div>

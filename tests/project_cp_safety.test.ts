@@ -71,6 +71,22 @@ try {
   assert.equal(JSON.stringify(calls.map((call) => call.args)).includes('ghs_SECRET_TEST'), false, 'token never appears in process arguments');
   assert.equal(JSON.stringify(process.env).includes('ghs_SECRET_TEST'), false, 'token is not added to the parent process environment');
 
+  const workflowService = createProjectCpService({ rootDir: join(root, 'managed'), gitRunner: async (cwd, args, options) => {
+    if (args[0] === 'push') {
+      throw new Error('refusing to allow a GitHub App to create or update workflow `.github/workflows/verify.yml` without `workflows` permission');
+    }
+    return gitRunner(cwd, args, options);
+  } });
+  await assert.rejects(workflowService.commitPush({ projectId: project.id, taskId: task.id, repositoryLink: link,
+    message: 'Publish workflow', tokenProvider: async () => 'ghs_SECRET_TEST',
+  }), (error: any) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /permission upgrade.*Workflows/i);
+    assert.equal(error.message.includes('ghs_SECRET_TEST'), false);
+    return true;
+  });
+  assert.equal(listProjectVersions(project.id).length, 0);
+
   head = 'a'.repeat(40);
   dirty = true;
   calls.length = 0;

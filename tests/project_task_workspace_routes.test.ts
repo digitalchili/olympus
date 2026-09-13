@@ -195,6 +195,17 @@ try {
     createdAt: 40_000,
     updatedAt: 40_000,
   });
+  // Reproduce GitHub's workflow rejection through real Git and the queued HTTP route.
+  const rejectionHook = join(remote, 'hooks', 'pre-receive');
+  await writeFile(rejectionHook, '#!/bin/sh\necho "refusing to allow a GitHub App to create or update workflow without workflows permission" >&2\nexit 1\n', { mode: 0o755 });
+  const permissionBlocked = await postMessage(secondTask.id, 'default', queuedContent, 'queue-commit-1');
+  assert.equal(permissionBlocked.status, 409, JSON.stringify(permissionBlocked.body));
+  assert.equal(permissionBlocked.body.code, 'GITHUB_PERMISSION_UPGRADE_REQUIRED');
+  assert.match(String(permissionBlocked.body.error), /permission upgrade.*Workflows/i);
+  assert.equal(getQueuedTaskMessage(secondTask.id)?.id, 'queue-commit-1', 'permission rejection preserves the exact queued request');
+  assert.match(await git(workdir, ['status', '--porcelain']), /QUEUED-COMMIT\.md/, 'rejected work is still available');
+  await rm(rejectionHook);
+
   const queuedCommit = await postMessage(secondTask.id, 'default', queuedContent, 'queue-commit-1');
   assert.equal(queuedCommit.status, 200, JSON.stringify(queuedCommit.body));
   assert.equal(getQueuedTaskMessage(secondTask.id), undefined, 'a successful queued commit is consumed exactly once');

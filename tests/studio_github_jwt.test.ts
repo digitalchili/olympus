@@ -26,7 +26,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
     return Response.json({
       id: 44,
       account: { login: 'leakim69', type: 'User' },
-      permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
+      permissions: { metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' },
     });
   }
   if (url.endsWith('/app/installations/44/access_tokens')) {
@@ -101,6 +101,32 @@ assert.equal(verify(
   Buffer.from(encodedSignature, 'base64url'),
 ), true);
 
+const legacyGateway = createGitHubAppGateway({
+  env: {
+    OLYMPUS_STUDIO_GITHUB_APP_ID: '12345', OLYMPUS_STUDIO_GITHUB_APP_SLUG: 'test',
+    OLYMPUS_STUDIO_GITHUB_PRIVATE_KEY: privateKeyPem,
+    OLYMPUS_STUDIO_GITHUB_CLIENT_ID: 'test', OLYMPUS_STUDIO_GITHUB_CLIENT_SECRET: 'test',
+  },
+  fetchImpl: async (input, init) => {
+    if (String(input).endsWith('/app/installations/44')) {
+      return Response.json({ id: 44, account: { login: 'leakim69', type: 'User' },
+        permissions: { contents: 'write', pull_requests: 'write' } });
+    }
+    if (String(input).endsWith('/access_tokens')) {
+      return Response.json({ message: 'The permissions requested are not granted to this installation.' }, { status: 422 });
+    }
+    return fakeFetch(input, init);
+  },
+});
+assert.equal((await legacyGateway.authorizeInstallation('oauth-code', 44)).permissionMode, 'upgrade_required',
+  'a connection without workflow permission needs an upgrade');
+await assert.rejects(legacyGateway.installationToken!(44), (error: any) => {
+  assert.equal(error.statusCode, 409);
+  assert.match(error.message, /permission upgrade.*Workflows/i);
+  return true;
+});
+
+await gateway.installationToken!(44);
 const repositories = await gateway.listRepositories(44);
 assert.deepEqual(repositories, [{
   id: 101,
@@ -116,7 +142,7 @@ assert.equal(requests.at(-1)?.authorization, 'Bearer short-lived-installation-to
 const installationTokenRequest = requests.find((entry) => entry.url.endsWith('/app/installations/44/access_tokens'));
 assert.ok(installationTokenRequest);
 assert.deepEqual(JSON.parse(installationTokenRequest.body), {
-  permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
+  permissions: { metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' },
 });
 assert.equal(repositories[0].defaultBranch, 'main');
 assert.equal(repositories[0].cloneUrl, 'https://github.com/leakim69/olympus-dispatch.git');

@@ -22,7 +22,9 @@ assert.deepEqual(requests[0], { url: 'https://api.github.com/app/installations/2
 await gateway.listRepositories(22, { readOnly: true });
 assert.deepEqual(requests[1].body, { permissions: { metadata: 'read', contents: 'read' } });
 await gateway.installationToken!(11);
-assert.deepEqual(requests[2].body, { permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' } }, 'primary publish behavior remains unchanged');
+assert.deepEqual(requests[2].body, { permissions: { metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' } }, 'publishing tokens can update workflow files');
+await gateway.listRepositories(11);
+assert.deepEqual(requests[3].body, { permissions: { metadata: 'read', contents: 'read' } }, 'repository browsing works before publishing permissions are upgraded');
 for (const stage of ['token-fetch', 'token-body', 'catalog-fetch', 'catalog-body']) {
   const controller = new AbortController();
   let observedSignal: AbortSignal | null | undefined;

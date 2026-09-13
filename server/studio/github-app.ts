@@ -1,6 +1,7 @@
 import { createHash, createSign } from 'node:crypto';
 import type { StudioGitHubRepository } from '../../shared/types.js';
 import type { StudioGitHubGateway } from '../routes/studio.js';
+import { GitHubPermissionUpgradeError } from './github-permissions.js';
 import type {
   GitHubCredentialStore,
   StudioGitHubAppConfig,
@@ -96,7 +97,16 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
         ? AbortSignal.any([init.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
         : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`GitHub App request failed (${response.status}).`);
+    if (!response.ok) {
+      if (response.status === 422 && path.endsWith('/access_tokens') && typeof init?.body === 'string'
+        && JSON.parse(init.body).permissions?.workflows === 'write') {
+        const payload = await response.json().catch(() => null) as { message?: unknown } | null;
+        if (typeof payload?.message === 'string' && /permissions requested are not granted/i.test(payload.message)) {
+          throw new GitHubPermissionUpgradeError();
+        }
+      }
+      throw new Error(`GitHub App request failed (${response.status}).`);
+    }
     return response;
   }
 
@@ -106,7 +116,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
       signal: scope?.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        permissions: scope?.readOnly ? { metadata: 'read', contents: 'read' } : { metadata: 'read', contents: 'write', pull_requests: 'write' },
+        permissions: scope?.readOnly ? { metadata: 'read', contents: 'read' } : { metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' },
         ...(scope?.repositoryId ? { repository_ids: [requiredSafeInteger(scope.repositoryId, 'repository id')] } : {}),
       }),
     });
@@ -124,7 +134,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
     const payload = await response.json() as {
       id?: unknown;
       account?: { login?: unknown; type?: unknown };
-      permissions?: { contents?: unknown; pull_requests?: unknown };
+      permissions?: { contents?: unknown; pull_requests?: unknown; workflows?: unknown };
     };
     const accountType = payload.account?.type;
     if (accountType !== 'User' && accountType !== 'Organization') {
@@ -134,7 +144,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
       id: requiredSafeInteger(payload.id, 'installation id'),
       accountLogin: requiredString(payload.account?.login, 'installation account login'),
       accountType,
-      permissionMode: payload.permissions?.contents === 'write' && payload.permissions?.pull_requests === 'write'
+      permissionMode: payload.permissions?.contents === 'write' && payload.permissions?.pull_requests === 'write' && payload.permissions?.workflows === 'write'
         ? 'read_write'
         : 'upgrade_required',
     };
@@ -206,7 +216,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
         callback_urls: [`${baseUrl}/api/studio/github/oauth/callback`],
         setup_url: `${baseUrl}/api/studio/github/callback`,
         public: false,
-        default_permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
+        default_permissions: { metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' },
         default_events: [],
         request_oauth_on_install: false,
       };
@@ -269,7 +279,7 @@ export function createGitHubAppGateway(options: GitHubAppOptions = {}): StudioGi
     },
 
     async listRepositories(installationId: number, scope?: { readOnly?: boolean; signal?: AbortSignal }): Promise<StudioGitHubRepository[]> {
-      const token = await installationToken(installationId, scope);
+      const token = await installationToken(installationId, { ...scope, readOnly: true });
       const repositories: StudioGitHubRepository[] = [];
       let expectedTotal = Number.POSITIVE_INFINITY;
 
