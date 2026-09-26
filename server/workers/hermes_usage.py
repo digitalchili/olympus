@@ -80,3 +80,7 @@ def get_usage(defaults, config, refresh=False):
         _cached_at = time.monotonic()
         _cached_default = default
         return _cached
+def clear_usage_cache():
+    global _cached, _cached_at, _cached_default
+    with _lock:
+        _cached, _cached_at, _cached_default = None, 0.0, None

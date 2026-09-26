@@ -14,6 +14,7 @@ import json
 import os
 import queue
 import re
+import signal
 import sys
 import threading
 import time
@@ -71,6 +72,9 @@ ACTIVE_AGENTS: dict[str, Any] = {}
 PENDING_INTERRUPTS: dict[str, str] = {}
 ACTIVE_TASKS_LOCK = threading.Lock()
 PROVIDER_CONFIG_LOCK = threading.Lock()
+OPENAI_AUTH_GUARDED = False
+_OPENAI_AUTH_MANAGER = None
+_OPENAI_AUTH_MANAGER_LOCK = threading.Lock()
 DEFAULT_INTERRUPT_REASON = "Stopped by user"
 
 ALLOWED_REASONING = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -138,6 +142,7 @@ _SessionDB: Any = None
 _CONFIG_CACHE: dict[str, Any] | None = None
 _CONFIG_MTIME: float = 0.0
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_OPENAI_AUTH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='openai-auth-save')
 _CURATED_MODEL_CATALOG_URL = os.environ.get(
     "OLYMPUS_DISPATCH_MODEL_CATALOG_URL",
     "https://raw.githubusercontent.com/digitalchili/olympus/main/catalog/model-catalog.json",
@@ -415,7 +420,20 @@ def _result(request_id: str, data: dict[str, Any]) -> None:
     _send({"id": request_id, "type": "result", "data": data})
 
 
+def _openai_result_failure(result: dict[str, Any], provider: str | None):
+    if provider == 'openai-codex' and result.get('failed') is True and result.get('failure_reason') in {'auth', 'auth_permanent'}:
+        return ('OpenAI needs you to sign in again. Open OpenAI sign-in in Olympus.', 'openai_auth_required')
+    return None
+
+
 def _error_payload(exc: BaseException) -> dict[str, str]:
+    if getattr(exc, 'provider', None) == 'openai-codex' and hasattr(exc, 'relogin_required'):
+        required = getattr(exc, 'relogin_required', False) is True
+        return {
+            'message': 'OpenAI needs you to sign in again.' if required else 'OpenAI sign-in could not be checked right now.',
+            'code': 'openai_auth_required' if required else 'openai_auth_unavailable',
+            'hint': 'Open OpenAI sign-in in Olympus.' if required else 'Check the saved login in Olympus and try again.',
+        }
     if isinstance(exc, WorkerError):
         payload = {"message": str(exc), "code": exc.code}
         if exc.hint:
@@ -885,6 +903,8 @@ def _apply_task_workdir(request: dict[str, Any]) -> None:
 
 def _try_mark_task_active(task_key: str, request_id: str) -> bool:
     with ACTIVE_TASKS_LOCK:
+        if OPENAI_AUTH_GUARDED:
+            raise WorkerError('OpenAI sign-in is being saved. Try again shortly.', code='auth_busy')
         if task_key in ACTIVE_TASKS:
             return False
         ACTIVE_TASKS[task_key] = request_id
@@ -1632,7 +1652,7 @@ def _create_agent(
         )
     except Exception as exc:
         err = _error_payload(exc)
-        raise WorkerError(str(exc), code=err.get("code", "worker_error"), hint=err.get("hint")) from exc
+        raise WorkerError(err['message'], code=err.get("code", "worker_error"), hint=err.get("hint")) from exc
 
     if not resolved_provider:
         resolved_provider = string_or_none(runtime.get("provider"))
@@ -2183,6 +2203,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
                     ),
                 }]
 
+            auth_failure = _openai_result_failure(result, string_or_none(getattr(agent, 'provider', None)))
+            if auth_failure:
+                raise WorkerError(auth_failure[0], code=auth_failure[1])
             final_text = str(result.get("final_response") or "")
             failure_message = _agent_failure_message(final_text)
             if failure_message:
@@ -2389,6 +2412,9 @@ def _submit_background_agent_request(
     task_key: str | None = None,
     uses_agent_slot: bool = True,
 ) -> None:
+    # Title/evaluator work also reads credentials and must finish before replacement.
+    if task_key is None:
+        task_key = f'auth-operation:{request_id}'
     if task_key and not _try_mark_task_active(task_key, request_id):
         _send_error(
             request_id,
@@ -2570,7 +2596,7 @@ def _handle_usage_request(request_id: str, refresh: bool) -> None:
 def _provider_mutation():
     from hermes_providers import ProviderError
     with PROVIDER_CONFIG_LOCK, ACTIVE_TASKS_LOCK:
-        if ACTIVE_TASKS:
+        if ACTIVE_TASKS or OPENAI_AUTH_GUARDED:
             raise ProviderError('This profile has running tasks. Let them finish before saving provider changes.')
         yield
 
@@ -2591,6 +2617,63 @@ def _handle_provider_request(request_id: str, request: dict[str, Any]) -> None:
         _send_error(request_id, WorkerError(message, code='provider_setup_failed'))
 
 
+def _set_openai_auth_guard(enabled: bool) -> dict[str, Any]:
+    global OPENAI_AUTH_GUARDED
+    from hermes_scheduled_tasks import _SCHEDULED_TASKS_DISPATCH_LOCK, set_scheduled_auth_guard
+    with _SCHEDULED_TASKS_DISPATCH_LOCK, PROVIDER_CONFIG_LOCK, ACTIVE_TASKS_LOCK:
+        OPENAI_AUTH_GUARDED = enabled
+        scheduled = set_scheduled_auth_guard(enabled)
+        return {'guarded': enabled, 'activeRuns': len(ACTIVE_TASKS) + scheduled}
+
+
+@contextmanager
+def _openai_commit_guard():
+    from hermes_scheduled_tasks import _SCHEDULED_TASKS_DISPATCH_LOCK, set_scheduled_auth_guard
+    with _SCHEDULED_TASKS_DISPATCH_LOCK, PROVIDER_CONFIG_LOCK, ACTIVE_TASKS_LOCK:
+        if not OPENAI_AUTH_GUARDED or ACTIVE_TASKS or set_scheduled_auth_guard(True):
+            raise WorkerError('Waiting for active work before saving sign-in.', code='auth_busy')
+        yield
+
+
+def _invalidate_openai_caches():
+    global _CONFIG_CACHE
+    _CONFIG_CACHE = None
+    _clear_model_list_cache()
+    from hermes_usage import clear_usage_cache
+    clear_usage_cache()
+
+
+def _openai_auth_manager():
+    global _OPENAI_AUTH_MANAGER
+    with _OPENAI_AUTH_MANAGER_LOCK:
+        if _OPENAI_AUTH_MANAGER is None:
+            from hermes_openai_auth import OpenAIAuthManager
+            _OPENAI_AUTH_MANAGER = OpenAIAuthManager(
+                hermes_home=Path(os.environ.get('HERMES_HOME', str(Path.home() / '.hermes'))),
+                agent_dir=_discover_agent_dir,
+                is_default=os.environ.get('OLYMPUS_OPENAI_AUTH_SHARED') == '1',
+                commit_guard=_openai_commit_guard,
+                on_saved=_invalidate_openai_caches,
+            )
+        return _OPENAI_AUTH_MANAGER
+
+
+def _handle_openai_auth_request(request_id: str, request: dict[str, Any]) -> None:
+    try:
+        if request.get('action') == 'guard':
+            if not isinstance(request.get('enabled'), bool):
+                raise WorkerError('Invalid sign-in guard.', code='bad_request')
+            result = _set_openai_auth_guard(request['enabled'])
+        else:
+            result = _openai_auth_manager().handle(request)
+            if request.get('action') == 'invalidate':
+                _invalidate_openai_caches()
+        _result(request_id, result)
+    except Exception as error:
+        from hermes_openai_auth import safe_code
+        _send_error(request_id, WorkerError('OpenAI sign-in is unavailable right now.', code=safe_code(getattr(error, 'code', None))))
+
+
 def _handle_request(request: dict[str, Any]) -> None:
     request_id = str(request.get("id") or "")
     if not request_id:
@@ -2609,8 +2692,18 @@ def _handle_request(request: dict[str, Any]) -> None:
         elif request_type == "settings.get":
             _result(request_id, _defaults_from_config())
         elif request_type == "settings.set":
+            if OPENAI_AUTH_GUARDED:
+                raise WorkerError('OpenAI sign-in is being saved. Try again shortly.', code='auth_busy')
             with PROVIDER_CONFIG_LOCK:
+                if OPENAI_AUTH_GUARDED:
+                    raise WorkerError('OpenAI sign-in is being saved. Try again shortly.', code='auth_busy')
                 _result(request_id, _set_defaults(request))
+        elif request_type == 'auth.openai':
+            if request.get('action') in {'guard', 'commit'}:
+                # Preserve reader order even when Node times out waiting for a reply.
+                _OPENAI_AUTH_EXECUTOR.submit(_handle_openai_auth_request, request_id, request)
+            else:
+                threading.Thread(target=_handle_openai_auth_request, args=(request_id, request), daemon=True).start()
         elif request_type == "models.list":
             _result(request_id, _list_models())
         elif request_type == "providers.manage":
@@ -2762,12 +2855,20 @@ def main() -> int:
     if args.self_test:
         return _self_test()
 
+    def stop_worker(_signal, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop_worker)
     sys.stdout = sys.stderr
     start_scheduled_task_ticker()
     try:
         _run_loop()
     except KeyboardInterrupt:
         pass
+    finally:
+        _OPENAI_AUTH_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+        if _OPENAI_AUTH_MANAGER is not None:
+            _OPENAI_AUTH_MANAGER.close()
     return 0
 
 

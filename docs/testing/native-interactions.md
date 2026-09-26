@@ -5,7 +5,7 @@ This opt-in test exercises the built Olympus app, real Hermes `AIAgent` and nati
 ## Prerequisites
 
 - Run `npm run build` first.
-- An independently installed Hermes v0.21 environment and matching source checkout (release tag `v2026.8.31`). The normal npm test suite does not install Hermes.
+- An independently installed Hermes v0.21 environment and matching source checkout (current pinned release tag `v2026.9.24`; see [compatibility evidence](../coding-harness.md#hermes-compatibility)). The normal npm test suite does not install Hermes.
 - Playwright with Chromium already installed in a dedicated scratch location. Browser packages and binaries are not added to runtime dependencies.
 
 ```sh

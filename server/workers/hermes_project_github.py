@@ -41,7 +41,12 @@ _install_lock = threading.Lock()
 def _install_refresh_guard() -> None:
     with _install_lock:
         try:
-            native = importlib.import_module('tools.mcp_tool')
+            # Patch the implementation owner; the old facade no longer exports
+            # this hook in Hermes v2026.9.24.
+            try:
+                native = importlib.import_module('tools.mcp_tool_agent')
+            except ImportError:
+                native = importlib.import_module('tools.mcp_tool')
             original = getattr(native, '_reinject_post_build_tools', None)
             if not callable(original):
                 compression = importlib.import_module('agent.conversation_compression')

@@ -151,6 +151,20 @@ class BotMessagingTests(unittest.TestCase):
         with self.assertRaisesRegex(BotMessageError, 'tool refresh hook'):
             self.configure('task-b', 'run-b')
 
+    def test_new_dynamic_refresh_gate_keeps_only_olympus_authority(self):
+        owner = ModuleType('tools.mcp_tool_agent')
+        def native_gate(agent, tools, names):
+            tools.append(copy.deepcopy(SCHEMA))
+            names.add('message_agent')
+        owner._reinject_authorized_dynamic_tools = native_gate
+        with patch.dict(sys.modules, {'tools.mcp_tool_agent': owner}):
+            authorized = self.configure('task-b', 'run-b')
+            for agent, allowed in ((authorized, True), (SimpleNamespace(), False)):
+                tools, names = [], set()
+                owner._reinject_authorized_dynamic_tools(agent, tools, names)
+                self.assertEqual('message_agent' in names, allowed)
+                self.assertEqual(len(tools), int(allowed))
+
     def test_worker_ack_rpc_and_interrupt_use_the_bound_broker(self):
         import hermes_worker as worker
         future, request = self.begin()
@@ -195,7 +209,11 @@ from unittest.mock import patch
 sys.path.insert(0, SOURCE)
 sys.path.insert(0, WORKERS)
 from hermes_bot_messaging import configure_bot_agent, BotMessageBroker
-from tools import bot_mode_dm, mcp_tool
+from tools import bot_mode_dm
+try:
+    from tools import mcp_tool_agent as mcp_tool
+except ImportError:
+    from tools import mcp_tool
 from agent import tool_executor
 from agent.conversation_compression import _refresh_agent_tool_definitions
 
@@ -233,7 +251,11 @@ with patch('model_tools.get_tool_definitions', return_value=[refreshed_tool]) as
     assert agent.tools[0]['function']['parameters'] == native_parameters
     assert agent._bot_mode_protocol is False
     ordinary = fake_agent()
-    mcp_tool.refresh_agent_mcp_tools(ordinary)
+    if hasattr(bot_mode_dm, 'message_agent_authorized'):
+        with patch.object(bot_mode_dm, 'message_agent_authorized', return_value=True):
+            mcp_tool.refresh_agent_mcp_tools(ordinary)
+    else:
+        mcp_tool.refresh_agent_mcp_tools(ordinary)
     assert 'message_agent' not in ordinary.valid_tool_names
 
 # Keep native dispatch and canonical tool-result creation real. Skip provider,

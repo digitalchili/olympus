@@ -123,6 +123,22 @@ class ProjectGitHubTests(unittest.TestCase):
             self.configure('task-b', 'run-b', 'session-b')
         self.assertFalse(json.loads(self.handler({'action': 'list'}, task_id='session-b'))['ok'])
 
+    def test_new_refresh_owner_preserves_run_scoped_authority(self):
+        owner = ModuleType('tools.mcp_tool_agent')
+        owner._reinject_post_build_tools = lambda agent, tools, names: {'native'}
+        with patch.dict(sys.modules, {'tools.mcp_tool_agent': owner}):
+            authorized = self.configure('task-b', 'run-b', 'session-b')
+            for agent, allowed in ((authorized, True), (SimpleNamespace(), False)):
+                tools = [{'type': 'function', 'function': {'name': 'project_github'}}]
+                names = {'project_github'}
+                self.assertEqual(owner._reinject_post_build_tools(agent, tools, names), {'native'})
+                self.assertEqual('project_github' in names, allowed)
+                self.assertEqual(len(tools), int(allowed))
+            self.broker.cancel_run('run-b')
+            tools, names = [], set()
+            owner._reinject_post_build_tools(authorized, tools, names)
+            self.assertEqual(tools, [])
+
     def test_fixed_schema_native_does_not_require_refresh_hook(self):
         del self.mcp._reinject_post_build_tools
         compression = ModuleType('agent.conversation_compression')
@@ -220,7 +236,10 @@ sys.path.insert(0, SOURCE)
 sys.path.insert(0, WORKERS)
 from hermes_project_github import ProjectGitHubBroker, configure_project_github_agent
 from tools.registry import registry
-from tools import mcp_tool
+try:
+    from tools import mcp_tool_agent as mcp_tool
+except ImportError:
+    from tools import mcp_tool
 from agent import conversation_compression as compression
 from hermes_state import SessionDB
 

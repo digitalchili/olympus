@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { HermesProvider, ProviderSetupRequest } from '@shared/provider-settings';
 import { manageHermesProviders, updateAgentDefaults } from '../lib/api';
 import { useProfile } from '../contexts/ProfileContext';
+import { OpenAIAuthSettings } from './OpenAIAuthSettings';
 
 const inputClass = 'w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100';
 const buttonClass = 'rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900';
@@ -75,9 +76,10 @@ export function ProfileProviders({ profileId, profileLabel }: { profileId: strin
   };
   return <div className="max-w-3xl space-y-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><h2 className="text-lg font-semibold">Providers</h2><p className="mt-1 text-sm text-zinc-500">API connections and models for {profileLabel}.</p></div>
+      <div><h2 className="text-lg font-semibold">Providers</h2><p className="mt-1 text-sm text-zinc-500">Sign-in and API connections for {profileLabel}.</p></div>
       {!editing && <button className={buttonClass} disabled={loading || !!busy} onClick={() => open('new')}>Add provider</button>}
     </div>
+    <OpenAIAuthSettings key={profileId} profileId={profileId} profileLabel={profileLabel} />
     <p className="text-sm text-zinc-500">Keys stay in this profile’s Hermes secret configuration. Connection tests make small model requests, which may use provider credit.</p>
     {loading && <p role="status">Loading providers…</p>}
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p>}

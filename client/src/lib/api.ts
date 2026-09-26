@@ -1043,3 +1043,17 @@ export function manageHermesProviders(profileId: string, input: import('@shared/
     method: 'POST', body: JSON.stringify(input),
   });
 }
+
+export function manageOpenAIAuth(
+  profileId: string,
+  input: import('@shared/openai-auth').OpenAIAuthRequest,
+  scope: import('@shared/openai-auth').OpenAIAuthScope = 'shared',
+) {
+  const path = input.action === 'status'
+    ? `/agent/openai-auth?scope=${scope}`
+    : `/agent/openai-auth/${input.action}`;
+  return request<import('@shared/openai-auth').OpenAIAuthResponse>(apiPathWithProfile(path, profileId),
+    input.action === 'status' ? undefined : {
+      method: 'POST', body: JSON.stringify({ scope, ...('sessionId' in input ? { sessionId: input.sessionId } : {}) }),
+    });
+}

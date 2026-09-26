@@ -56,9 +56,15 @@ After an SSE reconnect, the browser reloads persisted history and run status eve
 
 ## Hermes compatibility
 
-Native recovery contracts were tested against Hermes **v2026.8.31**, source commit `29112bef099274229cadff79cdff7bf7b99c4b77`. Docker pins that image by multi-platform manifest digest:
+Native authentication, recovery, background work, delegation, interactions, Bot messaging and Project GitHub contracts were tested against Hermes **v2026.9.24**, source commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`. Docker pins that image by multi-platform manifest digest:
 
-`sha256:64923faeae267792bf9bf87fe3b4c4869e35004e360c7df01730ad801b74d524`
+`sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7`
+
+The registry manifest was checked on 2026-09-26. Its `linux/amd64` and `linux/arm64` image configurations both identify the source commit above. The source contains the native shared OpenAI grant fixes `6bd29f26f6631be5b02db7e7d23c75800fd3934a` and `e117e792b676c93464b0e5c79d8a9c298ff00ed4`: refresh holds the source store's lock and writes the rotated grant to the root singleton and matching credential pool without creating a profile shadow.
+
+`tests/test_worker_openai_auth_native.py HERMES_SOURCE` exercises the real native device-flow interfaces with mocked HTTP, profile-only login without changing defaults, and simultaneous refreshes from two profile processes sharing a root grant. The shared-refresh regression fails against the previous `29112bef099274229cadff79cdff7bf7b99c4b77` pin and passes against the current source. `tests/test_worker_openai_auth_helper_native.py HERMES_SOURCE` covers the Olympus helper boundary. Both require a disposable source checkout and a Python environment with its dependencies; all credentials and homes are synthetic fixtures.
+
+The pin validation used Python 3.11.15 and isolated stores. Existing native usage, recovery, background-work, delegation-reasoning, interactions, provider/model resolution, Bot, Project GitHub and scheduled-drain tests passed with `OLYMPUS_NATIVE_HERMES_SOURCE` set to that checkout. Bot and Project GitHub refresh guards support the moved native implementation hooks and retain Olympus's exclusive delivery authority; both also passed against the previous pin. The native interaction facade still emits deprecation warnings for approval-context imports. The Docker daemon was unavailable during this validation, so this is source-contract and registry evidence, not a completed Docker image build or container-runtime check.
 
 Olympus builds and runs its server with separately pinned Node 22.22.3 under `/opt/olympus-node`. Hermes keeps its own Node 26 toolchain on PATH. The application does not need to widen its supported Node range or replace Hermes's tool runtime.
 

@@ -1,3 +1,4 @@
+import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import type {
   AgentDefaults,
@@ -18,6 +19,7 @@ import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import type { AgentRunOptions, ProjectGitHubRequest, ProjectGitHubRespondRequest, BotMessageRequest, BotMessageRespondRequest, AgentRunSettings, ScheduledTaskDrainStatus, TaskBackgroundWork } from './types.js';
 
 export type WorkerRequest =
+  | ({ id: string; type: 'auth.openai' } & OpenAIAuthWorkerRequest)
   | { id: string; type: 'health' }
   | { id: string; type: 'settings.get' }
   | { id: string; type: 'settings.set'; provider?: string | null; model?: string | null; reasoningEffort?: string | null }
@@ -85,6 +87,7 @@ export interface WorkerErrorPayload {
 }
 
 export type WorkerResult =
+  | OpenAIAuthResponse | OpenAIAuthGuard
   | ScheduledTaskDrainStatus
   | TaskBackgroundWork
   | { ok: boolean; agentDir?: string | null; python?: string | null }

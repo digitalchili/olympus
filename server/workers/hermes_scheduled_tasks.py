@@ -24,6 +24,16 @@ _SCHEDULED_TASKS_WAKE = threading.Event()
 # Node acknowledges the desired state before worker readiness. A cold/restarted
 # worker must not start jobs before its owning profile receives maintenance state.
 _SCHEDULED_TASKS_DRAINING = True
+_SCHEDULED_AUTH_GUARDED = False
+
+
+def set_scheduled_auth_guard(enabled: bool) -> int:
+    """Pause only new dispatch during a short credential-save transaction."""
+    global _SCHEDULED_AUTH_GUARDED
+    with _SCHEDULED_TASKS_DISPATCH_LOCK:
+        _SCHEDULED_AUTH_GUARDED = enabled
+        scheduler = sys.modules.get('cron.scheduler')
+        return len(scheduler.get_running_job_ids()) if scheduler is not None else 0
 
 
 def set_scheduled_task_drain(draining: bool) -> dict[str, Any]:
@@ -235,6 +245,8 @@ def trigger_scheduled_task(job_id: Any) -> dict[str, Any]:
 
     scheduled_task_id = _validate_path_segment(job_id, "Scheduled task ID")
     with _SCHEDULED_TASKS_DISPATCH_LOCK:
+        if _SCHEDULED_AUTH_GUARDED:
+            raise WorkerError('OpenAI sign-in is being saved. Try again shortly.', code='auth_busy')
         if _SCHEDULED_TASKS_DRAINING:
             raise WorkerError("Scheduled tasks are paused while Olympus drains", code="maintenance_drain")
         job = _normalize_scheduled_task(trigger_job(scheduled_task_id))
@@ -269,7 +281,7 @@ def remove_scheduled_task(job_id: Any) -> dict[str, Any]:
 
 def tick_scheduled_tasks() -> int:
     with _SCHEDULED_TASKS_DISPATCH_LOCK:
-        if _SCHEDULED_TASKS_DRAINING:
+        if _SCHEDULED_TASKS_DRAINING or _SCHEDULED_AUTH_GUARDED:
             return 0
     _ensure_imports()
     from cron.scheduler import tick
@@ -277,9 +289,9 @@ def tick_scheduled_tasks() -> int:
     # Hold admission through native dispatch, not job execution. Hermes keeps
     # queued and running jobs in get_running_job_ids until their full run settles.
     with _SCHEDULED_TASKS_DISPATCH_LOCK:
-        if _SCHEDULED_TASKS_DRAINING:
+        if _SCHEDULED_TASKS_DRAINING or _SCHEDULED_AUTH_GUARDED:
             return 0
-        return int(tick(verbose=False, sync=False, can_dispatch=lambda: not _SCHEDULED_TASKS_DRAINING) or 0)
+        return int(tick(verbose=False, sync=False, can_dispatch=lambda: not (_SCHEDULED_TASKS_DRAINING or _SCHEDULED_AUTH_GUARDED)) or 0)
 
 
 def _scheduled_tasks_ticker_loop() -> None:

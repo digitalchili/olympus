@@ -6,4 +6,4 @@ Runtime changes should be developed vertically: add one failing behavior test, c
 
 The direct Hermes Python worker is the feature-complete default. Do not replace it with a gateway-only implementation unless goals, compaction, steering, settings, sessions, and scheduled tasks have parity.
 
-Coding verification and recovery contracts are described in [coding-harness.md](coding-harness.md). The Docker Hermes runtime is pinned to v2026.8.31; native contract tests must pass against a disposable checkout of its recorded source revision before changing that pin.
+Coding verification and recovery contracts are described in [coding-harness.md](coding-harness.md). The Docker Hermes runtime is pinned to v2026.9.24; native contract tests must pass against a disposable checkout of its recorded source revision before changing that pin.

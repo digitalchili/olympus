@@ -119,6 +119,7 @@ try {
   assert.deepEqual(lifecycle, [
     'start:default',
     'start:writer',
+    'start:writer',
     'interrupt:writer:collaboration-session',
     'stop:writer',
     'start:writer-2',

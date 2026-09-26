@@ -5,6 +5,7 @@ export interface RunFailureNotice {
   title: string;
   detail: string;
   code: string | null;
+  action?: 'reconnect_openai' | 'check_openai';
 }
 
 type RunFailureSource = (TaskAgentRun | LiveChatRun) & {
@@ -71,6 +72,15 @@ function runFailureText(status: RunFailureNotice['status'], code: string | null)
 export function deriveRunFailureNotice(run: RunFailureSource | null | undefined): RunFailureNotice | null {
   if (!run || (run.status !== 'error' && run.status !== 'stopped')) return null;
   const code = cleanCode(run.errorCode) ?? inferCode(run.error);
+  // Only structured server codes identify the provider; upstream prose is not trusted.
+  if (run.status === 'error' && run.errorCode === 'openai_auth_required') return {
+    status: run.status, code, action: 'reconnect_openai', title: 'OpenAI sign-in needs attention',
+    detail: 'Reconnect OpenAI, then review the saved progress and continue the unfinished task when you are ready.',
+  };
+  if (run.status === 'error' && run.errorCode === 'openai_auth_unavailable') return {
+    status: run.status, code, action: 'check_openai', title: 'OpenAI login is temporarily unavailable',
+    detail: 'Check the saved login again. Your task remains unfinished, and signing in again may not be necessary.',
+  };
   return { status: run.status, code, ...runFailureText(run.status, code) };
 }
 

@@ -1,3 +1,4 @@
+import type { OpenAIAuthRequest, OpenAIAuthResponse, OpenAIAuthScope, OpenAIAuthGuard, OpenAIAuthWorkerRequest } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { getTask } from '../db/queries.js';
 import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
@@ -29,6 +30,10 @@ export class ProfileAgentAdapter implements AgentAdapter {
   private delegationResetListeners = new Set<(profileId?: string) => void>();
   private delegationUnsubscribers = new Map<LifecycleAdapter, () => void>();
   private scheduledTasksDraining = false;
+  private authCommitPending = false;
+  private authGuardsToRelease = new Set<LifecycleAdapter>();
+  private authGuardCleanup: Promise<void> | null = null;
+  private authFence: { owner: LifecycleAdapter; profileId: string; shared: boolean } | null = null;
 
   constructor(private defaultAdapter: LifecycleAdapter, options: ProfileAdapterOptions = {}) {
     this.registry = options.registry ?? localProfileRegistry;
@@ -48,6 +53,7 @@ export class ProfileAgentAdapter implements AgentAdapter {
       for (const listener of this.delegationListeners) listener(event);
     });
     const unsubscribeReset = worker.onDelegationReset?.(() => {
+      this.started.delete(profileId);
       for (const listener of this.delegationResetListeners) listener(profileId);
     });
     this.delegationUnsubscribers.set(worker, () => {
@@ -127,6 +133,10 @@ export class ProfileAgentAdapter implements AgentAdapter {
     if (profile.isDefault) return this.defaultAdapter;
 
     let worker = this.workers.get(profile.id);
+    if (this.authFence && (this.authFence.shared || this.authFence.profileId === profile.id)
+      && (!worker || !this.started.has(profile.id))) {
+      throw Object.assign(new Error('OpenAI sign-in is being saved. Try again shortly.'), { code: 'auth_busy' });
+    }
     if (!worker) {
       worker = this.createAdapter(profile) as LifecycleAdapter;
       worker.setScheduledTasksDraining?.(this.scheduledTasksDraining);
@@ -272,6 +282,84 @@ export class ProfileAgentAdapter implements AgentAdapter {
       const worker = await this.adapterForProfileId(profileId);
       return await (worker as AgentAdapter & { manageProviders: (input: ProviderSetupRequest) => Promise<ProviderSetupResponse> }).manageProviders(input);
     } finally { release(); }
+  }
+
+  async manageOpenAIAuth(input: OpenAIAuthRequest, profileId = 'default', scope: OpenAIAuthScope = 'shared'): Promise<OpenAIAuthResponse> {
+    const ownerId = scope === 'shared' ? 'default' : profileId;
+    const release = acquireProfileWork(ownerId);
+    try {
+      if (this.authCommitPending) throw Object.assign(new Error('OpenAI sign-in is being saved. Try again shortly.'), { code: 'auth_busy' });
+      await this.releaseAuthGuards();
+      const owner = await this.adapterForProfileId(ownerId);
+      const call = async (worker: LifecycleAdapter, request: OpenAIAuthWorkerRequest) => {
+        if (!worker.manageOpenAIAuthWorker) throw Object.assign(new Error('OpenAI sign-in is unavailable.'), { code: 'auth_unsupported' });
+        return worker.manageOpenAIAuthWorker(request);
+      };
+      const result = await call(owner, input) as OpenAIAuthResponse;
+      if (input.action !== 'poll' || result.session?.state !== 'waiting_for_idle') return result;
+      if (this.authCommitPending || this.starting.size) return result;
+      this.authCommitPending = true;
+      this.authFence = { owner, profileId: ownerId, shared: scope === 'shared' };
+      const releases: Array<() => void> = [];
+      try {
+        const workers = scope === 'shared' ? [this.defaultAdapter, ...this.workers.values()] : [owner];
+        if (scope === 'shared') {
+          for (const id of this.workers.keys()) releases.push(acquireProfileWork(id));
+        }
+        for (const worker of workers) {
+          // Include uncertain requests: a lost acknowledgement may still have installed the guard.
+          this.authGuardsToRelease.add(worker);
+          const guard = await call(worker, { action: 'guard', enabled: true }) as OpenAIAuthGuard;
+          if (guard.guarded !== true || !Number.isSafeInteger(guard.activeRuns) || guard.activeRuns < 0) {
+            throw Object.assign(new Error('Could not check active work.'), { code: 'openai_auth_unavailable' });
+          }
+          // An internal guard request can safely restart an exited worker: its
+          // startup completes before admission closes and active work is counted.
+          for (const [id, candidate] of this.workers) {
+            if (candidate === worker) this.started.add(id);
+          }
+          if (guard.activeRuns > 0) return result;
+        }
+        const saved = await call(owner, { action: 'commit', sessionId: input.sessionId }) as OpenAIAuthResponse;
+        if (saved.session?.state === 'saved') {
+          for (const worker of workers) {
+            if (worker !== owner) await call(worker, { action: 'invalidate' });
+          }
+        }
+        return saved;
+      } finally {
+        try { await this.releaseAuthGuards(); }
+        finally { this.authCommitPending = false; for (const done of releases) done(); }
+      }
+    } finally { release(); }
+  }
+
+  private async releaseAuthGuards(): Promise<void> {
+    if (this.authGuardCleanup) return this.authGuardCleanup;
+    const cleanup = this.clearAuthGuards();
+    this.authGuardCleanup = cleanup;
+    try { await cleanup; }
+    finally { if (this.authGuardCleanup === cleanup) this.authGuardCleanup = null; }
+  }
+
+  private async clearAuthGuards(): Promise<void> {
+    const release = async (worker: LifecycleAdapter) => {
+      if (!worker.manageOpenAIAuthWorker) throw new Error('Unavailable');
+      const result = await worker.manageOpenAIAuthWorker({ action: 'guard', enabled: false }) as OpenAIAuthGuard;
+      if (result.guarded !== false) throw new Error('Guard not released');
+      this.authGuardsToRelease.delete(worker);
+    };
+    try {
+      // Worker mutations are ordered. This acknowledgement proves any earlier save
+      // finished before peers can admit work, including after a lost commit reply.
+      const owner = this.authFence?.owner;
+      if (owner && this.authGuardsToRelease.has(owner)) await release(owner);
+      const results = await Promise.allSettled([...this.authGuardsToRelease].map(release));
+      if (results.some(result => result.status === 'rejected')) throw new Error('Guard not released');
+      this.authFence = null;
+    } catch {
+      throw Object.assign(new Error('OpenAI sign-in cleanup is pending. Check the connection again.'), { code: 'openai_auth_unavailable' });
+    }
   }
 
   async getUsage(profileId?: string | null, refresh = false): Promise<ProviderUsageResponse> {

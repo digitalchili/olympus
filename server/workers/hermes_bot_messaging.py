@@ -51,10 +51,17 @@ def install_native_guard() -> bool:
 def _install_refresh_guard() -> None:
     with _install_lock:
         try:
-            native = importlib.import_module('tools.mcp_tool')
+            # New Hermes rechecks dynamic tool authority after post-build tools.
+            # Reapply Olympus authority at that final gate, before publication.
+            try:
+                native = importlib.import_module('tools.mcp_tool_agent')
+                hook = '_reinject_authorized_dynamic_tools'
+            except ImportError:
+                native = importlib.import_module('tools.mcp_tool')
+                hook = '_reinject_post_build_tools'
         except ImportError as exc:
             raise BotMessageError('Installed Hermes does not expose the tool refresh hook') from exc
-        original = getattr(native, '_reinject_post_build_tools', None)
+        original = getattr(native, hook, None)
         if not callable(original):
             raise BotMessageError('Installed Hermes does not expose the tool refresh hook')
         if getattr(original, '_olympus_bot_guard', False):
@@ -62,9 +69,11 @@ def _install_refresh_guard() -> None:
 
         def reinject(agent, tools_list, name_set):
             engine_names = original(agent, tools_list, name_set)
+            tools_list[:] = [tool for tool in tools_list if tool.get('function', {}).get('name') != 'message_agent']
+            name_set.discard('message_agent')
             schema = getattr(agent, '_olympus_bot_schema', None)
             if (callable(getattr(agent, '_olympus_bot_send', None))
-                    and isinstance(schema, dict) and 'message_agent' not in name_set):
+                    and isinstance(schema, dict)):
                 tools_list.append(copy.deepcopy(schema))
                 name_set.add('message_agent')
             return engine_names
@@ -72,7 +81,7 @@ def _install_refresh_guard() -> None:
         # Stage before Hermes publishes its atomic snapshot. Both MCP refresh
         # and compaction use this hook; native Bot Mode must remain disabled.
         reinject._olympus_bot_guard = True
-        native._reinject_post_build_tools = reinject
+        setattr(native, hook, reinject)
 
 
 @dataclass

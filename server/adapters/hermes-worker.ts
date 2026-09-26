@@ -1,3 +1,4 @@
+import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
@@ -289,7 +290,6 @@ export class HermesWorkerClient {
       return true;
     } catch (error) {
       operationalLog('worker_heartbeat_failed', { reason: redactOperationalReason(error) });
-      await this.stop().catch(() => undefined);
       return false;
     }
   }
@@ -424,6 +424,7 @@ export class HermesWorkerClient {
       env: {
         ...process.env,
         HERMES_HOME: this.hermesHome,
+        OLYMPUS_OPENAI_AUTH_SHARED: this.hermesHome === resolveHermesHome() ? '1' : '0',
         HERMES_QUIET: '1',
         HERMES_YOLO_MODE: '0',
       },
@@ -732,6 +733,10 @@ export class HermesWorkerAdapter implements AgentAdapter {
   async manageProviders(input: ProviderSetupRequest): Promise<ProviderSetupResponse> {
     const { id: providerId, ...fields } = input;
     return this.client.request<ProviderSetupResponse>({ type: 'providers.manage', ...fields, providerId });
+  }
+
+  async manageOpenAIAuthWorker(input: OpenAIAuthWorkerRequest): Promise<OpenAIAuthResponse | OpenAIAuthGuard> {
+    return this.client.request<OpenAIAuthResponse | OpenAIAuthGuard>({ type: 'auth.openai', ...input }, 120_000);
   }
 
   async getUsage(refresh = false): Promise<ProviderUsageResponse> {

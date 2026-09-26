@@ -38,6 +38,7 @@ import { DelegationActivity } from './DelegationActivity';
 import { visibleToolProgress } from '../lib/toolProgressDisplay';
 import { RunModelResolution } from './RunModelResolution';
 import { RunFailureBanner } from './RunFailureBanner';
+import { OpenAIAuthSettings } from './OpenAIAuthSettings';
 import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSendQueuedMessage } from '../lib/runFailurePresentation';
 import { restoreRejectedChatDraft } from '../lib/chatSendRecovery';
 
@@ -273,7 +274,7 @@ export function TaskChat({
   collaborationRuns = [],
 }: TaskChatProps) {
   const isBot = conversationKind === 'bot';
-  const { activeProfileId } = useProfile();
+  const { activeProfileId, activeProfile } = useProfile();
   const {
     messages,
     isStreaming: liveIsStreaming,
@@ -296,6 +297,8 @@ export function TaskChat({
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const taskOutcome = useStore(s => s.taskOutcomes.get(taskId));
   const [continuing, setContinuing] = useState(false);
+  const authRunKey = `${activeProfileId}:${taskId}:${taskOutcome?.runId ?? taskRun?.runId ?? ''}`;
+  const [openAIAuth, setOpenAIAuth] = useState<{ key: string; ready: boolean } | null>(null);
   const delegationRuns = useStore((s) => s.delegationRuns.get(taskId));
   const [input, setInputValue] = useState('');
   const draftRevisionRef = useRef(0);
@@ -1179,6 +1182,9 @@ export function TaskChat({
         {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
         <RunFailureBanner notice={runFailureNotice} recoveryState={taskOutcome?.recoveryState}
           busy={continuing || isStreaming || configPending}
+          authBusy={isStreaming}
+          authReady={openAIAuth?.key === authRunKey && openAIAuth.ready}
+          onOpenAIAuth={() => setOpenAIAuth({ key: authRunKey, ready: false })}
           onPause={() => { void pauseTaskRecovery(taskId).catch(error => setUploadError(toErrorMessage(error, 'Could not pause recovery'))); }}
           onContinue={() => {
             setContinuing(true);
@@ -1188,6 +1194,11 @@ export function TaskChat({
               .catch(error => setUploadError(toErrorMessage(error, 'Could not continue task')))
               .finally(() => setContinuing(false));
           }} />
+        {runFailureNotice?.action && openAIAuth?.key === authRunKey && <div className="mx-auto mb-3 max-w-[760px]">
+          <OpenAIAuthSettings key={authRunKey} profileId={activeProfileId} profileLabel={activeProfile?.label ?? activeProfileId} initialScope="effective"
+            onNotReady={() => setOpenAIAuth(current => current?.key === authRunKey ? { ...current, ready: false } : current)}
+            onReady={() => setOpenAIAuth(current => current?.key === authRunKey ? { ...current, ready: true } : current)} />
+        </div>}
         {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}

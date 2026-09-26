@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const pythonTests = [
+  'test_worker_openai_auth.py',
+  'test_worker_openai_guard.py',
   'test_hermes_worker_resolve.py',
   'test_hermes_sessions_pagination.py',
   'test_delegation_event_projection.py',

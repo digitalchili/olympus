@@ -7,6 +7,7 @@ let rows: HermesProvider[] = [];
 window.fetch = async (input, init) => {
   const body = JSON.parse(String(init?.body ?? '{}'));
   if (!String(input).includes('profile=som')) throw new Error('Wrong profile');
+  if (String(input).includes('/openai-auth')) return Response.json({ status: { provider: 'openai-codex', state: 'unknown', checkedAt: null, credentialScope: 'unknown', code: null }, session: null });
   if (String(input).includes('/defaults')) {
     rows = rows.map(r => ({ ...r, isDefault: true }));
     return new Response(JSON.stringify({ provider: body.provider, model: body.model }), { status: 200 });

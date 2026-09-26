@@ -20,7 +20,7 @@ Teammate messages are attributed, untrusted advisory material. They do not suppl
 
 Olympus imports Hermes `AIAgent` directly. This feature uses the native messaging schema with an Olympus transport; it does not install Hermes Desktop's Bot Mode plugin, alter Desktop roster metadata, or launch an additional gateway or independent Hermes process.
 
-The bundled Docker runtime pins Hermes v2026.8.31. Other installations must expose its compatible native messaging schema and tool refresh hooks; missing support produces an explicit error. Native tool refresh and compaction retain the authorized messaging tool.
+The bundled Docker runtime pins Hermes v2026.9.24. Other installations must expose its compatible native messaging schema and tool refresh hooks; missing support produces an explicit error. Native tool refresh and compaction retain the authorized messaging tool.
 
 - Only existing active profiles on the selected local installation are eligible. Self-messaging and remote peers are excluded.
 - An exchange allows at most ten outgoing requests and three message hops within a shared deadline. The recipient's pending inbox is capped at fifty requests/deliveries at admission.

@@ -1,5 +1,6 @@
+import type { OpenAIAuthRequest, OpenAIAuthResponse, OpenAIAuthScope } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import { getTask } from '../db/queries.js';
 import { isRecord, toErrorMessage } from '../errors.js';
@@ -10,6 +11,7 @@ import { LocalProfileError } from '../local-profiles.js';
 import type { AgentDefaults, Task, TaskAgentSettings, ReasoningEffort } from '../../shared/types.js';
 
 interface AgentSettingsAdapter {
+  manageOpenAIAuth?(input: OpenAIAuthRequest, profileId?: string, scope?: OpenAIAuthScope): Promise<OpenAIAuthResponse>;
   manageProviders?(input: ProviderSetupRequest, profileId?: string | null): Promise<ProviderSetupResponse>;
   getUsage?(profileId?: string | null, refresh?: boolean): Promise<ProviderUsageResponse>;
   getDefaults(profileId?: string | null): Promise<AgentDefaults>;
@@ -53,6 +55,41 @@ function buildTaskSettings(task: Task, defaults: AgentDefaults): TaskAgentSettin
 
 export function createAgentRouter(adapter: AgentSettingsAdapter): Router {
   const router = Router();
+
+  const authResponse = async (req: Request, res: Response, input: OpenAIAuthRequest, scope: OpenAIAuthScope) => {
+    try {
+      if (!adapter.manageOpenAIAuth) throw Object.assign(new Error(), { code: 'auth_unsupported' });
+      res.json(await adapter.manageOpenAIAuth(input, requestProfile(req).id, scope));
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
+      const status = code === 'auth_session_invalid' ? 404 : code === 'auth_busy' ? 409 : 503;
+      res.status(status).json({ code: status === 404 ? 'auth_session_invalid' : status === 409 ? 'auth_busy' : 'openai_auth_unavailable',
+        error: status === 404 ? 'This sign-in attempt is no longer available.' : status === 409 ? 'OpenAI sign-in is being saved. Try again shortly.' : 'OpenAI sign-in is unavailable right now. Try again.' });
+    }
+  };
+  router.get('/openai-auth', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const scope = req.query.scope ?? 'shared';
+    if (scope !== 'shared' && scope !== 'profile') return res.status(400).json({ error: 'Select shared or profile sign-in.' });
+    await authResponse(req, res, { action: 'status' }, scope);
+  });
+  for (const action of ['check', 'start', 'poll', 'cancel'] as const) {
+    router.post(`/openai-auth/${action}`, profileRequestGate(), async (req, res) => {
+      res.set('Cache-Control', 'no-store');
+      const body = req.body;
+      const sessionAction = action === 'poll' || action === 'cancel';
+      if (!isRecord(body) || Object.keys(body).some(key => !['scope', ...(sessionAction ? ['sessionId'] : [])].includes(key))) {
+        return res.status(400).json({ error: 'Invalid sign-in request.' });
+      }
+      const scope = body.scope ?? 'shared';
+      if (scope !== 'shared' && scope !== 'profile') return res.status(400).json({ error: 'Select shared or profile sign-in.' });
+      if (sessionAction && (typeof body.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.sessionId))) {
+        return res.status(400).json({ error: 'Select a valid sign-in attempt.' });
+      }
+      const input: OpenAIAuthRequest = sessionAction ? { action, sessionId: body.sessionId as string } : { action };
+      await authResponse(req, res, input, scope);
+    });
+  }
 
   router.post('/providers', profileRequestGate(), async (req, res) => {
     res.set('Cache-Control', 'no-store');

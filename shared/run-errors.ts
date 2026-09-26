@@ -6,6 +6,7 @@ const INTERNAL_RUN_STOP_CODES = new Set([
 ]);
 
 const PERSISTED_RUN_ERROR_CODES = new Set([
+  'openai_auth_required', 'openai_auth_unavailable', 'auth_busy',
   ...INTERNAL_RUN_STOP_CODES, 'agent_failed', 'worker_error', 'stream_incomplete',
   'session_persistence_failed', 'delegation_failed', 'delegation_incomplete',
   'recovery_pending', 'recovery_blocked', 'goal_incomplete', 'verification_failed', 'recovery_exhausted', 'worker_restarted', 'run_stopped', 'background_work_active',

@@ -132,7 +132,11 @@ with patch.object(wrapper, "_ensure_imports"), patch.object(scheduler, "run_one_
     assert wrapper.tick_scheduled_tasks() == 0
     assert jobs.get_job(second["id"]) == before
     release.set()
-    scheduler._parallel_pool.shutdown(wait=True)
+    pools = getattr(scheduler, "_parallel_pools", None)
+    if pools is None:
+        pools = {"legacy": scheduler._parallel_pool}
+    for pool in pools.values():
+        pool.shutdown(wait=True)
     assert wrapper.set_scheduled_task_drain(True)["activeRuns"] == 0
 print("native scheduled drain passed")
 '''

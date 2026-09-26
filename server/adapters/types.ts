@@ -1,3 +1,4 @@
+import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type {
   AgentRunSettings,
   AgentModelResolution,
@@ -97,6 +98,7 @@ export interface InteractionRespondRequest {
 
 
 export interface AgentAdapter {
+  manageOpenAIAuthWorker?(input: OpenAIAuthWorkerRequest): Promise<OpenAIAuthResponse | OpenAIAuthGuard>;
   chat(
     sessionId: string,
     message: string,
