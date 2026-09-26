@@ -65,6 +65,8 @@ assert.match(api, /export function revertProjectVersion\(/);
 assert.match(taskDetail, /canCommitPush/);
 assert.match(taskDetail, /Commit & Push/);
 assert.match(taskDetail, /TaskCommitPushModal/);
+assert.match(taskDetail, /taskGitStatus\?\.pendingPublication \? 'Resume publication' : 'Commit & Push'/);
+assert.match(taskDetail, /aria-label=\{publicationLabel\}/);
 assert.match(taskCommitModal, /Commit & Push to GitHub/);
 assert.match(taskCommitModal, /generateProjectCommitMessage/);
 assert.match(taskCommitModal, /commitPushProject/);

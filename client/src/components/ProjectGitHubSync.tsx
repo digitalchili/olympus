@@ -31,6 +31,7 @@ export function ProjectGitHubSyncView({ state, pending, disabled, error, onSync 
           </> : 'Not synced yet'}
         </p>
       </div>
+      <p className="mt-2 text-zinc-500">Downloads the starting point for new tasks. Existing task branches and files stay unchanged.</p>
       {lastSync && <p className="mt-1 text-zinc-500">New tasks use this version.</p>}
       {error && <p role="alert" className="mt-2 text-red-600 dark:text-red-400">{error}</p>}
       {blocker && <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">

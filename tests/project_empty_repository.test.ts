@@ -80,11 +80,11 @@ try {
     if (args[0] === 'push') throw new Error('simulated publication failure');
     return realRunner(cwd, args, options);
   } });
-  await assert.rejects(rejected.commitPush({ ...failure.input, message: 'Retry me' }), /simulated publication failure/);
+  await assert.rejects(rejected.commitPush({ ...failure.input, message: 'Retry me' }), /could not be confirmed/);
   assert.equal(listProjectVersions(failure.input.projectId).length, 0);
   assert.equal(await readFile(join(failedTask.workdir, 'saved.txt'), 'utf8'), 'Keep for retry');
   assert.equal(await git(failure.remote, 'show-ref').catch(() => ''), '');
-  await failure.service.commitPush({ ...failure.input, message: 'Retry succeeded' });
+  await failure.service.retryPublication({ ...failure.input, publicationId: (await failure.service.status(failure.input)).pendingPublication!.id });
 
   const ambiguous = await fixture();
   const acceptedTask = await ambiguous.service.prepareTask(ambiguous.input);
@@ -149,20 +149,20 @@ try {
 
   const missing = await fixture();
   await git(seed, 'push', missing.remote, 'main:develop');
-  await assert.rejects(missing.service.prepareTask(missing.input), /Remote branch main not found/);
+  await assert.rejects(missing.service.prepareTask(missing.input), /Git operation could not be completed/);
   assert.deepEqual(await readdir(join(missing.checkouts, 'baselines')), [], 'failed preparation leaves no false empty baseline');
 
   const tagged = await fixture();
   await git(seed, 'tag', 'v1');
   await git(seed, 'push', tagged.remote, 'refs/tags/v1');
-  await assert.rejects(tagged.service.prepareTask(tagged.input), /Remote branch main not found/, 'a tag-only repository is not empty');
+  await assert.rejects(tagged.service.prepareTask(tagged.input), /Git operation could not be completed/, 'a tag-only repository is not empty');
 
   const offline = await fixture();
   const offlineService = createProjectCpService({ rootDir: offline.checkouts, gitRunner: async (cwd, args, options) => {
     if (args[0] === 'clone' || args[0] === 'ls-remote') throw new Error('authentication unavailable');
     return realRunner(cwd, args, options);
   } });
-  await assert.rejects(offlineService.prepareTask(offline.input), /authentication unavailable/);
+  await assert.rejects(offlineService.prepareTask(offline.input), /Git operation could not be completed/);
   assert.deepEqual(await readdir(join(offline.checkouts, 'baselines')), []);
 } finally {
   db.close();

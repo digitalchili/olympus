@@ -74,7 +74,8 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
   router.post('/:id/recovery/stop', requireTaskForProfile(getTask), (_req, res) => { cancelRecovery((res.locals.task as Task).id); res.json({ paused: true }); });
   router.get('/:id/recovery', requireTaskForProfile(getTask), (_req, res) => {
     const row = getRecovery((res.locals.task as Task).id);
-    res.json({ recovery: row ? { state: row.state, kind: row.repair_fingerprint ? 'verification' : 'native', attempts: row.attempts, deadlineAt: row.deadline_at, reason: row.reason, checkpoint: row.checkpoint_json ? JSON.parse(row.checkpoint_json) : null } : null });
+    const latest = getLatestTaskAgentRun((res.locals.task as Task).id);
+    res.json({ recovery: row ? { state: row.state, kind: row.repair_fingerprint ? 'verification' : 'native', attempts: row.attempts, deadlineAt: row.deadline_at, reason: row.reason, waitReason: latest?.runId === row.run_id ? latest.recoveryWaitReason ?? null : null, checkpoint: row.checkpoint_json ? JSON.parse(row.checkpoint_json) : null } : null });
   });
   router.post('/:id/messages', requireTaskForProfile(getTask), async (req, res, next) => {
     const task = res.locals.task as Task;

@@ -75,7 +75,9 @@ export function CodingEvidencePanel({ taskId, isStreaming, collapsed = false, on
       </div>}
       </div>
       {!running && evidence.status === 'failed' && <p role="status" className="mt-3">{repairQueued
-        ? 'The agent will repair these failures and run checks again automatically. Waiting for the task to be available.'
+        ? recovery?.waitReason === 'awaiting_input' ? 'Answer the pending request first. Automatic repair is paused.'
+          : recovery?.waitReason === 'queued_message' ? 'Paused for your queued message. Send or remove it in chat before automatic repair can continue.'
+          : 'The agent will repair these failures and run checks again automatically. Waiting for the task to be available.'
         : recovery?.kind === 'verification' && recovery.state === 'blocked'
           ? recovery.reason
           : 'The checks failed. Run checks again to retry; a failed result will return to the agent for repair.'}</p>}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -15,9 +15,12 @@ import {
   generateProjectCommitMessage,
   fetchProjectEditorStatus,
   prepareProjectEditor,
+  retryProjectPublication,
+  abandonProjectPublication,
   type ProjectGitStatus,
 } from '../lib/api';
 import { toErrorMessage } from '../lib/format';
+import { PendingProjectPublication } from './PendingProjectPublication';
 
 interface TaskCommitPushModalProps {
   open: boolean;
@@ -44,54 +47,67 @@ export function TaskCommitPushModal({
   const [codeStatus, setCodeStatus] = useState<ProjectGitStatus | null>(null);
   const [commitMessage, setCommitMessage] = useState('');
   const [generatingMessage, setGeneratingMessage] = useState(false);
-  const [deployToDefault, setDeployToDefault] = useState(Boolean(repositoryLink.defaultBranch));
-  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'success'>('idle');
-  const [lastPushedSha, setLastPushedSha] = useState<string | null>(null);
+  const [deployToDefault, setDeployToDefault] = useState(false);
+  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'abandoning' | 'success'>('idle');
+  const [lastPublication, setLastPublication] = useState<ProjectVersion | null>(null);
+  const generation = useRef(0);
+  const publicationBusy = pushStatus === 'pushing' || pushStatus === 'abandoning';
+
+  const refreshStatus = async (request = generation.current) => {
+    const { status } = await fetchProjectEditorStatus(projectId, taskId);
+    if (request === generation.current) setCodeStatus(status);
+  };
 
   const loadStatus = async () => {
+    const request = ++generation.current;
     setLoading(true);
     setError(null);
     try {
       const prepRes = await prepareProjectEditor(projectId, taskId);
+      if (request !== generation.current) return;
       setEditor(prepRes.editor);
-      const statusRes = await fetchProjectEditorStatus(projectId, taskId);
-      setCodeStatus(statusRes.status);
+      await refreshStatus(request);
     } catch (cause) {
-      setError(toErrorMessage(cause, 'Could not inspect project changes'));
+      if (request === generation.current) setError(toErrorMessage(cause, 'Could not inspect project changes'));
     } finally {
-      setLoading(false);
+      if (request === generation.current) setLoading(false);
     }
   };
 
   useEffect(() => {
+    ++generation.current;
+    setEditor(null);
+    setCodeStatus(null);
+    setCommitMessage('');
+    setDeployToDefault(false);
+    setGeneratingMessage(false);
     if (open) {
       setPushStatus('idle');
-      setLastPushedSha(null);
+      setLastPublication(null);
       setError(null);
       void loadStatus();
-    } else {
-      setEditor(null);
-      setCodeStatus(null);
-      setCommitMessage('');
     }
+    return () => { ++generation.current; };
   }, [open, projectId, taskId]);
 
   const handleAutoGenerate = async () => {
-    if (!codeStatus || codeStatus.clean || generatingMessage) return;
+    if (!codeStatus || codeStatus.clean || codeStatus.pendingPublication || generatingMessage) return;
+    const request = generation.current;
     setGeneratingMessage(true);
     setError(null);
     try {
       const res = await generateProjectCommitMessage(projectId, taskId);
-      if (res.message) setCommitMessage(res.message);
+      if (request === generation.current && res.message) setCommitMessage(res.message);
     } catch (cause) {
-      setError(toErrorMessage(cause, 'Could not generate commit message'));
+      if (request === generation.current) setError(toErrorMessage(cause, 'Could not generate commit message'));
     } finally {
-      setGeneratingMessage(false);
+      if (request === generation.current) setGeneratingMessage(false);
     }
   };
 
   const handleCommitAndPush = async () => {
-    if (!codeStatus || codeStatus.clean || !commitMessage.trim() || pushStatus === 'pushing') return;
+    if (!codeStatus || codeStatus.clean || codeStatus.pendingPublication || !commitMessage.trim() || pushStatus !== 'idle') return;
+    const request = generation.current;
     setPushStatus('pushing');
     setError(null);
     try {
@@ -101,24 +117,57 @@ export function TaskCommitPushModal({
         commitMessage.trim(),
         deployToDefault && Boolean(repositoryLink.defaultBranch),
       );
-      setLastPushedSha(result.version?.commitSha ?? null);
+      if (request !== generation.current) return;
+      setLastPublication(result.version);
       setPushStatus('success');
       onCommitted?.(result.version);
-      setTimeout(() => {
-        onClose();
-      }, 1600);
     } catch (cause) {
+      if (request !== generation.current) return;
       setPushStatus('idle');
       setError(toErrorMessage(cause, 'Commit & Push failed; your changes remain available to retry'));
+      try { await refreshStatus(request); } catch { /* Keep the error until status can be checked. */ }
+    }
+  };
+
+  const resumePublication = async () => {
+    const publication = codeStatus?.pendingPublication;
+    if (!publication || publicationBusy) return;
+    const request = generation.current;
+    setPushStatus('pushing'); setError(null);
+    try {
+      const result = await retryProjectPublication(projectId, taskId, publication.id);
+      if (request !== generation.current) return;
+      setCodeStatus(current => current ? { ...current, pendingPublication: null } : null);
+      setLastPublication(result.version); setPushStatus('success');
+      onCommitted?.(result.version);
+    } catch (cause) {
+      if (request !== generation.current) return;
+      setPushStatus('idle'); setError(toErrorMessage(cause, 'Publication is still unconfirmed. Your saved commit remains available.'));
+      try { await refreshStatus(request); } catch { /* Keep the saved intent visible. */ }
+    }
+  };
+
+  const abandonPublication = async () => {
+    const publication = codeStatus?.pendingPublication;
+    if (!publication || publicationBusy) return;
+    const request = generation.current;
+    setPushStatus('abandoning'); setError(null);
+    try {
+      await abandonProjectPublication(projectId, taskId, publication.id);
+      await refreshStatus(request);
+    } catch (cause) {
+      if (request === generation.current) setError(toErrorMessage(cause, 'Could not stop retrying this publication.'));
+    } finally {
+      if (request === generation.current) setPushStatus('idle');
     }
   };
 
   if (!open) return null;
 
-  const targetBranch =
+  const targetBranch = codeStatus?.pendingPublication?.targetBranches.join(', ') ?? (
     deployToDefault && repositoryLink.defaultBranch
       ? repositoryLink.defaultBranch
-      : editor?.branchName ?? 'feature branch';
+      : editor?.branchName ?? 'task branch');
 
   return (
     <div
@@ -146,7 +195,7 @@ export function TaskCommitPushModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={pushStatus === 'pushing'}
+            disabled={publicationBusy}
             className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-40 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
             aria-label="Close"
           >
@@ -171,15 +220,18 @@ export function TaskCommitPushModal({
                 <button
                   type="button"
                   onClick={() => void loadStatus()}
+                  disabled={publicationBusy}
                   className="mt-2 font-semibold underline hover:no-underline"
                 >
-                  Retry
+                  Refresh status
                 </button>
               </div>
             </div>
           )}
 
-          {!loading && !error && codeStatus && codeStatus.clean && (
+          {!loading && codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} disabled={publicationBusy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
+
+          {!loading && !error && codeStatus && codeStatus.clean && !codeStatus.pendingPublication && pushStatus !== 'success' && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-200 py-10 text-center dark:border-zinc-800">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400">
                 <CheckCircle2 size={20} />
@@ -193,7 +245,7 @@ export function TaskCommitPushModal({
             </div>
           )}
 
-          {!loading && !error && codeStatus && !codeStatus.clean && (
+          {!loading && !error && codeStatus && !codeStatus.clean && !codeStatus.pendingPublication && pushStatus !== 'success' && (
             <>
               {/* Changed files summary */}
               <div>
@@ -235,7 +287,7 @@ export function TaskCommitPushModal({
                   </label>
                   <button
                     type="button"
-                    disabled={generatingMessage || pushStatus === 'pushing'}
+                    disabled={generatingMessage || publicationBusy}
                     onClick={() => void handleAutoGenerate()}
                     className="inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 disabled:opacity-40 dark:text-zinc-400 dark:hover:text-zinc-200"
                   >
@@ -247,14 +299,14 @@ export function TaskCommitPushModal({
                   type="text"
                   value={commitMessage}
                   onChange={(e) => setCommitMessage(e.target.value)}
-                  disabled={pushStatus === 'pushing'}
+                  disabled={publicationBusy}
                   maxLength={200}
                   placeholder="Describe what changed (e.g. feat: update checkout flow)"
                   className="h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-900 focus:outline-none dark:border-zinc-700 dark:text-zinc-100 dark:focus:border-zinc-100"
                 />
               </div>
 
-              {/* Deployment Option */}
+              {/* Additional publication target */}
               {repositoryLink.defaultBranch && (
                 <div className="rounded-lg border border-zinc-100 bg-zinc-50/60 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
                   <label className="flex items-start gap-2 text-xs text-zinc-700 dark:text-zinc-300 cursor-pointer select-none">
@@ -262,17 +314,15 @@ export function TaskCommitPushModal({
                       type="checkbox"
                       checked={deployToDefault}
                       onChange={(e) => setDeployToDefault(e.target.checked)}
-                      disabled={pushStatus === 'pushing'}
+                      disabled={publicationBusy}
                       className="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800"
                     />
                     <div>
                       <span>
-                        Deploy directly to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{repositoryLink.defaultBranch}</span> (triggers Dokploy build)
+                        Also push to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{repositoryLink.defaultBranch}</span>
                       </span>
                       <p className="mt-0.5 text-[11px] text-zinc-400 leading-normal">
-                        {deployToDefault
-                          ? `Pushes directly to ${repositoryLink.defaultBranch} to trigger your deployment webhook.`
-                          : `Updates only this task’s working branch (${editor?.branchName ?? 'working branch'}). Does not merge or deploy.`}
+                        Your deployment service may build this branch. Olympus does not verify deployment.
                       </p>
                     </div>
                   </label>
@@ -282,14 +332,14 @@ export function TaskCommitPushModal({
           )}
 
           {/* Pushing state indicator */}
-          {pushStatus === 'pushing' && (
+          {publicationBusy && (
             <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-3 dark:border-zinc-800 dark:bg-zinc-950/50">
               <div className="flex items-center justify-between text-xs text-zinc-700 dark:text-zinc-300">
                 <span className="inline-flex items-center gap-1.5 font-medium">
                   <Loader2 size={14} className="animate-spin text-zinc-900 dark:text-zinc-100" />
-                  {deployToDefault && repositoryLink.defaultBranch ? 'Deploying to GitHub…' : 'Pushing to GitHub…'}
+                  {pushStatus === 'abandoning' ? 'Stopping publication retries…' : 'Pushing to GitHub…'}
                 </span>
-                <span className="text-[11px] text-zinc-400">Uploading changes</span>
+                <span className="text-[11px] text-zinc-400">{pushStatus === 'abandoning' ? 'Keeping your saved commit' : 'Uploading changes'}</span>
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
                 <div className="h-full bg-zinc-900 dark:bg-zinc-100 rounded-full animate-pulse w-3/4" />
@@ -302,9 +352,7 @@ export function TaskCommitPushModal({
             <div className="flex items-center gap-2 rounded-lg border border-emerald-200/60 bg-emerald-50/80 p-3 text-xs font-medium text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-950/30 dark:text-emerald-300">
               <Check size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
               <span>
-                {deployToDefault && repositoryLink.defaultBranch
-                  ? `Successfully committed and deployed to ${repositoryLink.defaultBranch}!${lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}`
-                  : `Successfully committed and pushed to GitHub!${lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}`}
+                {lastPublication && `Pushed ${lastPublication.commitSha.slice(0, 7)} to ${lastPublication.branchName}`}
               </span>
             </div>
           )}
@@ -315,34 +363,27 @@ export function TaskCommitPushModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={pushStatus === 'pushing'}
+            disabled={publicationBusy}
             className="h-8.5 rounded-lg border border-zinc-200 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
-            {codeStatus?.clean ? 'Close' : 'Cancel'}
+            {codeStatus?.clean || pushStatus === 'success' ? 'Close' : 'Cancel'}
           </button>
-          {!codeStatus?.clean && (
+          {!codeStatus?.clean && !codeStatus?.pendingPublication && pushStatus !== 'success' && (
             <button
               type="button"
-              disabled={loading || Boolean(error) || pushStatus === 'pushing' || !commitMessage.trim()}
+              disabled={loading || Boolean(error) || publicationBusy || !commitMessage.trim()}
               onClick={() => void handleCommitAndPush()}
               className="inline-flex h-8.5 items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
               {pushStatus === 'pushing' ? (
                 <>
                   <Loader2 size={13} className="animate-spin" />
-                  {deployToDefault && repositoryLink.defaultBranch ? 'Deploying…' : 'Pushing…'}
-                </>
-              ) : pushStatus === 'success' ? (
-                <>
-                  <Check size={13} />
-                  {deployToDefault && repositoryLink.defaultBranch ? 'Deployed!' : 'Pushed!'}
+                  Pushing…
                 </>
               ) : (
                 <>
                   <GitCommitHorizontal size={14} />
-                  {deployToDefault && repositoryLink.defaultBranch
-                    ? `Commit & Deploy (${repositoryLink.defaultBranch})`
-                    : 'Commit & Push'}
+                  Commit & Push
                 </>
               )}
             </button>

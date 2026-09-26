@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { Response as ExpressResponse } from 'express';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +34,19 @@ adapter.chatStream = async function* (sessionId): AsyncIterable<StreamEvent> {
   yield { type: 'done', sessionId, interrupted: true, context: null };
 };
 const task = queries.insertTask({ title: 'Queue route', status: 'in_progress', profile_name: 'default' });
+const { createTaskAgentRun, finishTaskAgentRun } = await import('../server/db/task-agent-runs.js');
+const { beginRecovery, recoveryOutcome } = await import('../server/run-recovery.js');
+const { addClient } = await import('../server/events.js');
+const { discoverLocalProfileTargets } = await import('../server/local-profiles.js');
+createTaskAgentRun({ taskId: task.id, runId: 'failed-before-queue', kind: 'chat', status: 'streaming', startedAt: 1 });
+beginRecovery(task.id, 'failed-before-queue', 1);
+finishTaskAgentRun('failed-before-queue', 'error', 2, 'worker_restarted');
+recoveryOutcome(task.id, 'failed-before-queue', 'error', 'worker_restarted');
+const stream = new PassThrough();
+const events: any[] = [];
+stream.on('data', chunk => { for (const frame of String(chunk).split('\n\n')) if (frame.startsWith('data: ')) events.push(JSON.parse(frame.slice(6))); });
+const writer = addClient(stream as unknown as ExpressResponse, discoverLocalProfileTargets().find(profile => profile.id === 'default')!);
+writer.bootstrap([]);
 const server = app.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const address = server.address();
@@ -60,6 +75,9 @@ try {
   assert.equal(saved.taskId, task.id);
   assert.equal(saved.content, payload.content);
   assert.deepEqual((await (await fetch(url)).json()).queuedMessage, saved, 'reload hydrates the durable queue');
+  assert.equal(events.at(-1)?.run?.recoveryWaitReason, 'queued_message', 'saving queued input broadcasts its pause reason');
+  const recoveryUrl = `http://127.0.0.1:${address.port}/api/tasks/${task.id}/recovery?profile=default`;
+  assert.equal((await (await fetch(recoveryUrl)).json()).recovery.waitReason, 'queued_message');
 
   const invalidSettings = await fetch(url, {
     method: 'PUT',
@@ -90,6 +108,8 @@ try {
   const removed = await fetch(`${queueBase}/${encodeURIComponent(replacement.id)}?profile=default`, { method: 'DELETE' });
   assert.equal(removed.status, 204);
   assert.deepEqual(await (await fetch(url)).json(), { queuedMessage: null });
+  assert.equal(events.at(-1)?.run?.recoveryWaitReason, null, 'removal broadcasts an explicit clear');
+  assert.equal((await (await fetch(recoveryUrl)).json()).recovery.waitReason, null);
 
   const authoritative = {
     ...payload,
@@ -126,6 +146,7 @@ try {
   assert.deepEqual(await (await fetch(url)).json(), { queuedMessage: null });
   discardRun(task.id);
 } finally {
+  writer.close();
   adapter.chatStream = originalChatStream;
   server.close();
   await once(server, 'close');

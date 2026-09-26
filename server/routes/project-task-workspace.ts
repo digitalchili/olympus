@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import type { ProjectCpService } from '../project-cp.js';
-import { ProjectRepositoryBusyError, ProjectRepositoryMergeConflictError, ProjectRepositoryCheckpointError } from '../project-cp.js';
+import { ProjectRepositoryBusyError, ProjectRepositoryMergeConflictError, ProjectRepositoryCheckpointError, ProjectPublicationError } from '../project-cp.js';
 import { getQueuedTaskMessage, consumeQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { getProjectRepositoryLink } from '../db/projects.js';
 import { getTask, updateTask } from '../db/queries.js';
 import { broadcast } from '../events.js';
+import { broadcastRecovery } from '../run-recovery.js';
+import { ProjectGitError } from '../project-git-auth.js';
 import { getRunStatus } from '../live-chat.js';
 import { hasActiveTaskRun, hasTaskOperation, claimPreparedTaskWorkspace } from '../task-run-lifecycle.js';
 import { requireTaskForProfile } from '../profile-context.js';
@@ -19,7 +21,7 @@ interface ProjectTaskWorkspaceRouterOptions {
 
 function tokenProvider(github: StudioGitHubGateway | undefined) {
   if (!github?.installationToken) return undefined;
-  return (installationId: number) => github.installationToken!(installationId);
+  return (installationId: number, scope: { repositoryId: number; readOnly: boolean }) => github.installationToken!(installationId, scope);
 }
 
 /** A deliberately narrow task-chat command. Ordinary development requests still go to Hermes. */
@@ -54,6 +56,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
     const restoreConsumedQueue = () => {
       if (!consumedQueue || !queueClaimed) return;
       restoreQueuedTaskMessage(consumedQueue);
+      broadcastRecovery(task.id);
       delete res.locals.claimedQueuedTaskMessage;
     };
     if (queuedMessageId !== undefined) {
@@ -82,6 +85,11 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       });
     } catch (error) {
       restoreConsumedQueue();
+      if (error instanceof ProjectPublicationError) {
+        return res.status(409).json({ error: error.message, code: error.code, pendingPublication: error.pendingPublication,
+          hint: error.code === 'PUBLICATION_PENDING' ? 'Review the saved publication in Commit & Push. Afterward, remove the old queued shortcut if it is no longer needed.' : undefined });
+      }
+      if (error instanceof ProjectGitError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
       if (error instanceof GitHubPermissionUpgradeError) {
         return res.status(409).json({ error: error.message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
       }
@@ -122,8 +130,9 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
     }
     if (consumedQueue) {
       const claimed = consumeQueuedTaskMessage(task.id, consumedQueue.id);
+      if (claimed) broadcastRecovery(task.id);
       if (!claimed || claimed.content !== consumedQueue.content) {
-        if (claimed) restoreQueuedTaskMessage(claimed);
+        if (claimed) { restoreQueuedTaskMessage(claimed); broadcastRecovery(task.id); }
         return res.status(409).json({ error: 'Queued message changed or no longer exists' });
       }
       consumedQueue = claimed;
@@ -156,6 +165,11 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       });
     } catch (error) {
       restoreConsumedQueue();
+      if (error instanceof ProjectPublicationError) {
+        return res.status(409).json({ error: error.message, code: error.code, pendingPublication: error.pendingPublication,
+          hint: error.code === 'PUBLICATION_PENDING' ? 'Review the saved publication in Commit & Push. Afterward, remove the old queued shortcut if it is no longer needed.' : undefined });
+      }
+      if (error instanceof ProjectGitError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
       if (error instanceof GitHubPermissionUpgradeError) {
         return res.status(409).json({ error: error.message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
       }

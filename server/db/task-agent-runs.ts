@@ -1,6 +1,6 @@
 import db from './index.js';
 import { safeRunErrorCode } from '../../shared/run-errors.js';
-import type { AgentModelResolution, LiveChatRunStatus, TaskAgentRun, TaskRunKind } from '../../shared/types.js';
+import type { AgentModelResolution, LiveChatRunStatus, TaskAgentRun, TaskRunKind, RecoveryWaitReason } from '../../shared/types.js';
 
 type AgentRunRow = {
   run_id: string;
@@ -9,6 +9,7 @@ type AgentRunRow = {
   status: LiveChatRunStatus;
   error_code: string | null;
   recovery_state?: string | null;
+  recovery_wait_reason?: RecoveryWaitReason | null;
   requested_model: string | null;
   requested_provider: string | null;
   requested_reasoning_effort: AgentModelResolution['requested']['reasoningEffort'];
@@ -42,8 +43,16 @@ const finishRun = db.prepare(`
     error_code = COALESCE(error_code, @errorCode)
   WHERE run_id = @runId AND NOT (status IN ('error', 'stopped') AND @status = 'done')
 `);
+// One projection for history, board snapshots and recovery status. Waiting is
+// current display metadata, never a replacement for the durable recovery cause.
+const recoveryProjection = `c.state AS recovery_state,
+  CASE WHEN c.state IN ('pending', 'waiting') THEN
+    CASE WHEN EXISTS (SELECT 1 FROM task_interactions i WHERE i.task_id = r.task_id
+      AND i.olympus_run_id = r.run_id AND i.status NOT IN ('answered', 'denied')) THEN 'awaiting_input'
+    WHEN EXISTS (SELECT 1 FROM task_message_queue q WHERE q.task_id = r.task_id) THEN 'queued_message' END
+  END AS recovery_wait_reason`;
 const latestRun = db.prepare(`
-  SELECT r.*, c.state AS recovery_state FROM task_agent_runs r
+  SELECT r.*, ${recoveryProjection} FROM task_agent_runs r
   LEFT JOIN task_recovery c ON c.task_id = r.task_id AND c.run_id = r.run_id
   WHERE r.task_id = ? ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1
 `);
@@ -56,7 +65,8 @@ function project(row: AgentRunRow | undefined): TaskAgentRun | undefined {
     taskId: row.task_id,
     kind: row.kind,
     status: row.status,
-    ...(row.recovery_state ? { recoveryState: row.recovery_state } : {}),
+    recoveryState: row.recovery_state ?? null,
+    recoveryWaitReason: row.recovery_wait_reason ?? null,
     ...(row.error_code ? { errorCode: row.error_code } : {}),
     modelResolution: hasResolution ? {
       requested: {
@@ -118,7 +128,7 @@ export function getLatestTaskAgentRun(taskId: string): TaskAgentRun | undefined 
 
 /** Persist terminal outcomes across board reconnects and server restarts. */
 export function listLatestTaskAgentRuns(): TaskAgentRun[] {
-  const rows = db.prepare(`SELECT r.*, c.state AS recovery_state FROM task_agent_runs r
+  const rows = db.prepare(`SELECT r.*, ${recoveryProjection} FROM task_agent_runs r
     LEFT JOIN task_recovery c ON c.task_id = r.task_id AND c.run_id = r.run_id
     WHERE r.rowid = (SELECT rowid FROM task_agent_runs WHERE task_id = r.task_id
       ORDER BY started_at DESC, rowid DESC LIMIT 1)`).all() as AgentRunRow[];

@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
-import { ProjectRepositoryCheckpointError, ProjectRepositoryMergeConflictError } from '../project-cp.js';
+import { ProjectRepositoryCheckpointError, ProjectRepositoryMergeConflictError, ProjectPublicationError } from '../project-cp.js';
 import multer from 'multer';
+import { ProjectGitError } from '../project-git-auth.js';
 import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { v4 as uuid } from 'uuid';
@@ -23,7 +24,7 @@ import {
   upsertProjectRepositoryLink,
 } from '../db/projects.js';
 import { getTask, getTasksForProject } from '../db/queries.js';
-import { addProjectClient, initSSE, sendEvent } from '../events.js';
+import { addProjectClient, initSSE, bootstrapEvents } from '../events.js';
 import { taskRunSnapshot } from '../task-run-snapshot.js';
 import { getRunStatus } from '../live-chat.js';
 import { isVerifying } from '../coding-verification.js';
@@ -114,6 +115,10 @@ async function verifiedRepositoryLink(
 }
 
 function sendError(res: Response, error: unknown): Response {
+  if (error instanceof ProjectPublicationError) {
+    return res.status(error.statusCode).json({ error: error.message, code: error.code, pendingPublication: error.pendingPublication });
+  }
+  if (error instanceof ProjectGitError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   if (error instanceof ProjectOperationActiveError) {
     return res.status(409).json({ error: error.message, code: 'PROJECT_OPERATION_ACTIVE', blocker: error.blocker });
   }
@@ -252,7 +257,7 @@ async function withRepositoryConfiguration<T>(projectId: string, mutate: () => P
 
 function tokenProvider(github: StudioGitHubGateway | undefined) {
   if (!github?.installationToken) return undefined;
-  return (installationId: number) => github.installationToken!(installationId);
+  return (installationId: number, scope: { repositoryId: number; readOnly: boolean }) => github.installationToken!(installationId, scope);
 }
 
 function publicEditor(editor: ProjectEditorLease): Omit<ProjectEditorLease, 'workdir'> {
@@ -739,6 +744,27 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     }
   });
 
+  for (const action of ['retry', 'abandon'] as const) {
+    router.post(`/:id/publications/:publicationId/${action}`, async (req, res) => {
+      try {
+        const projectId = routeId(req.params.id);
+        requireProjectRouteAccess(req, registry, projectId, 'contribute');
+        if (!req.body || Object.keys(req.body).some(key => key !== 'taskId')) {
+          return res.status(400).json({ error: 'Publication recovery accepts only taskId', code: 'INVALID_PROJECT_REQUEST' });
+        }
+        const taskId = taskIdFromBody(req.body);
+        requireProjectEditorTask(req, registry, projectId, taskId);
+        const repositoryLink = requireWriteRepository(projectId);
+        const input = { projectId, taskId, publicationId: routeId(req.params.publicationId), repositoryLink, tokenProvider: tokenProvider(github) };
+        const version = await withTaskMutation(getTask(taskId)!, async () => {
+          if (action === 'abandon') { await projectCp.abandonPublication(input); return null; }
+          return projectCp.retryPublication(input);
+        });
+        return version ? res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) }) : res.json({ abandoned: true });
+      } catch (error) { return sendError(res, error); }
+    });
+  }
+
   router.get('/:id/versions', (req, res) => {
     try {
       const projectId = routeId(req.params.id);
@@ -903,8 +929,8 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       if (actor) requireProfileProjectAccess(projectId, actor, 'view');
       const runs = taskRunSnapshot().filter((run) => getTask(run.taskId)?.project_id === projectId);
       initSSE(res);
-      addProjectClient(res, projectId);
-      sendEvent(res, { type: 'task_runs_snapshot', runs });
+      const writer = addProjectClient(res, projectId);
+      bootstrapEvents(writer, [{ type: 'task_runs_snapshot', runs }]);
       return undefined;
     } catch (error) {
       return sendError(res, error);

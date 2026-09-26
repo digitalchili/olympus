@@ -10,6 +10,7 @@ import { getTask } from './db/queries.js';
 import { getProjectGitHubInstallationIds } from './db/project-github-access.js';
 import { requireProfileProjectAccess } from './project-access.js';
 import { untilStopped } from './run-cancellation.js';
+import { buildProjectGitEnv } from './project-git-auth.js';
 
 const repositoryName = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/;
 type SourceGitRunner = (cwd: string, args: string[], options?: { env?: Record<string, string | undefined>; signal?: AbortSignal }) => ReturnType<GitRunner>;
@@ -18,7 +19,7 @@ export const runProjectSourceGit: SourceGitRunner = (cwd, args, options) => new 
   const signal = options?.signal;
   if (signal?.aborted) { reject(signal.reason); return; }
   const child = spawn('git', args, {
-    cwd, env: { ...process.env, ...options?.env }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd, env: options?.env ?? buildProjectGitEnv({ baseEnv: process.env, cloneUrl: '' }), stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
   let stdout = ''; let stderr = ''; let bytes = 0; let tooLarge = false;
@@ -44,19 +45,6 @@ export const runProjectSourceGit: SourceGitRunner = (cwd, args, options) => new 
     else resolve({ stdout, stderr });
   });
 });
-
-function readAuth(token: string): Record<string, string> {
-  const entries = [
-    ['http.https://github.com/.extraHeader', `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`],
-    ['credential.helper', ''], ['http.followRedirects', 'false'], ['core.hooksPath', '/dev/null'],
-    ['protocol.allow', 'never'], ['protocol.https.allow', 'always'],
-  ];
-  return Object.fromEntries([
-    ['GIT_TERMINAL_PROMPT', '0'], ['GIT_CONFIG_NOSYSTEM', '1'], ['GIT_CONFIG_GLOBAL', '/dev/null'],
-    ['GIT_CONFIG_COUNT', String(entries.length)],
-    ...entries.flatMap(([key, value], index) => [[`GIT_CONFIG_KEY_${index}`, key], [`GIT_CONFIG_VALUE_${index}`, value]]),
-  ]);
-}
 
 async function directory(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
@@ -112,7 +100,7 @@ export function createProjectGitHubService(options: {
         assertAccess(installationId);
         // Authenticated Git runs only in a fresh directory, never in agent-editable
         // repository configuration. Credentials cannot trigger local hooks/helpers.
-        const auth = { env: readAuth(token), signal };
+        const auth = { env: buildProjectGitEnv({ baseEnv: process.env, cloneUrl: repository.cloneUrl, token }), signal };
         const refs = await git(scratch, ['ls-remote', '--heads', repository.cloneUrl], auth);
         assertAccess(installationId);
         const branches = refs.stdout.trim().split('\n').map(line => line.split('\t')[1]).filter(ref => ref?.startsWith('refs/heads/')).map(ref => ref.slice(11)).sort();

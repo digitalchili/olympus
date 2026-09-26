@@ -32,8 +32,10 @@ const projectCp = {
   sync: () => mutation(),
   prepareTask: async () => ({}),
   commitPush: () => mutation(),
+  retryPublication: () => mutation(),
+  abandonPublication: () => mutation(),
 } as unknown as ProjectCpService;
-app.use('/test-projects', createProjectsRouter({ projectCp }));
+app.use('/test-projects', createProjectsRouter({ projectCp, adapter: { getBackgroundWork: async () => ({ available: true, work: [] }) } as never }));
 app.use('/test-tasks', createTaskRecoveryRouter({ getBackgroundWork: async () => ({ available: true, work: [], continuation: { status: 'none' } }) }));
 app.use('/test-tasks', createProjectTaskWorkspaceRouter({ projectCp }));
 const server = app.listen(0, '127.0.0.1');
@@ -57,7 +59,7 @@ try {
     assert.equal((await drainController.refreshStatus()).activeRuns, 0);
   });
 
-  for (const path of [`test-projects/${project.id}/sync`, `test-tasks/${task.id}/messages`]) {
+  for (const path of [`test-projects/${project.id}/sync`, `test-tasks/${task.id}/messages`, `test-projects/${project.id}/publications/receipt/retry`, `test-projects/${project.id}/publications/receipt/abandon`]) {
     await test(`drain cannot hand off while disconnected ${path.split('/')[0]} Git work is pending`, async () => {
       let entered = false;
       let settled = false;
@@ -70,7 +72,7 @@ try {
       };
       const controller = new AbortController();
       const pending = fetch(`http://127.0.0.1:${address.port}/${path}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '/commit push' }), signal: controller.signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(path.endsWith('/messages') ? { content: '/commit push' } : path.includes('/publications/') ? { taskId: task.id } : {}), signal: controller.signal,
       }).catch(() => null);
       try {
         await waitFor(() => entered);

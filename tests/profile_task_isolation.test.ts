@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -196,23 +196,24 @@ try {
       let ended = false;
       let resolveEnded!: () => void;
       const endedPromise = new Promise<void>((resolve) => { resolveEnded = resolve; });
-      return {
-        writes,
-        endedPromise,
-        get ended() { return ended; },
-        write(value: string) { writes.push(value); return true; },
+      return new class extends EventEmitter {
+        writes = writes;
+        endedPromise = endedPromise;
+        get ended() { return ended; }
+        get writableEnded() { return ended; }
+        write(value: string) { writes.push(value); return true; }
         end() {
           ended = true;
           resolveEnded();
-        },
-        on() { return this; },
-      };
+          this.emit('finish');
+        }
+      }();
     }
 
     const defaultClient = fakeResponse();
     const writerClient = fakeResponse();
-    events.addClient(defaultClient as never, localProfileRegistry.default());
-    events.addClient(writerClient as never, localProfileRegistry.requireActive('writer'));
+    events.addClient(defaultClient as never, localProfileRegistry.default()).bootstrap([]);
+    events.addClient(writerClient as never, localProfileRegistry.requireActive('writer')).bootstrap([]);
     events.broadcast({ type: 'task_updated', task: writerTask });
     events.broadcast({ type: 'task_run_updated', run: liveChat.getRunStatus(writerTask.id)! });
     events.broadcast({ type: 'task_deleted', taskId: writerTask.id }, writerTask);
@@ -227,7 +228,7 @@ try {
       profile_name: 'writer',
     });
     const secondWriterLiveClient = fakeResponse();
-    liveChat.subscribe(secondWriterTask.id, secondWriterLiveClient as never);
+    liveChat.subscribe(secondWriterTask.id, secondWriterLiveClient as never).bootstrap([]);
 
     let releaseAgentRun!: () => void;
     const agentRunBlocked = new Promise<void>((resolve) => { releaseAgentRun = resolve; });
@@ -353,8 +354,8 @@ try {
 
       const replacementWriterBoard = fakeResponse();
       const replacementWriterLive = fakeResponse();
-      events.addClient(replacementWriterBoard as never, localProfileRegistry.requireActive('writer'));
-      liveChat.subscribe(secondWriterTask.id, replacementWriterLive as never);
+      events.addClient(replacementWriterBoard as never, localProfileRegistry.requireActive('writer')).bootstrap([]);
+      liveChat.subscribe(secondWriterTask.id, replacementWriterLive as never).bootstrap([]);
       events.broadcast({ type: 'task_updated', task: writerTask });
       liveChat.broadcast(secondWriterTask.id, { type: 'text_delta', content: 'new incarnation' });
 

@@ -34,7 +34,7 @@ import { listDelegationRunsForProfile, markProfileDelegationsUnknown, recordDele
 import { normalizeDelegationEvent } from './delegation-events.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
 import { ProfileAgentAdapter } from './adapters/routing.js';
-import { initSSE, addClient, sendEvent, closeClientsForRestart, broadcast } from './events.js';
+import { initSSE, addClient, bootstrapEvents, closeClientsForRestart, broadcast } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
 import { getAppVersion } from './version.js';
 import { DrainController } from './drain.js';
@@ -120,9 +120,11 @@ app.get('/api/events', (req, res) => {
       return task !== undefined && taskBelongsToProfile(task, profile);
     });
     initSSE(res);
-    addClient(res, profile);
-    sendEvent(res, { type: 'task_runs_snapshot', runs });
-    sendEvent(res, { type: 'delegations_snapshot', runs: listDelegationRunsForProfile(profile.id) });
+    const writer = addClient(res, profile);
+    bootstrapEvents(writer, [
+      { type: 'task_runs_snapshot', runs },
+      { type: 'delegations_snapshot', runs: listDelegationRunsForProfile(profile.id) },
+    ]);
   } catch (error) {
     const profileError = sendProfileError(error);
     if (profileError) return res.status(profileError.status).json(profileError.body);

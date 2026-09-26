@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
+const file = new URL('../client/src/components/InputToolbar.tsx', import.meta.url);
+const dependency=createRequire(file);const ts=dependency('typescript');
+const code=ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+let cursor=0;const slots:any[]=[];const effects:Array<()=>void>=[];
+const effect=(run:any,deps:any[])=>{const at=cursor++;const old=slots[at];if(!old||deps.some((v,i)=>v!==old.deps[i]))effects.push(()=>{old?.cleanup?.();slots[at]={deps,cleanup:run()};});};
+const hooks={...dependency('react'),useState(initial:any){const at=cursor++;if(!(at in slots))slots[at]=initial;return [slots[at],(value:any)=>{slots[at]=typeof value==='function'?value(slots[at]):value;}];},useRef(initial:any){const at=cursor++;return slots[at]??={current:initial};},useEffect:effect,useLayoutEffect:effect,useMemo(run:any){return run();},useCallback(run:any){return run;},useId(){return 'fixture-id';}};
+const exported:any={};
+runInNewContext(code,{exports:exported,require:(name:string)=>name==='react'?hooks:name==='react-dom'?{...dependency(name),createPortal:(node:any)=>node}:dependency(name),document:{body:{},addEventListener(){},removeEventListener(){}},window:{requestAnimationFrame(){},addEventListener(){},removeEventListener(){}},console});
+let disabled=false; let openRequest=1;
+const render=()=>{cursor=0;const tree=exported.ModelPicker({openRequest,value:'',modelGroups:[],disabled,title:'Model',onChange(){}});while(effects.length)effects.shift()!();return tree.props.children[0];};
+render();assert.equal(render().props['aria-expanded'],true);
+render().props.onClick();assert.equal(render().props['aria-expanded'],false);
+disabled=true;render();disabled=false;render();
+assert.equal(render().props['aria-expanded'],false,'A consumed model-picker request must not reopen after task work finishes');
+
+openRequest=2; render(); assert.equal(render().props['aria-expanded'],true, 'a new explicit request still opens the picker');
+render().props.onClick();
+disabled=true; openRequest=3; render(); assert.equal(render().props['aria-expanded'],false);
+disabled=false; render(); assert.equal(render().props['aria-expanded'],true, 'an unconsumed request may wait for configuration');
+console.log('Model picker action tests passed');

@@ -1,13 +1,15 @@
 import type { Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import type { GoalStateSnapshot, LiveChatRun, LiveChatMessage, LiveChatRunStatus, TaskRunState, ToolProgressEvent } from '../shared/types.js';
-import { safeRunErrorCode, shouldAppendRunErrorToReply } from '../shared/run-errors.js';
+import { safeRunErrorCode, safeProviderErrorMessage, shouldAppendRunErrorToReply } from '../shared/run-errors.js';
+import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
 import type { StreamEvent } from './adapters/types.js';
+import { createSseWriter, type SseWriter } from './sse-writer.js';
 
 export type LiveChatEvent = StreamEvent | { type: 'snapshot'; run: LiveChatRun };
 
 const runs = new Map<string, LiveChatRun>();
-const subscribers = new Map<string, Set<Response>>();
+const subscribers = new Map<string, Set<SseWriter>>();
 const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const KEEPALIVE_INTERVAL_MS = 30_000;
@@ -88,11 +90,10 @@ function mergeToolProgress(tools: ToolProgressEvent[], event: StreamEvent): void
   tools.push(tool);
 }
 
-function writeEvent(res: Response, event: LiveChatEvent): boolean {
-  try {
-    return res.write(`data: ${JSON.stringify(event)}\n\n`);
-  } catch {
-    return false;
+function stopKeepaliveIfEmpty(): void {
+  if (subscribers.size === 0 && keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
   }
 }
 
@@ -100,21 +101,13 @@ function startKeepalive(): void {
   if (keepaliveTimer) return;
 
   keepaliveTimer = setInterval(() => {
-    for (const [taskId, taskSubscribers] of subscribers) {
+    for (const taskSubscribers of subscribers.values()) {
       for (const subscriber of taskSubscribers) {
-        try {
-          subscriber.write(':keepalive\n\n');
-        } catch {
-          taskSubscribers.delete(subscriber);
-        }
+        subscriber.keepalive();
       }
-      if (taskSubscribers.size === 0) subscribers.delete(taskId);
     }
 
-    if (subscribers.size === 0 && keepaliveTimer) {
-      clearInterval(keepaliveTimer);
-      keepaliveTimer = null;
-    }
+    stopKeepaliveIfEmpty();
   }, KEEPALIVE_INTERVAL_MS);
 }
 
@@ -269,7 +262,7 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
     if (event.attachments) assistant.attachments = event.attachments.map((attachment) => ({ ...attachment }));
   } else if (event.type === 'error') {
     if (run.status === 'stopped') return;
-    const error = event.error || 'Unknown error';
+    const error = safeProviderErrorMessage(event.code) ?? event.error ?? 'Unknown error';
     run.status = 'error';
     run.error = error;
     run.errorCode = safeRunErrorCode(event.code);
@@ -290,7 +283,13 @@ export function applyEvent(taskId: string, event: StreamEvent): void {
 
 export function getRun(taskId: string): LiveChatRun | undefined {
   const run = runs.get(taskId);
-  return run ? cloneRun(run) : undefined;
+  return run ? { ...cloneRun(run), ...recoveryMetadata(run) } : undefined;
+}
+
+function recoveryMetadata(run: LiveChatRun) {
+  if (run.status === 'streaming' || run.status === 'compacting') return {};
+  const saved = getLatestTaskAgentRun(run.taskId);
+  return saved?.runId === run.runId ? { recoveryState: saved.recoveryState, recoveryWaitReason: saved.recoveryWaitReason } : {};
 }
 
 export function getRunContext(taskId: string): LiveChatRun['context'] | undefined {
@@ -299,7 +298,7 @@ export function getRunContext(taskId: string): LiveChatRun['context'] | undefine
 
 export function getRunStatus(taskId: string): TaskRunState | undefined {
   const run = runs.get(taskId);
-  return run ? runState(run) : undefined;
+  return run ? { ...runState(run), ...recoveryMetadata(run) } : undefined;
 }
 
 export function getRunStatuses(): TaskRunState[] {
@@ -321,25 +320,35 @@ export function updateRunStatus(
   return runState(run);
 }
 
-export function subscribe(taskId: string, res: Response): void {
+export function subscribe(taskId: string, res: Response): SseWriter {
   let taskSubscribers = subscribers.get(taskId);
   if (!taskSubscribers) {
-    taskSubscribers = new Set<Response>();
+    taskSubscribers = new Set<SseWriter>();
     subscribers.set(taskId, taskSubscribers);
   }
 
-  taskSubscribers.add(res);
-  res.on('close', () => {
-    taskSubscribers.delete(res);
+  const writer = createSseWriter(res);
+  const cleanup = () => {
+    taskSubscribers.delete(subscriber);
     if (taskSubscribers.size === 0 && subscribers.get(taskId) === taskSubscribers) {
       subscribers.delete(taskId);
     }
-  });
+    res.off('close', cleanup);
+    res.off('error', cleanup);
+    res.off('finish', cleanup);
+    stopKeepaliveIfEmpty();
+  };
+  const subscriber = { ...writer, close() { cleanup(); writer.close(); } };
+  taskSubscribers.add(subscriber);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+  res.on('finish', cleanup);
   startKeepalive();
+  return subscriber;
 }
 
-export function sendSnapshot(res: Response, run: LiveChatRun): void {
-  writeEvent(res, { type: 'snapshot', run });
+export function sendSnapshot(writer: SseWriter, run: LiveChatRun | null | undefined): void {
+  writer.bootstrap(run ? [`data: ${JSON.stringify({ type: 'snapshot', run })}\n\n`] : []);
 }
 
 export function broadcast(taskId: string, event: LiveChatEvent): void {
@@ -347,7 +356,7 @@ export function broadcast(taskId: string, event: LiveChatEvent): void {
   if (!taskSubscribers) return;
 
   for (const subscriber of taskSubscribers) {
-    if (!writeEvent(subscriber, event)) taskSubscribers.delete(subscriber);
+    subscriber.send(`data: ${JSON.stringify(event)}\n\n`);
   }
 
   if (taskSubscribers.size === 0) subscribers.delete(taskId);
@@ -388,29 +397,18 @@ export function closeSubscribersForTasks(taskIds: Iterable<string>): void {
     if (!taskSubscribers) continue;
     subscribers.delete(taskId);
     for (const subscriber of taskSubscribers) {
-      try {
-        subscriber.end();
-      } catch {
-        // The connection is already gone.
-      }
+      subscriber.close();
     }
   }
-  if (subscribers.size === 0 && keepaliveTimer) {
-    clearInterval(keepaliveTimer);
-    keepaliveTimer = null;
-  }
+  stopKeepaliveIfEmpty();
 }
 
 export function closeSubscribersForRestart(): void {
   const event = 'data: {"type":"maintenance_reconnect"}\n\n';
   for (const taskSubscribers of subscribers.values()) {
     for (const subscriber of taskSubscribers) {
-      try {
-        subscriber.write(event);
-        subscriber.end();
-      } catch {
-        // The connection is already gone.
-      }
+      subscriber.send(event);
+      subscriber.close();
     }
   }
   subscribers.clear();

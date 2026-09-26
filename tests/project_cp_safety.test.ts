@@ -39,8 +39,9 @@ try {
     if (args[0] === 'diff' && args.includes('--name-only')) return { stdout: dirty ? 'README.md\0' : '', stderr: '' };
     if (args[0] === 'ls-files') return { stdout: '', stderr: '' };
     if (args[0] === 'diff') return { stdout: 'diff --git a/README.md b/README.md\n', stderr: '' };
+    if (args[0] === 'write-tree') return { stdout: 'd'.repeat(40), stderr: '' };
     if (args[0] === 'rev-parse') return { stdout: `${head}\n`, stderr: '' };
-    if (args[0] === 'commit') { head = 'b'.repeat(40); dirty = false; return { stdout: '', stderr: '' }; }
+    if (args.includes('commit')) { head = 'b'.repeat(40); dirty = false; return { stdout: '', stderr: '' }; }
     if (args[0] === 'push') throw new Error('simulated push failure');
     if (args[0] === 'reset' && args[1] === '--soft') { head = 'a'.repeat(40); dirty = true; return { stdout: '', stderr: '' }; }
     return { stdout: '', stderr: '' };
@@ -62,12 +63,13 @@ try {
   calls.length = 0;
   await assert.rejects(
     service.commitPush({ projectId: project.id, taskId: task.id, repositoryLink: link, message: 'Safe checkpoint', tokenProvider: async () => 'ghs_SECRET_TEST' }),
-    /simulated push failure/,
+    /could not be confirmed/,
   );
   assert.equal(listProjectVersions(project.id).length, 0, 'failed pushes never become visible checkpoints');
-  assert.ok(calls.some((call) => call.args[0] === 'reset' && call.args[1] === '--soft'), 'failed push restores a retryable staged state');
+  assert.equal(calls.some(call => call.args[0] === 'reset'), false, 'uncertain publication retains its exact commit');
+  assert.equal((await service.status({ projectId: project.id, taskId: task.id })).pendingPublication?.commitSha, 'b'.repeat(40));
   const pushCall = calls.find((call) => call.args[0] === 'push');
-  assert.ok(pushCall?.env?.GIT_CONFIG_VALUE_0?.startsWith('AUTHORIZATION: basic '), 'private Git auth uses a valid transient HTTP header');
+  assert.ok(Object.values(pushCall?.env ?? {}).some(value => value?.startsWith('AUTHORIZATION: basic ')), 'private Git auth uses a valid transient HTTP header');
   assert.equal(JSON.stringify(calls.map((call) => call.args)).includes('ghs_SECRET_TEST'), false, 'token never appears in process arguments');
   assert.equal(JSON.stringify(process.env).includes('ghs_SECRET_TEST'), false, 'token is not added to the parent process environment');
 
@@ -77,8 +79,8 @@ try {
     }
     return gitRunner(cwd, args, options);
   } });
-  await assert.rejects(workflowService.commitPush({ projectId: project.id, taskId: task.id, repositoryLink: link,
-    message: 'Publish workflow', tokenProvider: async () => 'ghs_SECRET_TEST',
+  await assert.rejects(workflowService.retryPublication({ projectId: project.id, taskId: task.id, repositoryLink: link,
+    publicationId: (await service.status({ projectId: project.id, taskId: task.id })).pendingPublication!.id, tokenProvider: async () => 'ghs_SECRET_TEST',
   }), (error: any) => {
     assert.equal(error.statusCode, 409);
     assert.match(error.message, /permission upgrade.*Workflows/i);
@@ -87,6 +89,7 @@ try {
   });
   assert.equal(listProjectVersions(project.id).length, 0);
 
+  await service.abandonPublication({ projectId: project.id, taskId: task.id, repositoryLink: link, publicationId: (await service.status({ projectId: project.id, taskId: task.id })).pendingPublication!.id });
   head = 'a'.repeat(40);
   dirty = true;
   calls.length = 0;
@@ -96,8 +99,9 @@ try {
     if (args[0] === 'remote') return { stdout: link.cloneUrl, stderr: '' };
     if (args[0] === 'status') return { stdout: dirty ? ' M README.md\0' : '', stderr: '' };
     if (args[0] === 'diff') return { stdout: 'diff --git a/README.md b/README.md\n', stderr: '' };
+    if (args[0] === 'write-tree') return { stdout: 'd'.repeat(40), stderr: '' };
     if (args[0] === 'rev-parse') return { stdout: `${head}\n`, stderr: '' };
-    if (args[0] === 'commit') { head = remoteAcceptedSha; dirty = false; return { stdout: '', stderr: '' }; }
+    if (args.includes('commit')) { head = remoteAcceptedSha; dirty = false; return { stdout: '', stderr: '' }; }
     if (args[0] === 'push') throw new Error('connection dropped after remote accepted push');
     if (args[0] === 'ls-remote') return { stdout: `${remoteAcceptedSha}\trefs/heads/olympus/safe-test\n`, stderr: '' };
     if (args[0] === 'reset') throw new Error('an accepted push must not be reset');
@@ -122,8 +126,9 @@ try {
     if (args[0] === 'remote') return { stdout: link.cloneUrl, stderr: '' };
     if (args[0] === 'status') return { stdout: dirty ? ' M README.md\0' : '', stderr: '' };
     if (args[0] === 'diff') return { stdout: 'diff --git a/README.md b/README.md\n', stderr: '' };
+    if (args[0] === 'write-tree') return { stdout: 'd'.repeat(40), stderr: '' };
     if (args[0] === 'rev-parse') return { stdout: `${head}\n`, stderr: '' };
-    if (args[0] === 'commit') { head = 'c'.repeat(40); dirty = false; return { stdout: '', stderr: '' }; }
+    if (args.includes('commit')) { head = 'c'.repeat(40); dirty = false; return { stdout: '', stderr: '' }; }
     return { stdout: '', stderr: '' };
   };
   const deployService = createProjectCpService({ rootDir: join(root, 'managed'), gitRunner: deployRunner });
@@ -138,8 +143,8 @@ try {
   assert.equal(deployed.branchName, 'main', 'version record reflects deployment to default branch');
   const deployPushCall = calls.find((call) => call.args[0] === 'push');
   assert.ok(deployPushCall?.args.includes('--atomic'), 'task and default branches publish together or neither changes');
-  assert.ok(deployPushCall?.args.includes('HEAD:refs/heads/main'), 'push includes refspec for default branch');
-  assert.ok(deployPushCall?.args.includes('HEAD:refs/heads/olympus/safe-test'), 'push also includes refspec for working branch');
+  assert.ok(deployPushCall?.args.includes(`${deployed.commitSha}:refs/heads/main`), 'push includes refspec for default branch');
+  assert.ok(deployPushCall?.args.includes(`${deployed.commitSha}:refs/heads/olympus/safe-test`), 'push also includes refspec for working branch');
 } finally {
   await rm(root, { recursive: true, force: true });
 }

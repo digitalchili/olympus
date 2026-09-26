@@ -270,8 +270,9 @@ export function releaseProjectEditor(input: { leaseId: string; taskId: string; n
 }
 
 export interface RecordProjectVersionInput {
+  id?: string;
   projectId: string;
-  taskId: string;
+  taskId: string | null;
   leaseId?: string | null;
   action: ProjectVersionAction;
   commitSha: string;
@@ -288,7 +289,7 @@ export function recordProjectVersion(input: RecordProjectVersionInput): ProjectV
   const changedFiles = input.changedFiles
     .map((file) => requiredText(file, 'changed file', 500))
     .slice(0, 200);
-  const id = uuid();
+  const id = input.id ?? uuid();
   const pushedAt = input.pushedAt ?? Date.now();
   db.prepare(`
     INSERT INTO project_versions (
@@ -298,7 +299,7 @@ export function recordProjectVersion(input: RecordProjectVersionInput): ProjectV
   `).run(
     id,
     requiredText(input.projectId, 'projectId', 120),
-    requiredText(input.taskId, 'taskId', 120),
+    input.taskId ? requiredText(input.taskId, 'taskId', 120) : null,
     input.leaseId ? requiredText(input.leaseId, 'leaseId', 120) : null,
     input.action,
     optionalSha(input.commitSha, 'commitSha'),

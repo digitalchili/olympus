@@ -72,6 +72,8 @@ try {
   };
 
   let now = 10_000;
+  let losePushResponse = false;
+  let acceptedWithoutResponse = false;
   const managedRoot = join(dispatchHome, 'managed-checkouts');
   const app = express();
   app.use(express.json());
@@ -83,7 +85,12 @@ try {
       getBackgroundWork: async () => ({ available:true, work:[] }),
     } as any,
     now: () => now,
-    projectCp: createProjectCpService({ rootDir: managedRoot, now: () => now }),
+    projectCp: createProjectCpService({ rootDir: managedRoot, now: () => now, gitRunner: async (cwd, args, options) => {
+      if (losePushResponse && acceptedWithoutResponse && args[0] === 'ls-remote') throw new Error('private confirmation failure');
+      const result = await execFile('git', args, { cwd, env: options?.env });
+      if (losePushResponse && args[0] === 'push') { acceptedWithoutResponse = true; throw new Error('private lost response'); }
+      return result;
+    } }),
   }));
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -253,6 +260,36 @@ try {
   assert.equal(dirtySync.status, 200, 'task working tree changes do not block independent baseline sync');
   assert.equal(await readFile(join(workdir, 'uncommitted.txt'), 'utf8'), 'local uncommitted file\n');
   await rm(join(workdir, 'uncommitted.txt'));
+
+  assert.equal((await call(`/api/projects/${projectId}/editor/prepare`, 'POST', { taskId: task.id })).status, 200);
+  await writeFile(join(workdir, 'RECEIPT.md'), 'Recover HTTP publication');
+  losePushResponse = true;
+  const unknown = await call(`/api/projects/${projectId}/commit-push`, 'POST', { taskId: task.id, message: 'Saved HTTP intent' });
+  assert.equal(unknown.status, 503);
+  assert.equal(unknown.body.code, 'PUBLICATION_UNCONFIRMED');
+  assert.equal(JSON.stringify(unknown.body).includes('private'), false, 'raw Git errors stay private');
+  const receipt = unknown.body.pendingPublication as { id: string; commitSha: string };
+  assert.ok(receipt.id && receipt.commitSha);
+  const retryPath = `/api/projects/${projectId}/publications/${receipt.id}/retry`;
+  const abandonPath = `/api/projects/${projectId}/publications/${receipt.id}/abandon`;
+  assert.equal((await call(retryPath, 'POST', { taskId: task.id, deployToDefaultBranch: true })).status, 400);
+  assert.equal((await call(abandonPath, 'POST', { taskId: task.id, message: 'replacement' })).status, 400);
+  assert.equal((await call(`${retryPath}?profile=writer`, 'POST', { taskId: task.id })).status, 404);
+  assert.equal((await call(retryPath, 'POST', { taskId: otherTask.id })).status, 409);
+  const { startRun, discardRun } = await import('../server/live-chat.js');
+  startRun(task.id, task.id, 'Still working');
+  try {
+    assert.equal((await call(retryPath, 'POST', { taskId: task.id })).status, 409);
+    assert.equal((await call(abandonPath, 'POST', { taskId: task.id })).status, 409);
+  } finally { discardRun(task.id); }
+  assert.equal((await call(`/api/projects/${projectId}/editor/release`, 'POST', { taskId: task.id })).body.code, 'PUBLICATION_PENDING');
+  assert.equal((await call(`/api/projects/${projectId}/commit-push`, 'POST', { taskId: task.id, message: 'Replacement' })).body.code, 'PUBLICATION_PENDING');
+  losePushResponse = false;
+  const recovered = await call(retryPath, 'POST', { taskId: task.id });
+  assert.equal(recovered.status, 200, JSON.stringify(recovered.body));
+  assert.equal((recovered.body.version as { id: string }).id, receipt.id);
+  assert.equal((await call(retryPath, 'POST', { taskId: task.id })).status, 200);
+  assert.equal((await call(abandonPath, 'POST', { taskId: task.id })).status, 409, 'confirmed receipts cannot be abandoned');
 
   const rawRows = JSON.stringify(db.prepare('SELECT * FROM project_editor_leases').all())
     + JSON.stringify(db.prepare('SELECT * FROM project_versions').all());

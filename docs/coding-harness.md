@@ -99,3 +99,16 @@ Hermes owns task execution limits. Olympus no longer injects an idle timeout, wa
 Task cards and the task header show an animated, indeterminate activity bar only while a run is active. The header includes elapsed time. The indicator stops when execution settles, and respects reduced-motion preferences. It is activity, not an estimate of percentage complete.
 
 Olympus does not automatically kill slow task, verification, or reference-extraction processes. Explicit Stop and installation shutdown still cancel their owned work. Worker readiness failure reports unavailability without killing the worker. Hermes's native tool policies and limits continue to apply. Bot messaging retains its separate exchange/transport policy.
+
+
+## Unreleased production hardening
+
+Worker heartbeat failures are observational: they cannot terminate a task or another profile’s worker. Lifecycle callbacks are tied to the process that emitted them, and slow model discovery runs outside the JSONL reader so Stop, health and task admission remain responsive.
+
+Failed runs retain safe provider categories through live state and history. Reconnect OpenAI and Check saved login are reserved for the OpenAI subscription provider; other credential failures open Providers, allowance/rate-limit failures open Usage, and unavailable models open the task model picker. Continue saved work remains explicit. Opening Providers/Usage in another tab preserves the unsent task draft.
+
+Recovery shows Paused for your queued message or Answer the pending request first while that input blocks continuation. This is derived display metadata: the original failure, verification fingerprint and attempt history remain unchanged. Sending/removing input uses existing exact queue IDs. Clearing a blocker permits the normal native-evidence check; it does not prove completion.
+
+Board, Project and task streams use bounded backpressure handling. A buffered snapshot drains before the next bootstrap frame; missed later updates close the stream for a fresh snapshot. Reconnection reloads history without posting or replaying task work.
+
+Managed Git publication records the approved commit/tree, repository and full target refs before pushing. Unknown outcomes preserve the commit and receipt. Resume publication checks and retries that exact intent; it never resets/recommits or includes later edits. Stop retrying records abandonment and cannot undo changes already accepted by GitHub. New dialogs default to the task branch; an additional default-branch push is explicit. Pushed is Git evidence, not deployment evidence.

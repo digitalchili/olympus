@@ -1,5 +1,6 @@
 """Auth admission uses fake scheduler/native dependencies and never signs in."""
 import sys
+import io
 import os
 import subprocess
 import tempfile
@@ -134,6 +135,69 @@ worker.main()
         self.assertNotIn('sentinel', str(worker._openai_result_failure(result, 'openai-codex')))
         self.assertIsNone(worker._openai_result_failure(result, 'other-provider'))
         self.assertIsNone(worker._openai_result_failure({'failed': True, 'error': 'authentication prose'}, 'openai-codex'))
+
+    def test_provider_failures_use_structured_categories_and_never_echo_secrets(self):
+        class ProviderError(Exception):
+            pass
+        cases = [(401, None, 'auth_error'), (429, 'insufficient_quota', 'quota_exhausted'),
+                 (429, None, 'rate_limit'), (404, 'model_not_found', 'model_error'),
+                 (403, 'model_not_found', 'model_error'), (403, 'invalid_model', 'model_error'),
+                 (503, None, 'provider_error')]
+        for status, code, expected in cases:
+            with self.subTest(expected=expected):
+                error = ProviderError('secret-sentinel unauthorized credit model not found')
+                error.status_code, error.code = status, code
+                error.provider = 'openai'
+                payload = worker._error_payload(error)
+                self.assertEqual(payload['code'], expected)
+                self.assertNotIn('sentinel', str(payload))
+        self.assertNotIn('sentinel', str(worker._error_payload(Exception('secret-sentinel'))))
+
+    def test_returned_failures_preserve_safe_native_reason(self):
+        for reason, expected in [('auth', 'auth_error'), ('auth_permanent', 'auth_error'),
+                                 ('rate_limit', 'rate_limit'), ('upstream_rate_limit', 'rate_limit'),
+                                 ('quota_exhausted', 'quota_exhausted'),
+                                 ('billing', 'quota_exhausted'), ('billing_unverified', 'quota_exhausted'),
+                                 ('model_entitlement', 'model_error'), ('model_not_found', 'model_error'), ('unknown', 'provider_error')]:
+            result = worker._agent_result_failure({'failed': True, 'failure_reason': reason, 'error': 'secret-sentinel'})
+            self.assertEqual(result[1], expected)
+            self.assertNotIn('sentinel', str(result))
+
+    def test_unhandled_request_diagnostic_never_logs_exception_contents(self):
+        diagnostic = io.StringIO()
+        with patch.object(worker.sys, 'stdin', io.StringIO('{"id":"one","type":"health"}\n')), \
+             patch.object(worker.sys, 'stderr', diagnostic), \
+             patch.object(worker, '_handle_request', side_effect=RuntimeError('secret-sentinel')):
+            worker._run_loop()
+        self.assertIn('failed to handle request', diagnostic.getvalue())
+        self.assertNotIn('secret-sentinel', diagnostic.getvalue())
+        self.assertNotIn('Traceback', diagnostic.getvalue())
+
+    def test_title_rejects_native_failed_result_before_returning_provider_text(self):
+        for provider, reason, expected in [
+            ('openai-codex', 'auth_permanent', 'openai_auth_required'),
+            ('other-provider', 'model_not_found', 'model_error'),
+            ('other-provider', 'rate_limit', 'rate_limit'),
+            ('other-provider', 'unknown', 'provider_error'),
+        ]:
+            with self.subTest(provider=provider, reason=reason):
+                agent = SimpleNamespace(provider=provider, run_conversation=lambda **_: {
+                    'failed': True, 'completed': False, 'failure_reason': reason,
+                    'final_response': 'secret-sentinel provider rejected the request',
+                })
+                with patch.object(worker, '_create_agent', return_value=agent):
+                    with self.assertRaises(worker.WorkerError) as caught:
+                        worker._generate_title({'description': 'Original task request'})
+                self.assertEqual(caught.exception.code, expected)
+                self.assertNotIn('secret-sentinel', str(worker._error_payload(caught.exception)))
+
+    def test_title_retains_nonfailed_partial_response(self):
+        agent = SimpleNamespace(provider='other-provider', run_conversation=lambda **_: {
+            'failed': False, 'completed': False, 'final_response': 'Useful task title',
+        })
+        with patch.object(worker, '_create_agent', return_value=agent):
+            self.assertEqual(worker._generate_title({'description': 'Original task request'}),
+                             {'title': 'Useful task title'})
 
 
 if __name__ == '__main__': unittest.main()

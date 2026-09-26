@@ -67,7 +67,7 @@ class ResolveModelProviderTest(unittest.TestCase):
         )
         self.assertEqual(
             hermes_worker._agent_result_failure({"completed": False, "failed": True, "error": "provider failed"}),
-            ("provider failed", "agent_failed"),
+            ("The provider could not complete this run.", "provider_error"),
         )
         self.assertIsNone(hermes_worker._agent_result_failure({"completed": True, "failed": False}))
 

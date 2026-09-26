@@ -1,7 +1,7 @@
 import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying } from '../coding-verification.js';
 import { requestsCodingVerification } from '../verification-request.js';
 import { join } from 'node:path';
-import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint, queueVerificationRepair } from '../run-recovery.js';
+import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint, queueVerificationRepair, broadcastRecovery } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
 import {
@@ -291,7 +291,7 @@ function settleRun(taskId: string, runId: string, context: ContextUsage | null):
   finishTaskAgentRun(runId, status?.status ?? 'error', Date.now(), run?.errorCode);
   recoveryOutcome(taskId, runId, status?.status ?? 'error', run?.errorCode);
   queueVerificationRepair(taskId, runId);
-  if (status) broadcast({ type: 'task_run_updated', run: { ...status, recoveryState: getRecovery(taskId)?.state } });
+  broadcastRecovery(taskId);
 
   const hasAssistantOutput = hasReviewableAssistantOutput(run?.messages ?? []);
   if (status && (bot || codingReviewAllowed(taskId, runId)) && !hasUnansweredInteractions(taskId, runId) && shouldPromoteTerminalRun(status.status, hasAssistantOutput)) {
@@ -843,6 +843,7 @@ chatRouter.put('/:id/queued-message', (req, res) => {
     updatedAt: now,
   };
   const saved = putQueuedTaskMessage(queuedMessage);
+  broadcastRecovery(task.id);
   if (task.project_id) {
     void syncMessageAttachmentsToProjectReferences(task.project_id, content);
   }
@@ -854,6 +855,7 @@ chatRouter.delete('/:id/queued-message/:queuedMessageId', (req, res) => {
   if (!deleteQueuedTaskMessage(task.id, req.params.queuedMessageId)) {
     return res.status(409).json({ error: 'Queued message changed or no longer exists' });
   }
+  broadcastRecovery(task.id);
   res.status(204).end();
 });
 
@@ -882,7 +884,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
   const activeRun = getRunStatus(task.id);
   if (hasActiveTaskRun(task.id) || isTaskRunActive(activeRun)) {
     const preclaimed = res.locals.claimedQueuedTaskMessage as QueuedTaskMessage | undefined;
-    if (preclaimed) restoreQueuedTaskMessage(preclaimed);
+    if (preclaimed && restoreQueuedTaskMessage(preclaimed)) broadcastRecovery(task.id);
     delete res.locals.claimedQueuedTaskMessage;
     return res.status(409).json({ error: 'This task already has a message in progress' });
   }
@@ -892,7 +894,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
   delete res.locals.claimedQueuedTaskMessage;
   const restoreConsumedQueue = () => {
     if (!consumedQueue) return;
-    restoreQueuedTaskMessage(consumedQueue);
+    if (restoreQueuedTaskMessage(consumedQueue)) broadcastRecovery(task.id);
     consumedQueue = undefined;
   };
   if (queuedMessageId !== undefined) {
@@ -901,6 +903,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       return res.status(400).json({ error: 'queuedMessageId must be a non-empty string' });
     }
     consumedQueue ??= consumeQueuedTaskMessage(task.id, queuedMessageId);
+    if (consumedQueue) broadcastRecovery(task.id);
     if (!consumedQueue || consumedQueue.id !== queuedMessageId || consumedQueue.content !== content) {
       restoreConsumedQueue();
       return res.status(409).json({ error: 'Queued message changed or no longer exists' });
@@ -983,15 +986,19 @@ chatRouter.post('/:id/messages', async (req, res) => {
   }
 
   if (res.destroyed) { restoreConsumedQueue(); return; }
-  // Project preparation can await I/O after the first preflight. Pause must win
-  // until this synchronous startup section creates the replacement run.
+  // Inventory and Project preparation can await I/O after recovery was claimed.
+  // Pause and new user input must win until this synchronous startup section.
   if (res.locals.recoveryContinuation === true) {
     const recovery = getRecovery(task.id);
     if (!recovery || recovery.state !== 'dispatching' || recovery.run_id !== req.body.recoveryOfRunId || getLatestTaskAgentRun(task.id)?.runId !== recovery.run_id) {
       restoreConsumedQueue();
       return res.status(409).json({ error: 'Recovery was paused or changed; nothing new was started.' });
     }
-    if (res.locals.verificationRepair && (getTask(task.id)?.status !== 'in_progress' || getQueuedTaskMessage(task.id))) {
+    if (getQueuedTaskMessage(task.id) || hasUnansweredInteractions(task.id, recovery.run_id)) {
+      restoreConsumedQueue();
+      return res.status(409).json({ error: 'New user input takes priority; recovery was not started.' });
+    }
+    if (res.locals.verificationRepair && getTask(task.id)?.status !== 'in_progress') {
       restoreConsumedQueue();
       return res.status(409).json({ error: 'Task or queued instructions changed; repair was not started.' });
     }
@@ -1262,8 +1269,8 @@ chatRouter.get('/:id/live', (req, res) => {
   const task = res.locals.task as Task;
 
   initSSE(res);
-  subscribe(task.id, res);
+  const writer = subscribe(task.id, res);
 
   const run = getRun(task.id);
-  if (run) sendSnapshot(res, run);
+  sendSnapshot(writer, run);
 });

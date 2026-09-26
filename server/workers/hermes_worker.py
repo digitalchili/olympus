@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import hashlib
 import importlib
@@ -18,7 +19,6 @@ import signal
 import sys
 import threading
 import time
-import traceback
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -166,6 +166,8 @@ class _ModelListCache:
 
 _MODEL_LIST_CACHE: _ModelListCache | None = None
 _MODEL_LIST_CACHE_LOCK = threading.Lock()
+_MODEL_LIST_BUILD_LOCK = threading.Lock()
+_MODEL_LIST_GENERATION = 0
 _CURATED_MODEL_CATALOG_CACHE: tuple[dict[str, Any] | None, float] | None = None
 _CURATED_MODEL_CATALOG_LOCK = threading.Lock()
 _DELEGATE_CHILD_REASONING_COMPAT_LOCK = threading.RLock()
@@ -440,31 +442,40 @@ def _error_payload(exc: BaseException) -> dict[str, str]:
             payload["hint"] = exc.hint
         return payload
 
-    message = str(exc) or exc.__class__.__name__
-    lower = message.lower()
-    code = "worker_error"
-    hint = None
-
-    if isinstance(exc, ImportError) or "no module named" in lower:
-        code = "import_error"
-        hint = "Use HERMES_PYTHON=~/.hermes/hermes-agent/venv/bin/python."
-    elif "unauthorized" in lower or "authentication" in lower or "401" in lower or "api key" in lower:
-        code = "auth_error"
-        hint = "Run hermes model or update ~/.hermes/config.yaml credentials."
-    elif "rate limit" in lower or "429" in lower:
-        code = "rate_limit"
-        hint = "Retry later or switch provider/model."
-    elif "quota" in lower or "credit" in lower or "insufficient" in lower:
-        code = "quota_exhausted"
-        hint = "Top up provider account or switch provider/model."
-    elif "model" in lower and ("not found" in lower or "rejected" in lower or "invalid" in lower):
-        code = "model_error"
-        hint = "Pick another model from the model menu."
-
-    payload = {"message": message, "code": code}
-    if hint:
-        payload["hint"] = hint
-    return payload
+    # Structured provider metadata wins over exception prose (which may contain
+    # request bodies or credentials). Only Olympus-owned WorkerError text is safe.
+    status = getattr(exc, 'status_code', None)
+    native_code = getattr(exc, 'code', None)
+    body = getattr(exc, 'body', None)
+    if isinstance(body, dict):
+        error = body.get('error', body)
+        if isinstance(error, dict):
+            native_code = error.get('code') or error.get('type') or native_code
+    if not isinstance(native_code, str):
+        native_code = ''
+    lower = str(exc).lower() if status is None and not native_code else ''
+    if isinstance(exc, ImportError):
+        return {'message': 'The Hermes runtime could not be loaded.', 'code': 'import_error',
+                'hint': 'Check the configured Hermes Python environment.'}
+    if native_code in {'insufficient_quota', 'quota_exceeded', 'quota_exhausted', 'billing_hard_limit_reached'} or any(word in lower for word in ('quota', 'credit', 'insufficient')):
+        code = 'quota_exhausted'
+    elif native_code in {'model_not_found', 'invalid_model', 'model_error'} or ('model' in lower and any(word in lower for word in ('not found', 'rejected', 'invalid'))):
+        code = 'model_error'
+    elif status in (401, 403) or native_code in {'invalid_api_key', 'authentication_error', 'invalid_grant'} or any(word in lower for word in ('unauthorized', 'authentication', '401', 'api key')):
+        code = 'auth_error'
+    elif status == 429 or native_code in {'rate_limit_exceeded', 'rate_limit_error'} or 'rate limit' in lower or '429' in lower:
+        code = 'rate_limit'
+    else:
+        code = 'provider_error'
+    messages = {
+        'auth_error': ('Provider sign-in or key required.', 'Open provider settings in Olympus.'),
+        'rate_limit': ('Provider rate limit reached.', 'View usage, wait, or choose another model or provider.'),
+        'quota_exhausted': ('Provider allowance unavailable.', 'View usage or open provider settings.'),
+        'model_error': ('Selected model is unavailable.', 'Choose another model in Olympus.'),
+        'provider_error': ('The provider could not complete this run.', 'Review saved progress before continuing.'),
+    }
+    message, hint = messages[code]
+    return {'message': message, 'code': code, 'hint': hint}
 
 
 def _send_error(request_id: str, exc: BaseException) -> None:
@@ -620,9 +631,10 @@ def _load_config() -> dict[str, Any]:
 
 
 def _clear_model_list_cache() -> None:
-    global _MODEL_LIST_CACHE
+    global _MODEL_LIST_CACHE, _MODEL_LIST_GENERATION
     with _MODEL_LIST_CACHE_LOCK:
         _MODEL_LIST_CACHE = None
+        _MODEL_LIST_GENERATION += 1
 
 
 def _model_section(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -1347,15 +1359,36 @@ def _list_authenticated_model_groups(
 
 def _list_models() -> dict[str, Any]:
     global _MODEL_LIST_CACHE
+    _ensure_imports()
+    # Only catalog callers wait here; discovery never holds task admission or
+    # settings locks. Waiters reuse the first caller's completed cache entry.
+    with _MODEL_LIST_BUILD_LOCK:
+        while True:
+            with PROVIDER_CONFIG_LOCK:
+                cfg = copy.deepcopy(_load_config())
+                config_mtime = _CONFIG_MTIME
+                with _MODEL_LIST_CACHE_LOCK:
+                    generation = _MODEL_LIST_GENERATION
+                    cached = _MODEL_LIST_CACHE
+                    if cached is not None and cached.config_mtime == config_mtime and time.monotonic() < cached.expires_at:
+                        return cached.data
 
-    cfg = _load_config()
-    config_mtime = _CONFIG_MTIME
-    now = time.monotonic()
-    with _MODEL_LIST_CACHE_LOCK:
-        cached = _MODEL_LIST_CACHE
-        if cached is not None and cached.config_mtime == config_mtime and now < cached.expires_at:
-            return cached.data
+            result = _build_model_list(cfg)
 
+            with PROVIDER_CONFIG_LOCK:
+                _load_config()  # Observe config files changed outside Olympus too.
+                with _MODEL_LIST_CACHE_LOCK:
+                    if generation != _MODEL_LIST_GENERATION or config_mtime != _CONFIG_MTIME:
+                        continue
+                    _MODEL_LIST_CACHE = _ModelListCache(
+                        data=result,
+                        config_mtime=config_mtime,
+                        expires_at=time.monotonic() + _MODEL_LIST_CACHE_TTL_SECONDS,
+                    )
+                    return result
+
+
+def _build_model_list(cfg: dict[str, Any]) -> dict[str, Any]:
     defaults = _defaults_from_config(cfg)
     default_model = defaults["model"]
     active_provider = defaults["provider"]
@@ -1385,20 +1418,11 @@ def _list_models() -> dict[str, Any]:
                         "isCurrentDefault": bool(default_model and alias.strip() == default_model),
                     })
 
-    result = {
+    return {
         "defaultModel": default_model,
         "activeProvider": active_provider,
         "groups": [{"provider": provider, "models": models} for provider, models in groups.items()],
     }
-
-    with _MODEL_LIST_CACHE_LOCK:
-        _MODEL_LIST_CACHE = _ModelListCache(
-            data=result,
-            config_mtime=config_mtime,
-            expires_at=time.monotonic() + _MODEL_LIST_CACHE_TTL_SECONDS,
-        )
-
-    return result
 
 
 def _resolve_model_provider(
@@ -1732,15 +1756,27 @@ def _agent_failure_message(text: str) -> str | None:
         "Non-retryable client error",
     )
     if clean.startswith(failure_prefixes):
-        return clean
+        return 'The provider could not complete this run. Review saved progress before continuing.'
 
     return None
 
 
 def _agent_result_failure(result: dict[str, Any]) -> tuple[str, str] | None:
     if result.get("failed") is True:
-        message = str(result.get("error") or result.get("final_response") or "Hermes agent reported failure")
-        return message, "agent_failed"
+        failures = {
+            'auth': ('Provider sign-in or key required.', 'auth_error'),
+            'auth_permanent': ('Provider sign-in or key required.', 'auth_error'),
+            'rate_limit': ('Provider rate limit reached.', 'rate_limit'),
+            'upstream_rate_limit': ('Provider rate limit reached.', 'rate_limit'),
+            'quota_exhausted': ('Provider allowance unavailable.', 'quota_exhausted'),
+            'billing': ('Provider allowance unavailable.', 'quota_exhausted'),
+            'billing_unverified': ('Provider allowance unavailable.', 'quota_exhausted'),
+            'model_not_found': ('Selected model is unavailable.', 'model_error'),
+            'model_entitlement': ('Selected model is unavailable.', 'model_error'),
+        }
+        reason = result.get('failure_reason')
+        return failures.get(reason if isinstance(reason, str) else '',
+                            ('The provider could not complete this run.', 'provider_error'))
     if result.get("completed") is False:
         reason = str(result.get("turn_exit_reason") or "")
         if reason.startswith("max_iterations_reached("):
@@ -1748,8 +1784,7 @@ def _agent_result_failure(result: dict[str, Any]) -> tuple[str, str] | None:
                 "Hermes reached its configured tool-iteration limit before completing this turn.",
                 "iteration_limit",
             )
-        message = str(result.get("error") or result.get("final_response") or "Hermes agent did not complete the turn")
-        return message, "agent_incomplete"
+        return 'Hermes agent did not complete the turn. Review saved progress before continuing.', 'agent_incomplete'
     return None
 
 
@@ -2206,6 +2241,12 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
             auth_failure = _openai_result_failure(result, string_or_none(getattr(agent, 'provider', None)))
             if auth_failure:
                 raise WorkerError(auth_failure[0], code=auth_failure[1])
+            result_failure = _agent_result_failure(result)
+            # Failed native responses can contain upstream error details. A
+            # nonfailed incomplete turn may still have useful saved progress.
+            if result.get("failed") is True and result_failure:
+                raise WorkerError(result_failure[0], code=result_failure[1])
+
             final_text = str(result.get("final_response") or "")
             failure_message = _agent_failure_message(final_text)
             if failure_message:
@@ -2216,7 +2257,6 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
             if result.get("last_reasoning") and len(state["thinking"]) == thinking_before:
                 on_reasoning_delta(str(result["last_reasoning"]))
 
-            result_failure = _agent_result_failure(result)
             if result_failure:
                 message, code = result_failure
                 if code == "iteration_limit":
@@ -2396,6 +2436,11 @@ def _run_one_shot_agent(label: str, system_message: str, user_message: str) -> s
         system_message=system_message,
         conversation_history=[],
     )
+    if result.get('failed') is True:
+        failure = (_openai_result_failure(result, string_or_none(getattr(agent, 'provider', None)))
+                   or _agent_result_failure(result))
+        if failure:
+            raise WorkerError(failure[0], code=failure[1])
     final_text = str(result.get("final_response") or "")
     failure_message = _agent_failure_message(final_text)
     if failure_message:
@@ -2583,6 +2628,13 @@ def _submit_chat_request(request_id: str, request: dict[str, Any]) -> None:
     thread.start()
 
 
+def _handle_models_request(request_id: str) -> None:
+    try:
+        _result(request_id, _list_models())
+    except Exception:
+        _send_error(request_id, WorkerError('Model catalog is unavailable. Try again shortly.', code='models_unavailable'))
+
+
 def _handle_usage_request(request_id: str, refresh: bool) -> None:
     try:
         from hermes_usage import get_usage
@@ -2705,7 +2757,7 @@ def _handle_request(request: dict[str, Any]) -> None:
             else:
                 threading.Thread(target=_handle_openai_auth_request, args=(request_id, request), daemon=True).start()
         elif request_type == "models.list":
-            _result(request_id, _list_models())
+            threading.Thread(target=_handle_models_request, args=(request_id,), daemon=True).start()
         elif request_type == "providers.manage":
             threading.Thread(target=_handle_provider_request, args=(request_id, request), daemon=True).start()
         elif request_type == "usage.get":
@@ -2821,9 +2873,8 @@ def _run_loop() -> None:
             if not isinstance(request, dict):
                 continue
             _handle_request(request)
-        except Exception as exc:
-            print(f"[hermes-worker] failed to handle request: {exc}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
+        except Exception:
+            print("[hermes-worker] failed to handle request", file=sys.stderr, flush=True)
 
 
 def _self_test() -> int:

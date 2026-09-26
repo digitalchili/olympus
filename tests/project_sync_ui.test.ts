@@ -24,6 +24,8 @@ assert.match(render({ lastSync, blocker }), /A GitHub sync is already running/);
 assert.doesNotMatch(render({ lastSync, blocker }), /Release editor|previous task|\/tasks\//i);
 assert.doesNotMatch(render({ lastSync, blocker: null }), /Release editor|previous task|\/tasks\//i, 'syncing the baseline has no dependency on another task');
 assert.match(updated, /New tasks use this version/, 'verified sync must not imply that existing task workspaces were overwritten');
+assert.match(render({ lastSync: null, blocker: null }), /Downloads the starting point for new tasks/);
+assert.match(render({ lastSync: null, blocker: null }), /Existing task branches and files stay unchanged/);
 assert.match(render({ lastSync, blocker }, true), /disabled=""/);
 assert.match(render({ lastSync, blocker }, true), /Syncing/);
 assert.match(render({ lastSync, blocker: null }, false, 'GitHub could not be reached'), /GitHub could not be reached/);

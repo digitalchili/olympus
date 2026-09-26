@@ -483,6 +483,7 @@ interface ModelPickerGroup {
 }
 
 export interface ModelPickerProps {
+  openRequest?: number;
   value: string;
   provider?: string | null;
   fallback?: string | null;
@@ -557,6 +558,7 @@ function findInitialModelGroupId(groups: ModelPickerGroup[], value: string, prov
 }
 
 export function ModelPicker({
+  openRequest = 0,
   value,
   provider = null,
   fallback = null,
@@ -568,6 +570,13 @@ export function ModelPicker({
   onChange,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
+  const consumedOpenRequest = useRef(0);
+  useEffect(() => {
+    if (openRequest > 0 && openRequest !== consumedOpenRequest.current && !disabled) {
+      consumedOpenRequest.current = openRequest;
+      setOpen(true);
+    }
+  }, [openRequest, disabled]);
   const [query, setQuery] = useState('');
   const [activeGroupId, setActiveGroupId] = useState('');
   const [activeModelIndex, setActiveModelIndex] = useState(0);
@@ -953,6 +962,7 @@ export function ModelPicker({
 }
 
 interface InputToolbarProps {
+  modelPickerRequest?: number;
   model: string | null;
   provider?: string | null;
   reasoningEffort: ReasoningEffort | null;
@@ -1046,6 +1056,7 @@ const REASONING_OPTIONS: ToolbarSelectOption[] = REASONING_EFFORTS.map((effort) 
 }));
 
 export function InputToolbar({
+  modelPickerRequest,
   model,
   provider = null,
   reasoningEffort,
@@ -1074,6 +1085,7 @@ export function InputToolbar({
   return (
     <div className={`flex min-w-0 items-center gap-2 ${compactMobile ? 'flex-nowrap' : 'flex-wrap'}`}>
       <ModelPicker
+        openRequest={modelPickerRequest}
         value={model ?? ''}
         provider={provider}
         fallback={defaultModel}

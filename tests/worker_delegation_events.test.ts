@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { HermesWorkerClient } from '../server/adapters/hermes-worker.js';
 import type { DelegationWorkerEvent } from '../shared/types.js';
 
@@ -48,10 +49,12 @@ assert.equal(received.length, 1, 'unsubscribed listeners receive no late events'
 
 let resets = 0;
 worker.onDelegationReset(() => { resets += 1; });
-(worker as unknown as { ready: boolean }).ready = true;
-(worker as unknown as { handleExit: (error: Error) => void }).handleExit(new Error('simulated worker crash'));
+const lifecycle = worker as unknown as { child: ChildProcessWithoutNullStreams; handleExit(child: ChildProcessWithoutNullStreams, error: Error): void };
+const child = {} as ChildProcessWithoutNullStreams;
+lifecycle.child = child;
+lifecycle.handleExit(child, new Error('simulated worker crash'));
 assert.equal(resets, 1, 'a live worker crash emits one delegation reset');
-(worker as unknown as { handleExit: (error: Error) => void }).handleExit(new Error('duplicate exit notification'));
+lifecycle.handleExit(child, new Error('duplicate exit notification'));
 assert.equal(resets, 1, 'duplicate exit notifications do not emit duplicate resets');
 
 console.log('Late worker delegation event routing tests passed');

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. A single inexpensive implementer working sequentially is the intended execution method. Steps use checkbox (`- [ ]`) syntax for tracking. Read the shared spec and the current task's plan before editing.
 
-**Goal:** Track the improvements from the 2026-09-26 OpenAI, stopped-task/retry, GitHub reliability and response-performance review. The subsequent implementation is limited to authentication; the wider package remains pending for a separately scoped continuation.
+**Goal:** Track the improvements from the 2026-09-26 OpenAI, stopped-task/retry, GitHub reliability and response-performance review. Authentication shipped in v0.7.19. The user subsequently approved GitHub publication and task reliability hardening (G1–G3, R1–R4); that continuation passed local implementation, independent review and integrated verification. The full performance package remains pending.
 
 **Architecture:** Keep Olympus's existing Hermes-first design. Repair credential lifecycle, worker/SSE failure handling and Git publication recovery. Add a small OAuth bridge/card, shared SSE writer, durable publication receipt and opt-in stage timings. Remove optional catalog blocking and unused repository diagnostics while preserving safety checks.
 
@@ -10,7 +10,7 @@
 
 **Spec:** [Shared design and acceptance contract](../specs/2026-09-26-reliability-improvements-design.md).
 
-**Implementation note — 2026-09-26:** Shared-default OpenAI sign-in, an explicit separate-profile option, native renewal compatibility, and OpenAI-specific reconnect presentation are implemented locally. See [OpenAI authentication evidence](../../testing/openai-authentication.md) and the updated [authentication contract](2026-09-26-openai-authentication.md). This note does not mark all 15 tasks complete or claim a commit, Docker build, deployment or resolution of the reported production incidents. Broader retry/liveness/SSE, GitHub and performance tasks remain pending.
+**Historical authentication implementation note — 2026-09-26 (before the v0.7.19 release):** Shared-default OpenAI sign-in, an explicit separate-profile option, native renewal compatibility, and OpenAI-specific reconnect presentation are implemented locally. See [OpenAI authentication evidence](../../testing/openai-authentication.md) and the updated [authentication contract](2026-09-26-openai-authentication.md). This note does not mark all 15 tasks complete or claim a commit, Docker build, deployment or resolution of the reported production incidents. Broader retry/liveness/SSE, GitHub and performance tasks remain pending.
 
 ## Global Constraints
 
@@ -26,7 +26,7 @@ The spec's twelve Global constraints apply verbatim. Keep work local and scoped;
 
 ## Read this first
 
-Repository: `/Users/michael/Dev/Olympus`. Reviewed baseline: **`1f81b95` / v0.7.18**, clean `main` when planning began. The package began as documentation only; the authentication subset now has local code and tests in the isolated implementation worktree. The affected installation is Docker/server, but its actual image, logs and account arrangement have not been inspected.
+Repository: `/Users/michael/Dev/Olympus`. Reviewed baseline: **`1f81b95` / v0.7.18**, clean `main` when planning began. The package began as documentation only; authentication subsequently shipped in **v0.7.19 / `1dd01b2`**. R1–R4/G1–G3 passed local verification on `codex/production-hardening` from that released baseline. See [the integrated evidence](../../../qa/reliability-2026-09-26.md) for the current status. The affected installation is Docker/server, but its actual image, logs and account arrangement have not been inspected.
 
 Read in this order:
 
@@ -51,7 +51,7 @@ The findings and expected fixes are fully described in the spec. Do not repeat t
 |---|---|
 | Shared OpenAI refresh storage/locking defect in Docker pin | A1 |
 | Native auth errors lose reconnect/temporary-failure meaning | R2, A2 |
-| No in-app shared/default or separate-profile OpenAI reconnect | A2, A3; locally implemented, acceptance tracked separately |
+| No in-app shared/default or separate-profile OpenAI reconnect | A2, A3; shipped in v0.7.19, live acceptance tracked separately |
 | A slow health probe kills work and globalizes failure | R1 |
 | Distinct provider failures collapse into generic Retry | R2, A3 |
 | Queued input contradicts automatic-resume promises | R3 |
@@ -68,46 +68,48 @@ Not included: replacing Hermes, adding another provider, automatic whole-turn re
 
 ## Execution order and progress ledger
 
-The original whole-package order remains below for future work. The user subsequently selected only authentication; that bounded implementation does not authorize executing the remaining rows:
+The original package order remains below. Authentication shipped in v0.7.19. The subsequent production-hardening approval covers R1–R4/G1–G3 and their integrated checks; performance P1–P4 and live rollout remain separate:
 
 | Order | Task | Dependencies | Status |
 |---|---|---|---|
 | 1 | P1 — timing instrumentation and before baseline | Preflight | Not started |
-| 2 | R1 — observational liveness and reader responsiveness | P1 baseline where executable | Not started |
-| 3 | A1 — candidate Hermes compatibility/pin | Preflight | Source/native contracts and immutable pin implemented; Docker build/runtime pending |
-| 4 | R2 — failure categories/actions | R1; candidate API checked in A1 | OpenAI-specific reconnect classification implemented; broader categories/actions pending |
-| 5 | R3 — queued recovery projection | R2 | Not started |
-| 6 | R4 — SSE writer and bootstrap | R1 | Not started |
+| 2 | R1 — observational liveness and reader responsiveness | Existing probe fix retained | Implemented and locally verified; see integrated evidence |
+| 3 | A1 — candidate Hermes compatibility/pin | Preflight | Shipped in v0.7.19; native contracts rerun for hardening; live acceptance pending |
+| 4 | R2 — failure categories/actions | R1; candidate API checked in A1 | Implemented and locally verified; see integrated evidence |
+| 5 | R3 — queued recovery projection | R2 | Implemented and locally verified; see integrated evidence |
+| 6 | R4 — SSE writer and bootstrap | R1 | Implemented and locally verified; see integrated evidence |
 | 7 | P2 — nonblocking settings/catalog | P1, R1 | Not started |
 | 8 | P3 — exact source identity and bounded polling | P1, R3 | Not started |
-| 9 | G1 — publication receipts/reconciliation | Preflight | Not started |
-| 10 | G2 — scoped Git credentials | G1 signatures | Not started |
-| 11 | G3 — publication/sync controls | G1, G2 | Not started |
-| 12 | A2 — worker OAuth manager/helper | A1; auth-only reader/admission safety | Shared/profile contract implemented locally; evidence linked above |
-| 13 | A3 — routes/UI/task reconnect | A2; OpenAI-specific R2 mapping | Shared-default UI, explicit profile scope and task reconnect implemented locally; evidence linked above |
+| 9 | G1 — publication receipts/reconciliation | Preflight | Implemented and locally verified; see integrated evidence |
+| 10 | G2 — scoped Git credentials | G1 signatures | Implemented and locally verified; see integrated evidence |
+| 11 | G3 — publication/sync controls | G1, G2 | Implemented and locally verified; see integrated evidence |
+| 12 | A2 — worker OAuth manager/helper | A1; auth-only reader/admission safety | Shipped in v0.7.19; native helper rerun for hardening; live acceptance pending |
+| 13 | A3 — routes/UI/task reconnect | A2; OpenAI-specific R2 mapping | Shipped in v0.7.19; task action regressions retained; live acceptance pending |
 | 14 | P4 — performance acceptance/comparison handoff | P1–P3, R1/R4; A1 revision recorded | Not started |
-| 15 | V1 — final integrated gates | All above, or explicit blocked report | Not started |
+| 15 | V1 — final integrated gates | Authorized R/G subset | Local suite/build/native/browser/review complete; Docker/live acceptance and P1–P4 pending |
 
 For a separately authorized whole-package continuation, if A1 is blocked by unavailable/incompatible native runtime, complete independent R/G/P tasks with fake providers; record the runtime used for performance fixtures. R2 can retain its typed error mapping using mocked native attributes, but do not claim real candidate compatibility. Do not substitute another model/provider or silently redesign OAuth. A2/A3 remain gated on a verified native contract. An unavailable Desktop benchmark does not block independently tested local changes.
 
 For authentication, use `docs/testing/openai-authentication.md`. When the broader package is resumed, update this ledger and append to `qa/reliability-2026-09-26.md`: task ID; source revision; changed files; red regression result; green command/result; native/browser/Docker evidence; skips/limitations; local commit. A local commit is a useful checkpoint, not permission to push. Preserve this planning package in the execution checkout.
 
-## Preflight (for a later whole-package continuation)
+## Preflight (completed for the R/G continuation; repeat only when baseline changes)
 
-- [ ] Run `git status --short --branch`, `git rev-parse HEAD`, and `git remote -v`; confirm the selected repository. Preserve unrelated work. If baseline has moved, inspect only relevant differences, mark an already-fixed requirement complete with current evidence, and do not downgrade code to the reviewed revision.
-- [ ] Use an isolated worktree/branch `codex/reliability-improvements` for implementation when necessary to preserve the user's working checkout. Read the worktree skill at execution time. Copy/include the uncommitted planning documents if creating a worktree from HEAD; managed worktrees do not copy uncommitted files automatically. Do not execute against a different checkout accidentally.
-- [ ] Confirm a supported Node and Python environment. Use existing package lockfiles and project tools. No dependency upgrade is needed outside A1's pinned Hermes candidate. If install is necessary, install only development dependencies into this execution workspace, never the running server.
-- [ ] Use `node scripts/run-tests.mjs <test files>` for focused tests. It makes disposable state, DB, Hermes home and Project root before importing test modules. New Python tests must be added to its explicit list; `.test.ts` files are discovered automatically. Do not run production app startup just to inspect code.
-- [ ] Run one focused baseline set: `node scripts/run-tests.mjs tests/runtime_liveness.test.ts tests/task_failure_persistence.test.ts tests/automatic_recovery.test.ts tests/reconnect_chat.test.ts tests/project_cp_safety.test.ts tests/project_empty_repository.test.ts tests/test_worker_usage.py tests/test_worker_providers.py`. Record failures as baseline evidence; do not repeatedly rerun a flaky full suite before beginning.
+- [x] Run `git status --short --branch`, `git rev-parse HEAD`, and `git remote -v`; confirm the selected repository. Preserve unrelated work. If baseline has moved, inspect only relevant differences, mark an already-fixed requirement complete with current evidence, and do not downgrade code to the reviewed revision.
+- [x] Use an isolated worktree/branch `codex/reliability-improvements` for implementation when necessary to preserve the user's working checkout. Read the worktree skill at execution time. Copy/include the uncommitted planning documents if creating a worktree from HEAD; managed worktrees do not copy uncommitted files automatically. Do not execute against a different checkout accidentally.
+- [x] Confirm a supported Node and Python environment. Use existing package lockfiles and project tools. No dependency upgrade is needed outside A1's pinned Hermes candidate. If install is necessary, install only development dependencies into this execution workspace, never the running server.
+- [x] Use `node scripts/run-tests.mjs <test files>` for focused tests. It makes disposable state, DB, Hermes home and Project root before importing test modules. New Python tests must be added to its explicit list; `.test.ts` files are discovered automatically. Do not run production app startup just to inspect code.
+- [x] Run one focused baseline set (the continuation used the five-file set recorded in the integrated evidence): `node scripts/run-tests.mjs tests/runtime_liveness.test.ts tests/task_failure_persistence.test.ts tests/automatic_recovery.test.ts tests/reconnect_chat.test.ts tests/project_cp_safety.test.ts tests/project_empty_repository.test.ts tests/test_worker_usage.py tests/test_worker_providers.py`. Record failures as baseline evidence; do not repeatedly rerun a flaky full suite before beginning.
 
-## Task V1: Integrated verification and review handoff — whole package pending
+## Task V1: Integrated verification and review handoff — R/G local gates complete
 
 **Files:** Create/update `qa/reliability-2026-09-26.md` and `qa/response-performance-2026-09-26.md`; update `docs/coding-harness.md`, `docs/project-task-workspaces.md`, and affected AGENTS contracts to match implemented behavior. Do not erase historical version notes; clearly label old behavior and the new contract.
 
+**Current evidence:** [Integrated R/G report and pending Docker checklist](../../../qa/reliability-2026-09-26.md). The unchecked Docker and P4 steps remain outstanding; browser completion below refers to R/G fixtures, with authentication UI evidence retained from v0.7.19.
+
 **Output:** A tested local branch with reproducible evidence, no unresolved high-impact correctness findings, and a separate pending live-acceptance checklist. No success claim for unexecuted native or deployment checks.
 
-- [ ] **Run each new failure regression at least once before and after its fix.** Keep tests behavior-based: real local Git for uncertain pushes; actual Node stream buffering for SSE; fake native/HTTP/stores plus candidate-native contracts for auth; process identity/race fixtures for lifecycle. Static source-string assertions alone do not prove these behaviors.
-- [ ] **Run the final standard gate once after integration:**
+- [x] **Run each new failure regression at least once before and after its fix.** Keep tests behavior-based: real local Git for uncertain pushes; actual Node stream buffering for SSE; fake native/HTTP/stores plus candidate-native contracts for auth; process identity/race fixtures for lifecycle. Static source-string assertions alone do not prove these behaviors.
+- [x] **Run the final standard gate once after integration:**
 
   ```sh
   npm test
@@ -119,13 +121,13 @@ For authentication, use `docs/testing/openai-authentication.md`. When the broade
 
   Expect zero failures and successful exit for each. There is no general linter in this repo. Do not add one. Repeat a check only after relevant changes/failures. `npm run typecheck` emits server build output by existing design; generated artifacts should remain ignored.
 
-- [ ] **Run native candidate contracts without the default skips.** Use the isolated candidate source path from A1 as `OLYMPUS_NATIVE_HERMES_SOURCE` for `tests/test_worker_recovery.py`, `tests/test_background_work_native.py`, and `tests/test_project_github_worker.py` through the isolated runner. Run `tests/test_worker_usage_native.py` and new `tests/test_worker_openai_auth_native.py` with that source as explicit argument under the candidate's test Python/dependencies. Use temporary profile/default stores and mocked HTTP. Also exercise `tests/hermes_021_native_interactions_test.py` with the selected native source on its import path and disposable state. Write exact runtime/path/commands to the evidence report; do not point at or alter the installed live Hermes directory.
+- [x] **Run native candidate contracts without the default skips.** Use the isolated candidate source path from A1 as `OLYMPUS_NATIVE_HERMES_SOURCE` for `tests/test_worker_recovery.py`, `tests/test_background_work_native.py`, and `tests/test_project_github_worker.py` through the isolated runner. Run `tests/test_worker_usage_native.py` and new `tests/test_worker_openai_auth_native.py` with that source as explicit argument under the candidate's test Python/dependencies. Use temporary profile/default stores and mocked HTTP. Also exercise `tests/hermes_021_native_interactions_test.py` with the selected native source on its import path and disposable state. Write exact runtime/path/commands to the evidence report; do not point at or alter the installed live Hermes directory.
 - [ ] **Validate candidate Docker packaging.** Build the changed image locally with temporary state/volumes only. Verify selected native source/image digest, new Python helper assets, ready/drain behavior, worker responsiveness during auth/model-list operations, and clean restart with pending publication receipts. Keep fake authentication/provider HTTP. Read the existing Docker E2E harness before invoking it: it contains disposable installers and must be confined to its unique test resources, never reused with live `.env` or volumes. If Docker is unavailable, mark this gate incomplete and do not label the image release-ready.
-- [ ] **Complete browser acceptance using disposable fixtures.** OpenAI card: status/check/start/cancel/expiry/wait-for-idle/save/profile-switch/reload. Task: auth versus quota/model failure, preserved unsent draft, queued pause/removal/send, no unsolicited task POST. Streams: large bootstrap and lost terminal event recover correctly. Git: both interfaces, task-branch default, exact pending target, resume/abandon, successful push labels, baseline-only sync. Stop fixture servers afterward.
-- [ ] **Inspect the final diff.** All product changes must map to a task in this package. No credential fixtures, local state, temporary scripts, native checkout changes, unrelated formatting, version bump or generated bundles are included. Add regression tests for a discovered interaction rather than weakening assertions.
+- [x] **Complete browser acceptance using disposable fixtures.** OpenAI card: status/check/start/cancel/expiry/wait-for-idle/save/profile-switch/reload. Task: auth versus quota/model failure, preserved unsent draft, queued pause/removal/send, no unsolicited task POST. Streams: large bootstrap and lost terminal event recover correctly. Git: both interfaces, task-branch default, exact pending target, resume/abandon, successful push labels, baseline-only sync. Stop fixture servers afterward.
+- [x] **Inspect the final diff.** All product changes must map to a task in this package. No credential fixtures, local state, temporary scripts, native checkout changes, unrelated formatting, version bump or generated bundles are included. Add regression tests for a discovered interaction rather than weakening assertions.
 - [ ] **Include P4 performance evidence.** Report Send-to-first-activity and Send-to-first-answer separately from verification completion, with before/after fixtures and exact revisions. Confirm diagnostics are opt-in and contain no sensitive content. Preserve source identity, selected model/reasoning and recovery safety. State explicitly whether a real Hermes Desktop comparison occurred; do not turn synthetic timing into a production speed claim.
-- [ ] **Obtain one final independent review where available.** Focus on auth ownership/cancel-save races, worker generation safety, exact-ref Git recovery and credential transport. A stronger reviewer at this final gate is more economical than expensive broad reviews after every small task. If unavailable, record that limitation; do not invent independent review evidence. Fix actionable findings and rerun affected checks before finishing.
-- [ ] **Report completion precisely.** List tasks done/blocked, source commits, selected Hermes tag/digest, tests and skipped gates, UI evidence, and remaining operational checks. State explicitly that code is local and whether any commit/push/deployment occurred. Do not say the server disconnects are solved until live acceptance supports that claim.
+- [x] **Obtain one final independent review where available.** Focus on auth ownership/cancel-save races, worker generation safety, exact-ref Git recovery and credential transport. A stronger reviewer at this final gate is more economical than expensive broad reviews after every small task. If unavailable, record that limitation; do not invent independent review evidence. Fix actionable findings and rerun affected checks before finishing.
+- [x] **Report completion precisely.** List tasks done/blocked, source commits, selected Hermes tag/digest, tests and skipped gates, UI evidence, and remaining operational checks. State explicitly that code is local and whether any commit/push/deployment occurred. Do not say the server disconnects are solved until live acceptance supports that claim.
 
 ## Later live rollout checklist — a separate approved operation
 
@@ -142,7 +144,7 @@ This is a plan for a later operator, not authorization to contact a host now.
 
 ## Copyable executor prompt
 
-> Read `docs/superpowers/plans/2026-09-26-reliability-handoff.md`, its linked design, and the current implementation ledger before editing. Authentication has been implemented locally with shared-default sign-in and an explicit separate-profile option; consult `docs/testing/openai-authentication.md` and the updated auth plan rather than reimplementing it. Do not infer authorization to execute the remaining retry, GitHub or performance tasks: continue only the subset the user next requests. For a requested performance continuation, record the P1 baseline before optimizing and keep model/reasoning unchanged. Preserve existing work, add failing regressions first and use disposable state. Update the relevant evidence and ledger. Do not deploy, update installed Hermes, use real credentials, push to GitHub or replay tasks automatically. Distinguish source/native fixtures, Docker runtime checks and live acceptance; report pending checks without claiming all 15 tasks complete.
+> Read `docs/superpowers/plans/2026-09-26-reliability-handoff.md`, its linked design, and `qa/reliability-2026-09-26.md` before editing. Authentication shipped in v0.7.19; R1–R4/G1–G3 are the authorized hardening continuation. Inspect the current branch and evidence rather than reimplementing completed work. Performance P1–P4 and live rollout remain separate: continue only the subset the user next requests. For a requested performance continuation, record the P1 baseline before optimizing and keep model/reasoning unchanged. Preserve existing work, add failing regressions first and use disposable state. Update the relevant evidence and ledger. Do not deploy, update installed Hermes, use real credentials, push to GitHub or replay tasks automatically. Distinguish source/native fixtures, Docker runtime checks and live acceptance; report pending checks without claiming all 15 tasks complete.
 
 ## When the implementer needs help
 

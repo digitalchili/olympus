@@ -49,12 +49,13 @@ const service = createProjectCpService({
   rootDir: join(root, 'checkouts'), now: () => timestamp,
   gitRunner: async (cwd, args, options) => {
     assert.equal(args.join(' ').includes(token), false, 'credentials never enter command arguments');
-    if (options?.env?.GIT_CONFIG_VALUE_0) {
+    const header = Object.values(options?.env ?? {}).find(value => value?.startsWith('AUTHORIZATION: basic '));
+    if (header) {
       credentialsUsed++;
-      assert.equal(options.env.GIT_CONFIG_VALUE_0, `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`);
+      assert.equal(header, `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`);
     }
     await beforeGit(args);
-    const rewrite = args[0] === 'remote' && args[1] === 'get-url' ? [] : ['-c', `url.${remote}.insteadOf=${cloneUrl}`];
+    const rewrite = args[0] === 'remote' && args[1] === 'get-url' ? [] : ['-c', 'protocol.file.allow=always', '-c', `url.${remote}.insteadOf=${cloneUrl}`];
     return promisify(execFile)('git', [...rewrite, ...args], { cwd, env: { ...process.env, ...options?.env } });
   },
 });
@@ -70,7 +71,7 @@ app.use(express.json());
 app.use('/api/projects', createProjectsRouter({
   projectCp: service, now: () => timestamp,
   adapter: { getBackgroundWork: async (taskId: string) => { assert.equal(taskId, owner.id); return backgroundWork(); } } as never,
-  github: { installationToken: async () => token } as never,
+  github: { installationToken: async (id: number, scope: unknown) => { assert.equal(id, 77); assert.deepEqual(scope, { repositoryId: 9001, readOnly: true }); return token; } } as never,
 }));
 const server = app.listen(0, '127.0.0.1');
 await once(server, 'listening');
@@ -143,7 +144,7 @@ try {
     const previous = (await call()).body.lastSync;
     beforeGit = async args => { if (args[0] === 'fetch') throw new Error(`Network failure ${token}`); };
     try {
-      assert.equal((await call('POST')).status, 500);
+      assert.equal((await call('POST')).status, 503);
       assert.deepEqual((await call()).body.lastSync, previous);
     } finally { beforeGit = async () => {}; }
     assert.ok(credentialsUsed > 0);

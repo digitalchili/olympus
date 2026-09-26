@@ -448,6 +448,21 @@ export interface ProjectSyncState {
   blocker: ProjectSyncBlocker | null;
 }
 
+export interface PendingProjectPublication {
+  id: string;
+  action: ProjectVersionAction;
+  commitSha: string | null;
+  targetBranches: string[];
+  state: 'prepared' | 'pending';
+}
+export interface ProjectGitStatus {
+  clean: boolean;
+  changedFiles: string[];
+  summary: string;
+  diff: string;
+  pendingPublication: PendingProjectPublication | null;
+}
+
 export interface ProjectVersion {
   id: string;
   projectId: string;
@@ -583,6 +598,7 @@ export interface ToolProgressEvent {
 }
 
 export type TaskRunKind = 'chat' | 'goal' | 'compact';
+export type RecoveryWaitReason = 'queued_message' | 'awaiting_input';
 export type LiveChatRunStatus = 'streaming' | 'compacting' | 'done' | 'error' | 'stopped';
 
 export interface AgentRuntimeModel {
@@ -605,6 +621,7 @@ export interface TaskAgentRun {
   modelResolution: AgentModelResolution | null;
   errorCode?: string | null;
   recoveryState?: string | null;
+  recoveryWaitReason?: RecoveryWaitReason | null;
   startedAt: number;
   updatedAt: number;
   completedAt: number | null;
@@ -620,6 +637,7 @@ export interface TaskRunState {
   goal?: GoalStateSnapshot | null;
   errorCode?: string | null;
   recoveryState?: string | null;
+  recoveryWaitReason?: RecoveryWaitReason | null;
   modelResolution?: AgentModelResolution | null;
 }
 
@@ -718,6 +736,7 @@ export interface LiveChatRun {
   error?: string;
   errorCode?: string | null;
   recoveryState?: string | null;
+  recoveryWaitReason?: RecoveryWaitReason | null;
   modelResolution?: AgentModelResolution | null;
 }
 

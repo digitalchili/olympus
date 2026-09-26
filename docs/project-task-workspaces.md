@@ -18,9 +18,19 @@ Each task keeps its own files and protected Git branch across turns. Commit & Pu
 
 An empty repository can start Project tasks immediately. After a failed branch clone, Olympus requires a successful remote ref listing with no refs before creating a local empty starting commit. It adds no application files and publishes nothing during preparation or sync. Missing branches in nonempty repositories and authentication failures remain errors.
 
-The first Commit & Push creates the task branch and default branch atomically. With deployment disabled, the default branch contains only the empty starting commit, so task code remains available for review and merge. With deployment enabled, both branches receive the task commit. The default branch is created only if still absent; a concurrent publication cannot be overwritten.
+The first Commit & Push creates the task branch and default branch atomically. With the task-branch default selected, the default branch contains only the empty starting commit, so task code remains available for review and merge. Selecting **Also push to** the default branch gives both branches the task commit. The default branch is created only if still absent; a concurrent publication cannot be overwritten.
 
 The local starting commit is recorded in checkout Git configuration and survives restarts. Sync retains it while GitHub is empty. Once the remote default branch exists, sync replaces only an untouched starting baseline with that branch, including when someone initialized GitHub independently. Existing task folders and modified baselines are preserved.
+
+## Publication and retry
+
+Commit & Push defaults to the task branch each time the dialog opens or the selected task changes. Also pushing to the default branch requires an explicit choice. A successful push displays its commit and branch. A deployment service may build that branch, but Olympus does not verify deployment.
+
+If GitHub publication cannot be confirmed, the task and Project Code views show the saved commit and all approved target branches, even when the working tree is clean. **Resume publication** uses the saved publication ID; it cannot replace the message, branch choice, or commit. A conflict remains visible and does not authorize a force push or another commit. Uncertain publication does not undo the saved commit or local files, and pending publication prevents workspace release or a new publication.
+
+**Stop retrying this publication** requires confirmation. It records abandonment without undoing anything GitHub may already have accepted. The saved commit and local files remain available.
+
+**Sync latest from GitHub** downloads the starting point for new tasks. Existing task branches, files, and their verification evidence stay unchanged. The displayed sync time and commit describe the last successful verification, not a guarantee of current connectivity.
 
 ## GitHub source access
 

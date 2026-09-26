@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { HermesWorkerAdapter, HermesWorkerClient } from '../server/adapters/hermes-worker.js';
 const worker = new HermesWorkerClient('/unused-hermes-home');
 const internal = worker as unknown as { pending: Map<string, unknown>; handleLine(line: string): void };
@@ -21,8 +22,17 @@ adapterInternal.client.stream = async function* () {
 const mapped = [];
 for await (const event of adapter.chatStream('session', 'message')) mapped.push(event);
 assert.deepEqual(mapped, [{ type: 'error', error: '[deadline_finalized] Checkpoint preserved', code: 'deadline_finalized' }]);
+for (const code of ['openai_auth_required', 'openai_auth_unavailable', 'auth_error', 'rate_limit', 'quota_exhausted', 'model_error', 'provider_error']) {
+  adapterInternal.client.stream = async function* () { yield { type: 'error', error: { code, message: 'secret-sentinel' } }; };
+  for await (const event of adapter.chatStream('session', 'message')) {
+    assert.equal(event.type, 'error');
+    if (event.type === 'error') { assert.equal(event.code, code); assert.doesNotMatch(event.error ?? '', /sentinel/); }
+  }
+}
 let crashCode: string | undefined;
 internal.pending.set('crashing', { kind: 'stream', fail(error: Error & { code?: string }) { crashCode = error.code; } });
-(worker as unknown as { handleExit(error: Error): void }).handleExit(new Error('simulated exit'));
+const lifecycle = worker as unknown as { child: ChildProcessWithoutNullStreams; handleExit(child: ChildProcessWithoutNullStreams, error: Error): void };
+lifecycle.child = {} as ChildProcessWithoutNullStreams;
+lifecycle.handleExit(lifecycle.child, new Error('simulated exit'));
 assert.equal(crashCode, 'worker_restarted', 'worker exit must preserve recovery classification');
 console.log('Worker error terminal tests passed');

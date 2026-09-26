@@ -203,12 +203,19 @@ try {
   assert.equal(permissionBlocked.body.code, 'GITHUB_PERMISSION_UPGRADE_REQUIRED');
   assert.match(String(permissionBlocked.body.error), /permission upgrade.*Workflows/i);
   assert.equal(getQueuedTaskMessage(secondTask.id)?.id, 'queue-commit-1', 'permission rejection preserves the exact queued request');
-  assert.match(await git(workdir, ['status', '--porcelain']), /QUEUED-COMMIT\.md/, 'rejected work is still available');
+  assert.equal(await readFile(join(workdir, 'QUEUED-COMMIT.md'), 'utf8'), 'Committed from a durable queue\n', 'rejected work is still available in the retained commit');
   await rm(rejectionHook);
 
   const queuedCommit = await postMessage(secondTask.id, 'default', queuedContent, 'queue-commit-1');
-  assert.equal(queuedCommit.status, 200, JSON.stringify(queuedCommit.body));
-  assert.equal(getQueuedTaskMessage(secondTask.id), undefined, 'a successful queued commit is consumed exactly once');
+  assert.equal(queuedCommit.status, 409, JSON.stringify(queuedCommit.body));
+  assert.equal(queuedCommit.body.code, 'PUBLICATION_PENDING', 'chat cannot silently replay publication intent');
+  const pending = queuedCommit.body.pendingPublication as { id: string };
+  const publicationResumed = await fetch(`http://127.0.0.1:${address.port}/api/projects/${project.id}/publications/${pending.id}/retry`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: secondTask.id }),
+  });
+  assert.equal(publicationResumed.status, 200, await publicationResumed.text());
+  assert.equal(getQueuedTaskMessage(secondTask.id)?.id, 'queue-commit-1', 'explicit recovery does not consume or replay a queued message');
+  assert.equal(deleteQueuedTaskMessage(secondTask.id, 'queue-commit-1'), true);
   assert.equal((await git(workdir, ['status', '--porcelain'])), '');
 
   const noChangesContent = 'commit and push: test queued restore';

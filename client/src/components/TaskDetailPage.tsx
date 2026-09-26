@@ -72,6 +72,7 @@ export function TaskDetailPage() {
   const projectName = projectSummary?.name ?? null;
   const repositoryLink = projectSummary?.repositoryLink ?? null;
   const canCommitPush = Boolean(effectiveProjectId && repositoryLink && repositoryLink.mode === 'branch_pr');
+  const publicationLabel = taskGitStatus?.pendingPublication ? 'Resume publication' : 'Commit & Push';
 
   const parentPath = effectiveProjectId ? `/projects/${encodeURIComponent(effectiveProjectId)}` : '/';
   const pageHeader = useMemo(() => ({
@@ -366,11 +367,12 @@ export function TaskDetailPage() {
                 <button
                   type="button"
                   onClick={() => setShowCommitPushModal(true)}
-                  title="Commit and push changes to GitHub"
+                  title={publicationLabel}
+                  aria-label={publicationLabel}
                   className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white p-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 sm:px-2.5 sm:py-1.5"
                 >
                   <GitCommitHorizontal size={14} strokeWidth={2.2} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
-                  <span className="hidden sm:inline">Commit & Push</span>
+                  <span className="hidden sm:inline">{publicationLabel}</span>
                   {taskGitStatus && !taskGitStatus.clean && taskGitStatus.changedFiles.length > 0 && (
                     <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
                       {taskGitStatus.changedFiles.length}
@@ -417,7 +419,7 @@ export function TaskDetailPage() {
                           className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-left"
                         >
                           <GitCommitHorizontal size={14} className="text-zinc-500 dark:text-zinc-400" />
-                          Commit & Push
+                          {publicationLabel}
                         </button>
                         <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
                       </>

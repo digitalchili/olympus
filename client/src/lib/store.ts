@@ -37,6 +37,7 @@ function taskRunEqual(a: TaskRunState | undefined, b: TaskRunState): boolean {
     a.runId === b.runId &&
     a.status === b.status &&
     a.recoveryState === b.recoveryState &&
+    a.recoveryWaitReason === b.recoveryWaitReason &&
     a.errorCode === b.errorCode &&
     a.kind === b.kind &&
     a.goal?.turnsUsed === b.goal?.turnsUsed &&
@@ -93,8 +94,11 @@ export const useStore = create<AppState>((set) => ({
     const current = state.taskRuns.get(run.taskId) ?? state.taskOutcomes.get(run.taskId);
     if (current && (current.startedAt > run.startedAt ||
       (current.runId === run.runId && !isActiveRun(current) && isActiveRun(run)))) return state;
-    const effective = current?.runId === run.runId && run.recoveryState === undefined
-      ? { ...run, recoveryState: current.recoveryState } : run;
+    const effective = current?.runId === run.runId ? {
+      ...run,
+      recoveryState: run.recoveryState === undefined ? current.recoveryState : run.recoveryState,
+      recoveryWaitReason: run.recoveryWaitReason === undefined ? current.recoveryWaitReason : run.recoveryWaitReason,
+    } : run;
     if (taskRunEqual(current, effective)) return state;
     const taskRuns = new Map(state.taskRuns);
     const taskOutcomes = new Map(state.taskOutcomes);

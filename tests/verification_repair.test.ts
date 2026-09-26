@@ -129,7 +129,12 @@ try {
     cancelRecovery(stopped.id);
     const queued = await fixture('queued');
     putQueuedTaskMessage({ id: 'human-message', taskId: queued.id, content: 'New direction', settings: { mode: 'task' }, invitedProfileIds: [], collaborationScope: 'discussion', confirmPersistentCollaboration: false, createdAt: Date.now(), updatedAt: Date.now() });
+    const before = getRecovery(queued.id);
     await reconcileRecoveries(adapter, deliver);
+    await reconcileRecoveries(adapter, deliver);
+    await reconcileRecoveries(adapter, deliver);
+    assert.deepEqual(getRecovery(queued.id), before, 'queue pause preserves verification cause, fingerprint, attempts and checkpoint');
+    assert.equal(getLatestTaskAgentRun(queued.id)?.recoveryWaitReason, 'queued_message');
     assert.equal(work.get(stopped.id)?.starts, 1);
     assert.equal(work.get(queued.id)?.starts, 1);
   });

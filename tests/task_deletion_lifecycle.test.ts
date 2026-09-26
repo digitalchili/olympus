@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,12 +23,12 @@ function jsonRequest(method: string, body?: unknown): RequestInit {
 
 function fakeResponse() {
   let ended = false;
-  return {
-    get ended() { return ended; },
-    write() { return true; },
-    end() { ended = true; },
-    on() { return this; },
-  };
+  return new class extends EventEmitter {
+    get ended() { return ended; }
+    get writableEnded() { return ended; }
+    write() { return true; }
+    end() { ended = true; this.emit('finish'); }
+  }();
 }
 
 try {

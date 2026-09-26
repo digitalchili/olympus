@@ -1,19 +1,20 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
 import { lstat, mkdir, rm } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { ProjectEditorLease, ProjectRepositoryLink, ProjectVersion } from '../shared/types.js';
+import type { ProjectEditorLease, ProjectRepositoryLink, ProjectVersion, ProjectGitStatus, PendingProjectPublication } from '../shared/types.js';
 import {
   acquireProjectEditor,
   getLatestProjectEditorForTask,
   getProjectEditorForTask,
   getProjectVersion,
   listProjectVersions,
-  recordProjectVersion,
   releaseProjectEditor,
   reactivateProjectEditor,
 } from './db/project-cp.js';
+import { createProjectPublication, getProjectPublication, getPendingProjectPublication, setProjectPublicationCommit, confirmProjectPublication, abandonProjectPublication, type ProjectPublication } from './db/project-publications.js';
+import { buildProjectGitEnv, parseProjectGitConfig, validateProjectGitTransportConfig, ProjectGitError } from './project-git-auth.js';
 import { getTask, updateTask } from './db/queries.js';
 import { GitHubPermissionUpgradeError } from './studio/github-permissions.js';
 
@@ -24,14 +25,25 @@ const EMPTY_REPOSITORY_BASE = 'olympus.emptyRepositoryBase';
 
 type GitRunResult = { stdout: string; stderr: string };
 export type GitRunner = (cwd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => Promise<GitRunResult>;
-export type InstallationTokenProvider = (installationId: number) => Promise<string>;
+export type InstallationTokenProvider = (installationId: number, scope: { repositoryId: number; readOnly: boolean }) => Promise<string>;
+export type { ProjectGitStatus } from '../shared/types.js';
 
-export interface ProjectGitStatus {
-  clean: boolean;
-  changedFiles: string[];
-  summary: string;
-  diff: string;
+function publicPublication(row: ProjectPublication): PendingProjectPublication {
+  return { id: row.id, action: row.action, commitSha: row.commitSha,
+    targetBranches: row.refs.map(ref => ref.ref.slice('refs/heads/'.length)), state: row.state === 'prepared' ? 'prepared' : 'pending' };
 }
+export class ProjectPublicationError extends Error {
+  readonly statusCode: number;
+  readonly pendingPublication: PendingProjectPublication | null;
+  constructor(public readonly code: 'PUBLICATION_PENDING' | 'PUBLICATION_UNCONFIRMED' | 'PUBLICATION_CONFLICT', row?: ProjectPublication) {
+    super(code === 'PUBLICATION_PENDING' ? 'A saved publication is pending. Resume it or stop retrying before publishing another change.'
+      : code === 'PUBLICATION_CONFLICT' ? 'The saved publication conflicts with the current repository state. Your commit and files are preserved.'
+      : 'GitHub publication could not be confirmed. Resume the saved publication; your commit and files are preserved.');
+    this.statusCode = code === 'PUBLICATION_UNCONFIRMED' ? 503 : 409;
+    this.pendingPublication = row ? publicPublication(row) : null;
+  }
+}
+interface PublicationInput { projectId: string; taskId: string; publicationId: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }
 
 export interface PrepareProjectTaskInput {
   projectId: string;
@@ -86,6 +98,8 @@ export interface ProjectCpService {
     tokenProvider?: InstallationTokenProvider;
     deployToDefaultBranch?: boolean;
   }): Promise<ProjectVersion>;
+  retryPublication(input: PublicationInput): Promise<ProjectVersion>;
+  abandonPublication(input: { projectId: string; taskId: string; publicationId: string }): Promise<void>;
   revert(input: { projectId: string; taskId: string; repositoryLink: ProjectRepositoryLink; versionId: string; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
   sync(input: {
     projectId: string;
@@ -104,7 +118,7 @@ interface ProjectCpServiceOptions {
 const defaultGitRunner: GitRunner = async (cwd, args, options) => {
   const result = await execFile('git', args, {
     cwd,
-    env: { ...process.env, ...options?.env },
+    env: options?.env ?? buildProjectGitEnv({ baseEnv: process.env, cloneUrl: '' }),
     maxBuffer: 5 * 1024 * 1024,
   });
   return { stdout: result.stdout, stderr: result.stderr };
@@ -147,20 +161,13 @@ function changedFilesFromPorcelain(stdout: string): string[] {
   return [...new Set(files)].slice(0, MAX_CHANGED_FILES);
 }
 
-function gitHubAuthEnv(token: string | null): Record<string, string | undefined> | undefined {
-  if (!token) return undefined;
-  const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
-  return {
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'http.extraHeader',
-    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-  };
-}
-
-async function tokenFor(link: ProjectRepositoryLink, tokenProvider?: InstallationTokenProvider): Promise<string | null> {
-  if (!tokenProvider || !/^https:\/\/github\.com\//i.test(link.cloneUrl)) return null;
-  return tokenProvider(link.installationId);
+async function tokenFor(link: ProjectRepositoryLink, tokenProvider: InstallationTokenProvider | undefined, readOnly: boolean): Promise<string | undefined> {
+  if (!tokenProvider || !/^https:\/\/github\.com\//i.test(link.cloneUrl)) return undefined;
+  try { return await tokenProvider(link.installationId, { repositoryId: link.providerRepositoryId, readOnly }); }
+  catch (error) {
+    if (error instanceof GitHubPermissionUpgradeError) throw error;
+    throw new ProjectGitError();
+  }
 }
 
 async function ensureIdentity(git: GitRunner, workdir: string): Promise<void> {
@@ -195,7 +202,17 @@ export function projectBaselineWorkdir(rootDir: string, projectId: string, link:
 }
 
 export function createProjectCpService(options: ProjectCpServiceOptions): ProjectCpService {
-  const git = options.gitRunner ?? defaultGitRunner;
+  const rawGit = options.gitRunner ?? defaultGitRunner;
+  const git: GitRunner = async (cwd, args, runOptions) => {
+    try { return await rawGit(cwd, args, { env: runOptions?.env ?? buildProjectGitEnv({ baseEnv: process.env, cloneUrl: '' }) }); }
+    catch (error) {
+      if (error instanceof Error && /refusing to allow a GitHub App to create or update workflow .*without [`']?workflows[`']? permission/i.test(error.message)) throw new GitHubPermissionUpgradeError();
+      throw new ProjectGitError('PROJECT_GIT_UNAVAILABLE', 503, typeof (error as any)?.code === 'number' ? (error as any).code : undefined);
+    }
+  };
+  const authOptions = async (link: ProjectRepositoryLink, provider: InstallationTokenProvider | undefined, readOnly: boolean) => ({
+    env: buildProjectGitEnv({ baseEnv: process.env, cloneUrl: link.cloneUrl, token: await tokenFor(link, provider, readOnly) }),
+  });
   const now = options.now ?? Date.now;
   const operationTails = new Map<string, Promise<void>>();
 
@@ -225,10 +242,12 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     const { stdout: diff } = changedFiles.length === 0
       ? { stdout: '' }
       : await git(lease.workdir, ['diff', 'HEAD', '--', ...changedFiles]);
+    const pending = getPendingProjectPublication(projectId, taskId);
     return {
-      clean: changedFiles.length === 0 && !hasUnpublishedCommit,
+      pendingPublication: pending ? publicPublication(pending) : null,
+      clean: !pending && changedFiles.length === 0 && !hasUnpublishedCommit,
       changedFiles,
-      summary: hasUnpublishedCommit
+      summary: pending ? 'GitHub publication is not confirmed' : hasUnpublishedCommit
         ? 'A local checkpoint is waiting to be pushed'
         : changedFiles.length === 0
           ? 'No file changes'
@@ -241,61 +260,97 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     const lease = getProjectEditorForTask(input.projectId, input.taskId);
     if (!lease) throw new Error('This task is not the Project editor');
     const status = await readStatus(input.projectId, input.taskId);
+    if (status.pendingPublication) throw new ProjectPublicationError('PUBLICATION_PENDING', getPendingProjectPublication(input.projectId, input.taskId)!);
     if (!status.clean) throw new Error('Commit & Push current changes before releasing the editor');
     const released = releaseProjectEditor({ leaseId: lease.id, taskId: input.taskId, now: now() });
     if (!released) throw new Error('This task is not the Project editor');
     return released;
   }
 
-  async function pushWithRecovery(input: {
-    lease: ProjectEditorLease;
-    repositoryLink: ProjectRepositoryLink;
-    parentSha: string;
-    commitSha: string;
-    tokenProvider?: InstallationTokenProvider;
-    targetBranch?: string;
-    deployToDefaultBranch?: boolean;
-  }): Promise<void> {
-    await requireOrigin(input.lease.workdir, input.repositoryLink);
-    const token = await tokenFor(input.repositoryLink, input.tokenProvider);
-    const targetBranch = input.targetBranch ?? input.lease.branchName;
-    const refspecs = input.deployToDefaultBranch && targetBranch !== input.lease.branchName
-      ? [`HEAD:refs/heads/${input.lease.branchName}`, `HEAD:refs/heads/${targetBranch}`]
-      : [`HEAD:refs/heads/${input.lease.branchName}`];
-    try {
-      const emptyBase = await emptyRepositoryBase(input.lease.workdir);
-      const initializeDefault = emptyBase && !(await git(input.lease.workdir, ['ls-remote', 'origin'], { env: gitHubAuthEnv(token) })).stdout.trim();
-      if (initializeDefault && !input.deployToDefaultBranch) {
-        // Keep code on the task branch until the user explicitly deploys or merges.
-        refspecs.push(`${emptyBase}:refs/heads/${input.repositoryLink.defaultBranch}`);
+  function repositoryIdentity(link: ProjectRepositoryLink): ProjectPublication['repository'] {
+    return { installationId: link.installationId, providerRepositoryId: link.providerRepositoryId, cloneUrl: link.cloneUrl, defaultBranch: link.defaultBranch };
+  }
+  function rejectPending(projectId: string, taskId: string): void {
+    const pending = getPendingProjectPublication(projectId, taskId);
+    if (pending) throw new ProjectPublicationError('PUBLICATION_PENDING', pending);
+  }
+  async function publicationLease(input: PublicationInput, row: ProjectPublication): Promise<ProjectEditorLease> {
+    const lease = getProjectEditorForTask(input.projectId, input.taskId);
+    if (row.projectId !== input.projectId || row.taskId !== input.taskId || !lease || row.leaseId !== lease.id
+      || JSON.stringify(row.repository) !== JSON.stringify(repositoryIdentity(input.repositoryLink))) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row);
+    await requireOrigin(lease.workdir, input.repositoryLink);
+    return lease;
+  }
+  async function publicationRefs(lease: ProjectEditorLease, link: ProjectRepositoryLink, provider: InstallationTokenProvider | undefined, deploy = false): Promise<ProjectPublication['refs']> {
+    const refs: ProjectPublication['refs'] = [{ ref: `refs/heads/${lease.branchName}`, source: 'commit', createOnly: false }];
+    if (deploy && lease.branchName !== link.defaultBranch) refs.push({ ref: `refs/heads/${link.defaultBranch}`, source: 'commit', createOnly: false });
+    const emptyBase = await emptyRepositoryBase(lease.workdir);
+    if (emptyBase && !(await git(lease.workdir, ['ls-remote', 'origin'], await authOptions(link, provider, true))).stdout.trim()) {
+      const ref = refs.find(ref => ref.ref === `refs/heads/${link.defaultBranch}`);
+      if (ref) ref.createOnly = true;
+      else refs.push({ ref: `refs/heads/${link.defaultBranch}`, source: emptyBase, createOnly: true });
+    }
+    for (const ref of refs) await git(lease.workdir, ['check-ref-format', ref.ref]);
+    return refs;
+  }
+  async function recoverPrepared(lease: ProjectEditorLease, row: ProjectPublication): Promise<ProjectPublication> {
+    if (row.state === 'pending') return row;
+    const head = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+    const conflict = () => new ProjectPublicationError('PUBLICATION_CONFLICT', row);
+    let commit = row.commitSha;
+    if (commit) {
+      if ((await git(lease.workdir, ['rev-parse', `${commit}^{tree}`])).stdout.trim() !== row.treeSha) throw conflict();
+    } else if (head !== row.parentSha) {
+      const parent = (await git(lease.workdir, ['log', '-1', '--format=%P'])).stdout.trim();
+      const tree = (await git(lease.workdir, ['rev-parse', 'HEAD^{tree}'])).stdout.trim();
+      const message = (await git(lease.workdir, ['log', '-1', '--format=%B'])).stdout.trim();
+      if (parent !== row.parentSha || tree !== row.treeSha || message !== row.commitMessage) throw conflict();
+      commit = head;
+    } else {
+      let tree = (await git(lease.workdir, ['write-tree'])).stdout.trim();
+      if (row.action === 'revert' && tree !== row.treeSha) {
+        if ((await git(lease.workdir, ['status', '--porcelain'])).stdout.trim()) throw conflict();
+        await git(lease.workdir, ['restore', '--source', row.treeSha, '--staged', '--worktree', '--', '.']);
+        tree = (await git(lease.workdir, ['write-tree'])).stdout.trim();
       }
-      await git(input.lease.workdir, [
-        'push', ...(refspecs.length > 1 ? ['--atomic'] : []),
-        // Create only: a concurrent first push must never be overwritten.
-        ...(initializeDefault ? [`--force-with-lease=refs/heads/${input.repositoryLink.defaultBranch}:`] : []),
-        'origin', ...refspecs,
-      ], { env: gitHubAuthEnv(token) });
+      if (tree !== row.treeSha) throw conflict();
+      if (row.action === 'revert' && (await git(lease.workdir, ['diff', '--name-only', '-z'])).stdout) throw conflict();
+      await git(lease.workdir, ['-c', 'commit.gpgsign=false', 'commit', '-m', row.commitMessage]);
+      commit = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+    }
+    await git(lease.workdir, ['update-ref', `refs/olympus/publications/${row.id}`, commit]);
+    return setProjectPublicationCommit(row.id, commit);
+  }
+  async function publish(lease: ProjectEditorLease, row: ProjectPublication, input: PublicationInput): Promise<ProjectVersion> {
+    row = await recoverPrepared(lease, row);
+    const refs = row.refs.map(ref => ({ ...ref, sha: ref.source === 'commit' ? row.commitSha! : ref.source }));
+    const observe = async () => {
+      const result = await git(lease.workdir, ['ls-remote', 'origin', ...refs.map(ref => ref.ref)], await authOptions(input.repositoryLink, input.tokenProvider, true));
+      return new Map(result.stdout.trim().split('\n').filter(Boolean).map(line => { const [sha, ref] = line.split(/\s+/); return [ref, sha]; }));
+    };
+    let remote: Map<string, string>;
+    try { remote = await observe(); } catch { throw new ProjectPublicationError('PUBLICATION_UNCONFIRMED', row); }
+    if (refs.every(ref => remote.get(ref.ref) === ref.sha)) return confirmProjectPublication(row.id, now());
+    if (refs.some(ref => ref.createOnly && remote.has(ref.ref) && remote.get(ref.ref) !== ref.sha)) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row);
+    // Git itself enforces fast-forward updates. Exact create leases preserve empty-repo intent.
+    try {
+      await git(lease.workdir, ['push', ...(refs.length > 1 ? ['--atomic'] : []),
+        ...refs.filter(ref => ref.createOnly).map(ref => `--force-with-lease=${ref.ref}:${remote.get(ref.ref) ?? ''}`),
+        'origin', ...refs.map(ref => `${ref.sha}:${ref.ref}`)], await authOptions(input.repositoryLink, input.tokenProvider, false));
     } catch (error) {
       try {
-        const remote = await git(
-          input.lease.workdir,
-          ['ls-remote', 'origin', `refs/heads/${targetBranch}`],
-          { env: gitHubAuthEnv(token) },
-        );
-        const remoteSha = remote.stdout.trim().split(/\s+/)[0] ?? '';
-        if (remoteSha === input.commitSha) return;
-      } catch {
-        // Preserve the original push error; an unreachable remote is not proof of success.
-      }
-      await git(input.lease.workdir, ['reset', '--soft', input.parentSha]);
-      if (error instanceof Error && /refusing to allow a GitHub App to create or update workflow .*without [`']?workflows[`']? permission/i.test(error.message)) {
-        throw new GitHubPermissionUpgradeError();
-      }
-      throw error;
+        const after = await observe();
+        if (refs.every(ref => after.get(ref.ref) === ref.sha)) return confirmProjectPublication(row.id, now());
+        if (refs.some(ref => ref.createOnly && after.has(ref.ref) && after.get(ref.ref) !== ref.sha)) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row);
+      } catch (observed) { if (observed instanceof ProjectPublicationError) throw observed; }
+      if (error instanceof GitHubPermissionUpgradeError) throw error;
+      throw new ProjectPublicationError('PUBLICATION_UNCONFIRMED', row);
     }
+    return confirmProjectPublication(row.id, now());
   }
 
   async function requireOrigin(workdir: string, repositoryLink: ProjectRepositoryLink): Promise<void> {
+    validateProjectGitTransportConfig(parseProjectGitConfig((await git(workdir, ['config', '--local', '--includes', '--null', '--list'])).stdout));
     const origin = (await git(workdir, ['remote', 'get-url', 'origin'])).stdout.trim();
     const pushUrls = (await git(workdir, ['remote', 'get-url', '--push', '--all', 'origin'])).stdout.trim().split('\n');
     if (origin !== repositoryLink.cloneUrl || pushUrls.length !== 1 || pushUrls[0] !== repositoryLink.cloneUrl) {
@@ -328,7 +383,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     try {
       return (await git(workdir, ['config', '--local', '--get', EMPTY_REPOSITORY_BASE])).stdout.trim() || null;
     } catch (error) {
-      if ((error as { code?: number }).code === 1) return null;
+      if ((error as ProjectGitError).exitCode === 1) return null;
       throw error;
     }
   }
@@ -341,10 +396,10 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     if (exists) {
       before = await validateBaseline(workdir, repositoryLink);
     }
-    const auth = { env: gitHubAuthEnv(await tokenFor(repositoryLink, tokenProvider)) };
+    const auth = await authOptions(repositoryLink, tokenProvider, true);
     if (!exists) {
       try {
-        await git(dirname(workdir), ['clone', '--no-hardlinks', '--branch', repositoryLink.defaultBranch, '--single-branch', repositoryLink.cloneUrl, workdir], auth);
+        await git(dirname(workdir), ['clone', '--no-hardlinks', '--no-recurse-submodules', '--template=', '--branch', repositoryLink.defaultBranch, '--single-branch', repositoryLink.cloneUrl, workdir], auth);
       } catch (error) {
         await rm(workdir, { recursive: true, force: true });
         // A successful, completely empty ref listing distinguishes a new repository
@@ -414,7 +469,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         if (await pathExists(baseline)) await validateBaseline(baseline, input.repositoryLink);
         else await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
         cloning = true;
-        await git(dirname(workdir), ['clone', '--no-hardlinks', '--single-branch', '--branch', input.repositoryLink.defaultBranch, baseline, workdir]);
+        await git(dirname(workdir), ['clone', '--no-hardlinks', '--no-recurse-submodules', '--template=', '--single-branch', '--branch', input.repositoryLink.defaultBranch, baseline, workdir]);
         const emptyBase = await emptyRepositoryBase(baseline);
         if (emptyBase) await git(workdir, ['config', '--local', EMPTY_REPOSITORY_BASE, emptyBase]);
       });
@@ -456,95 +511,70 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
 
     async commitPush(input) {
       return serialized(`task:${input.taskId}`, async () => {
+        rejectPending(input.projectId, input.taskId);
         const lease = getProjectEditorForTask(input.projectId, input.taskId);
         if (!lease) throw new Error('This task is not the Project editor');
         await requireOrigin(lease.workdir, input.repositoryLink);
-        if (!input.deployToDefaultBranch && lease.branchName === input.repositoryLink.defaultBranch) {
-          throw new Error('Olympus will not push directly to the default branch');
-        }
+        if (!input.deployToDefaultBranch && lease.branchName === input.repositoryLink.defaultBranch) throw new Error('Olympus will not push directly to the default branch');
         const status = await readStatus(input.projectId, input.taskId);
         if (status.clean) throw new Error('There are no changes to Commit & Push');
-        const requestedMessage = validateCommitMessage(input.message);
-        const currentHead = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-        const recordedCommits = new Set(listProjectVersions(input.projectId).filter(version => version.taskId === input.taskId).map(version => version.commitSha));
-        const hasUnpublishedCommit = currentHead !== lease.baseSha && !recordedCommits.has(currentHead);
-        let parentSha: string;
-        let commitSha: string;
-        let message: string;
-        let changedFiles: string[];
-        if (hasUnpublishedCommit && status.changedFiles.length === 0) {
+        let message = validateCommitMessage(input.message);
+        const head = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+        const unpublished = head !== lease.baseSha && !listProjectVersions(input.projectId).some(version => version.taskId === input.taskId && version.commitSha === head);
+        const refs = await publicationRefs(lease, input.repositoryLink, input.tokenProvider, input.deployToDefaultBranch);
+        let parentSha = head; let commitSha: string | null = null; let changedFiles = status.changedFiles;
+        if (unpublished && status.changedFiles.length === 0) {
+          commitSha = head;
           parentSha = (await git(lease.workdir, ['rev-parse', 'HEAD^'])).stdout.trim();
-          commitSha = currentHead;
           message = validateCommitMessage((await git(lease.workdir, ['log', '-1', '--format=%s'])).stdout);
-          const names = await git(lease.workdir, ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', 'HEAD']);
-          changedFiles = names.stdout.split('\0').filter(Boolean).slice(0, MAX_CHANGED_FILES);
-        } else {
-          parentSha = currentHead;
-          message = requestedMessage;
-          await git(lease.workdir, ['add', '--all', '--', '.']);
-          await git(lease.workdir, ['commit', '-m', message]);
-          commitSha = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-          changedFiles = status.changedFiles;
-        }
-        const targetBranch = input.deployToDefaultBranch
-          ? input.repositoryLink.defaultBranch
-          : lease.branchName;
-        await pushWithRecovery({
-          lease,
-          repositoryLink: input.repositoryLink,
-          parentSha,
-          commitSha,
-          tokenProvider: input.tokenProvider,
-          targetBranch,
-          deployToDefaultBranch: input.deployToDefaultBranch,
-        });
-        return recordProjectVersion({
-          projectId: input.projectId,
-          taskId: input.taskId,
-          leaseId: lease.id,
-          action: 'commit_push',
-          commitSha,
-          parentSha,
-          branchName: targetBranch,
-          commitMessage: message,
-          changedFiles,
-          pushedAt: now(),
-        });
+          changedFiles = (await git(lease.workdir, ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', 'HEAD'])).stdout.split('\0').filter(Boolean).slice(0, MAX_CHANGED_FILES);
+        } else await git(lease.workdir, ['add', '--all', '--', '.']);
+        const treeSha = (await git(lease.workdir, commitSha ? ['rev-parse', `${commitSha}^{tree}`] : ['write-tree'])).stdout.trim();
+        const row = createProjectPublication({ id: randomUUID(), projectId: input.projectId, taskId: input.taskId, leaseId: lease.id,
+          repository: repositoryIdentity(input.repositoryLink), action: 'commit_push', revertedVersionId: null,
+          parentSha, treeSha, commitSha, commitMessage: message, changedFiles,
+          targetBranch: input.deployToDefaultBranch ? input.repositoryLink.defaultBranch : lease.branchName, refs, createdAt: now() });
+        return publish(lease, row, { ...input, publicationId: row.id });
       });
     },
-
+    async retryPublication(input) {
+      return serialized(`task:${input.taskId}`, async () => {
+        const row = getProjectPublication(input.publicationId);
+        if (!row || row.state === 'abandoned') throw new ProjectPublicationError('PUBLICATION_CONFLICT');
+        if (row.projectId !== input.projectId || row.taskId !== input.taskId || JSON.stringify(row.repository) !== JSON.stringify(repositoryIdentity(input.repositoryLink))) throw new ProjectPublicationError('PUBLICATION_CONFLICT');
+        if (row.state === 'confirmed') return getProjectVersion(row.id)!;
+        const lease = await publicationLease(input, row);
+        return publish(lease, row, input);
+      });
+    },
+    async abandonPublication(input) {
+      return serialized(`task:${input.taskId}`, async () => {
+        const row = getProjectPublication(input.publicationId);
+        const lease = getProjectEditorForTask(input.projectId, input.taskId);
+        if (!row || row.projectId !== input.projectId || row.taskId !== input.taskId || !lease || row.leaseId !== lease.id || row.state === 'confirmed') throw new ProjectPublicationError('PUBLICATION_CONFLICT');
+        abandonProjectPublication(row.id);
+      });
+    },
     async revert(input) {
       return serialized(`task:${input.taskId}`, async () => {
+        rejectPending(input.projectId, input.taskId);
         const lease = getProjectEditorForTask(input.projectId, input.taskId);
         if (!lease) throw new Error('This task is not the Project editor');
+        await requireOrigin(lease.workdir, input.repositoryLink);
         const target = getProjectVersion(input.versionId);
         if (!target || target.projectId !== input.projectId || target.taskId !== input.taskId) throw new Error('Project version not found for this task');
-        await requireOrigin(lease.workdir, input.repositoryLink);
-        const currentStatus = await readStatus(input.projectId, input.taskId);
-        if (!currentStatus.clean) throw new Error('Commit & Push or discard current changes before reverting');
+        const status = await readStatus(input.projectId, input.taskId);
+        if (!status.clean) throw new Error('Commit & Push or discard current changes before reverting');
         const parentSha = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-        if (parentSha === target.commitSha) throw new Error('This is already the current version');
-        await git(lease.workdir, ['cat-file', '-e', `${target.commitSha}^{commit}`]);
-        await git(lease.workdir, ['restore', '--source', target.commitSha, '--staged', '--worktree', '--', '.']);
-        const restoredStatus = await readStatus(input.projectId, input.taskId);
-        if (restoredStatus.clean) throw new Error('This version has the same files as the current version');
-        const message = `Restore ${target.commitSha.slice(0, 7)} — ${target.commitMessage}`.slice(0, 200);
-        await git(lease.workdir, ['commit', '-m', message]);
-        const commitSha = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-        await pushWithRecovery({ lease, repositoryLink: input.repositoryLink, parentSha, commitSha, tokenProvider: input.tokenProvider });
-        return recordProjectVersion({
-          projectId: input.projectId,
-          taskId: input.taskId,
-          leaseId: lease.id,
-          action: 'revert',
-          commitSha,
-          parentSha,
-          revertedVersionId: target.id,
-          branchName: lease.branchName,
-          commitMessage: message,
-          changedFiles: restoredStatus.changedFiles,
-          pushedAt: now(),
-        });
+        const treeSha = (await git(lease.workdir, ['rev-parse', `${target.commitSha}^{tree}`])).stdout.trim();
+        if ((await git(lease.workdir, ['rev-parse', 'HEAD^{tree}'])).stdout.trim() === treeSha) throw new Error('This version has the same files as the current version');
+        const refs = await publicationRefs(lease, input.repositoryLink, input.tokenProvider);
+        const changedFiles = (await git(lease.workdir, ['diff', '--name-only', '-z', 'HEAD', target.commitSha])).stdout.split('\0').filter(Boolean).slice(0, MAX_CHANGED_FILES);
+        const row = createProjectPublication({ id: randomUUID(), projectId: input.projectId, taskId: input.taskId, leaseId: lease.id,
+          repository: repositoryIdentity(input.repositoryLink), action: 'revert', revertedVersionId: target.id,
+          parentSha, treeSha, commitSha: null, commitMessage: `Restore ${target.commitSha.slice(0, 7)} — ${target.commitMessage}`.slice(0, 200),
+          changedFiles, targetBranch: lease.branchName, refs, createdAt: now() });
+        return publish(lease, row, { ...input, publicationId: row.id });
       });
     },
 

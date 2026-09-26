@@ -1,30 +1,25 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { addClient, broadcast as broadcastBoard, closeClientsForProfile, closeClientsForRestart } from '../server/events.js';
 import { broadcast as broadcastLive, closeSubscribersForRestart, closeSubscribersForTasks, subscribe } from '../server/live-chat.js';
 
 function response() {
   const writes: string[] = [];
-  const closeHandlers: Array<() => void> = [];
   let ended = false;
-  return {
-    writes,
-    get ended() { return ended; },
-    write(value: string) { writes.push(value); return true; },
-    end() { ended = true; },
-    on(event: string, handler: () => void) {
-      if (event === 'close') closeHandlers.push(handler);
-      return this;
-    },
-    emitClose() {
-      for (const handler of closeHandlers) handler();
-    },
-  };
+  return new class extends EventEmitter {
+    writes = writes;
+    get ended() { return ended; }
+    get writableEnded() { return ended; }
+    write(value: string) { writes.push(value); return true; }
+    end() { ended = true; this.emit('finish'); }
+    emitClose() { this.emit('close'); }
+  }();
 }
 
 const board = response();
 const live = response();
-addClient(board as never, { id: 'default', isDefault: true } as never);
-subscribe('task-1', live as never);
+addClient(board as never, { id: 'default', isDefault: true } as never).bootstrap([]);
+subscribe('task-1', live as never).bootstrap([]);
 
 closeClientsForProfile('default');
 closeSubscribersForTasks(['task-1']);
@@ -34,8 +29,8 @@ assert.equal(live.ended, true);
 
 const replacementBoard = response();
 const replacementLive = response();
-addClient(replacementBoard as never, { id: 'default', isDefault: true } as never);
-subscribe('task-1', replacementLive as never);
+addClient(replacementBoard as never, { id: 'default', isDefault: true } as never).bootstrap([]);
+subscribe('task-1', replacementLive as never).bootstrap([]);
 live.emitClose();
 broadcastBoard({
   type: 'task_updated',

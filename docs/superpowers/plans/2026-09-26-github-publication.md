@@ -10,6 +10,8 @@
 
 **Spec:** [Reliability design](../specs/2026-09-26-reliability-improvements-design.md), Global constraints and G.
 
+**Implementation checkpoint:** G1–G3 are implemented on `codex/production-hardening` from v0.7.19. The original checklist below records the design; consult [integrated evidence](../../../qa/reliability-2026-09-26.md) and its linked git-publication-hardening.md and publication-ui-hardening.md reports for executed steps, reviewed adjustments and current verification. Do not reimplement these tasks from the unchecked design steps. Live Docker acceptance remains separate.
+
 ## Global Constraints
 
 All Global constraints in the spec apply verbatim. No force push except the existing create-only empty-branch lease, no reset/stash to recover a push, no automatic publication at startup, no implicit merge/rebase, and no change to existing-task sync semantics. Tokens remain out of arguments, remotes, stored configuration, receipts and output. Node remains `>=22.22 <26`; server imports use `.js`.

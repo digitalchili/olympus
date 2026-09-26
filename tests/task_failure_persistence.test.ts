@@ -24,5 +24,21 @@ try {
   assert.equal(getLatestTaskAgentRun(task.id)?.status, 'error');
   assert.equal(getLatestTaskAgentRun(task.id)?.errorCode, 'worker_restarted');
   assert.equal(recoverInterruptedTaskAgentRuns(700), 0, 'restart recovery is idempotent and preserves terminal runs');
+  const { startRun, applyEvent, getRun, discardRun } = await import('../server/live-chat.js');
+  const { deriveRunFailureNotice } = await import('../client/src/lib/runFailurePresentation.js');
+  const categories = { openai_auth_required: 'reconnect_openai', openai_auth_unavailable: 'check_openai', auth_error: 'provider_settings', rate_limit: 'usage', quota_exhausted: 'usage', model_error: 'model_picker', provider_error: 'continue' };
+  for (const [code, action] of Object.entries(categories)) {
+    const run = startRun(task.id, task.id, 'Test').snapshot;
+    createTaskAgentRun({ ...run, startedAt: Date.now() });
+    applyEvent(task.id, { type: 'error', code, error: 'secret-sentinel' });
+    const live = getRun(task.id)!;
+    assert.equal(live.errorCode, code);
+    assert.doesNotMatch(JSON.stringify(live), /secret-sentinel/);
+    finishTaskAgentRun(run.runId, 'error', Date.now(), live.errorCode);
+    discardRun(task.id);
+    const saved = getLatestTaskAgentRun(task.id)!;
+    assert.equal(saved.errorCode, code);
+    assert.equal(deriveRunFailureNotice(saved)?.action, action);
+  }
 } finally { db.close(); rmSync(root,{recursive:true,force:true}); }
 console.log('Task failure persistence tests passed');

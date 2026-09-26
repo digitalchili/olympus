@@ -36,11 +36,11 @@ function harness() {
   const slots: unknown[] = [];
   let cursor = 0;
   const sources: FakeEventSource[] = [];
-  const requests: Array<{ resolve: (response: Response) => void; reject: (error: Error) => void }> = [];
+  const requests: Array<{ url: string; method: string; resolve: (response: Response) => void; reject: (error: Error) => void }> = [];
   const timers = new Map<number, () => void>();
   let timerId = 0;
   const fetchedRuns: Array<TaskRunState | null> = [];
-  const fetchMock = () => new Promise<Response>((resolve, reject) => requests.push({ resolve, reject }));
+  const fetchMock = (input: string | URL | Request, init?: RequestInit) => new Promise<Response>((resolve, reject) => requests.push({ url: String(input), method: init?.method ?? 'GET', resolve, reject }));
   globalThis.fetch = fetchMock;
   const exports = {};
   runInNewContext(hookCode, {
@@ -152,7 +152,7 @@ try {
     assert.equal(h.render().messages.at(-1)?.content, 'Hello.');
     h.render().reset();
   }
-  {
+  for (const status of ['done', 'error', 'stopped'] as const) {
     const h = harness();
     const source = await h.load();
     source.open();
@@ -163,11 +163,16 @@ try {
     assert.equal(h.render().connectionState, 'reconnecting');
     source.open();
     assert.equal(h.render().connectionState, 'connected', 'SSE reopening clears reconnecting before slow history returns');
-    h.respond(2, history(live('run-1', 100, 'done')));
+    // No new live snapshot: model an expired in-memory run after the terminal
+    // event was lost. Only durable history remains on reconnect.
+    h.respond(2, history(live('run-1', 100, status)));
     await flush();
     assert.equal(h.render().isStreaming, false, 'durable terminal history settles a missed terminal event when the snapshot has expired');
-    assert.equal(h.fetchedRuns.at(-1)?.status, 'done', 'durable terminal state also reconciles the board run store');
+    assert.equal(h.fetchedRuns.at(-1)?.status, status, 'durable terminal state also reconciles the board run store');
     assert.equal(h.render().messages.at(-1)?.content, 'Hello.');
+    assert.equal(h.render().runFailureNotice?.status ?? null, status === 'done' ? null : status);
+    assert.ok(h.requests.every(request => request.method === 'GET'), 'missed terminal events and expired live snapshots recover from reads, never a task POST');
+    assert.equal(h.sources.length, 1, 'EventSource reconnect uses the existing task stream without another send');
     h.render().reset();
   }
   {

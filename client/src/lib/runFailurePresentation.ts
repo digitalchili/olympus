@@ -5,7 +5,7 @@ export interface RunFailureNotice {
   title: string;
   detail: string;
   code: string | null;
-  action?: 'reconnect_openai' | 'check_openai';
+  action: 'reconnect_openai' | 'check_openai' | 'provider_settings' | 'usage' | 'model_picker' | 'continue';
 }
 
 type RunFailureSource = (TaskAgentRun | LiveChatRun) & {
@@ -64,7 +64,7 @@ function runFailureText(status: RunFailureNotice['status'], code: string | null)
   }
 
   return {
-    title: 'Run failed before completion',
+    title: 'Run ended before completion',
     detail: `The run failed before completion${code ? ` (${code})` : ''}. The turn is unfinished; review the partial transcript before retrying.`,
   };
 }
@@ -74,14 +74,25 @@ export function deriveRunFailureNotice(run: RunFailureSource | null | undefined)
   const code = cleanCode(run.errorCode) ?? inferCode(run.error);
   // Only structured server codes identify the provider; upstream prose is not trusted.
   if (run.status === 'error' && run.errorCode === 'openai_auth_required') return {
-    status: run.status, code, action: 'reconnect_openai', title: 'OpenAI sign-in needs attention',
+    status: run.status, code, action: 'reconnect_openai', title: 'OpenAI sign-in required',
     detail: 'Reconnect OpenAI, then review the saved progress and continue the unfinished task when you are ready.',
   };
   if (run.status === 'error' && run.errorCode === 'openai_auth_unavailable') return {
-    status: run.status, code, action: 'check_openai', title: 'OpenAI login is temporarily unavailable',
+    status: run.status, code, action: 'check_openai', title: 'OpenAI connection temporarily unavailable',
     detail: 'Check the saved login again. Your task remains unfinished, and signing in again may not be necessary.',
   };
-  return { status: run.status, code, ...runFailureText(run.status, code) };
+  const categories: Record<string, Pick<RunFailureNotice, 'action' | 'title' | 'detail'>> = {
+    auth_error: { action: 'provider_settings', title: 'Provider sign-in or key required', detail: 'Check this profile’s provider settings, then review saved progress before continuing.' },
+    rate_limit: { action: 'usage', title: 'Provider rate limit reached', detail: 'View usage and wait for capacity, or choose another model or provider before continuing.' },
+    quota_exhausted: { action: 'usage', title: 'Provider allowance unavailable', detail: 'View usage or update this profile’s provider settings before continuing.' },
+    model_error: { action: 'model_picker', title: 'Selected model is unavailable', detail: 'Choose an available model, then review saved progress before continuing.' },
+  };
+  if (run.status === 'error' && run.errorCode && categories[run.errorCode]) return { status: run.status, code, ...categories[run.errorCode] };
+  return { status: run.status, code, action: 'continue', ...runFailureText(run.status, code) };
+}
+
+export function isOpenAIAuthAction(action: RunFailureNotice['action'] | undefined): boolean {
+  return action === 'reconnect_openai' || action === 'check_openai';
 }
 
 export function currentLiveRun(liveRun: LiveChatRun | null, latestAgentRun: TaskAgentRun | null): LiveChatRun | null {
@@ -144,6 +155,8 @@ export function taskExecutionLabel(status: TaskStatus, run?: TaskRunState): stri
   if (run?.status === 'streaming') return 'Running';
   if (run?.status === 'compacting') return 'Compacting…';
   if (status === 'in_review') return 'In Review';
+  if (run?.recoveryWaitReason === 'queued_message') return 'Paused for your queued message';
+  if (run?.recoveryWaitReason === 'awaiting_input') return 'Awaiting your answer';
   if (run?.status === 'error' || run?.status === 'stopped') {
     if (run.recoveryState === 'waiting') return 'Waiting to resume';
     return isRecovering(run.recoveryState) ? 'Resuming…' : 'Needs attention';
@@ -158,6 +171,11 @@ export function reconcileRunSnapshot(runs: TaskRunState[], current: Map<string, 
     const stale = previous && (previous.startedAt > run.startedAt ||
       (previous.runId === run.runId && ['done', 'error', 'stopped'].includes(previous.status)
         && ['streaming', 'compacting'].includes(run.status)));
-    return [run.taskId, stale ? previous : run];
+    const merged = previous?.runId === run.runId ? {
+      ...run,
+      recoveryState: run.recoveryState === undefined ? previous.recoveryState : run.recoveryState,
+      recoveryWaitReason: run.recoveryWaitReason === undefined ? previous.recoveryWaitReason : run.recoveryWaitReason,
+    } : run;
+    return [run.taskId, stale ? previous : merged];
   }));
 }

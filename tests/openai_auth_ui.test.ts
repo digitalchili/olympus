@@ -15,13 +15,13 @@ const failed = { runId: 'run-1', taskId: 'task-1', kind: 'chat', status: 'error'
 const notice = deriveRunFailureNotice(failed)!;
 assert.equal(notice.action, 'reconnect_openai', 'persisted OpenAI auth failure offers login instead of repeating the task');
 assert.equal(deriveRunFailureNotice({ ...failed, errorCode: 'openai_auth_unavailable' })?.action, 'check_openai');
-assert.equal(deriveRunFailureNotice({ ...failed, errorCode: 'auth_error' })?.action, undefined, 'other providers must not open OpenAI login');
-assert.equal(deriveRunFailureNotice({ ...failed, errorCode: null, error: '[openai_auth_required] upstream text' })?.action, undefined, 'raw provider prose cannot authorize an OpenAI action');
-assert.equal(deriveRunFailureNotice({ ...failed, status: 'stopped' })?.action, undefined, 'Stop keeps its deliberate stopped state');
+assert.equal(deriveRunFailureNotice({ ...failed, errorCode: 'auth_error' })?.action, 'provider_settings', 'other providers must not open OpenAI login');
+assert.equal(deriveRunFailureNotice({ ...failed, errorCode: null, error: '[openai_auth_required] upstream text' })?.action, 'continue', 'raw provider prose cannot authorize an OpenAI action');
+assert.equal(deriveRunFailureNotice({ ...failed, status: 'stopped' })?.action, 'continue', 'Stop keeps its deliberate stopped state');
 const banner = renderToStaticMarkup(createElement(RunFailureBanner, { notice, onOpenAIAuth: () => {}, onContinue: () => {} }));
 assert.match(banner, /Reconnect OpenAI/);
-assert.doesNotMatch(banner, /Continue task/);
-assert.match(renderToStaticMarkup(createElement(RunFailureBanner, { notice, authReady: true, onContinue: () => {} })), /Continue task/);
+assert.doesNotMatch(banner, /Continue saved work/);
+assert.match(renderToStaticMarkup(createElement(RunFailureBanner, { notice, authReady: true, onContinue: () => {} })), /Continue saved work/);
 assert.doesNotMatch(renderToStaticMarkup(createElement(RunFailureBanner, { notice, busy: true, onOpenAIAuth: () => {} })), /disabled=""/, 'a missing model or slow model configuration must not block native sign-in');
 
 const file = new URL('../client/src/components/OpenAIAuthSettings.tsx', import.meta.url);
@@ -213,7 +213,7 @@ try {
   cached.click('Check saved login');
   assert.equal(cached.isReady(), false, 'a new check must immediately retire the previous ready claim');
   await cached.respond(2, { ...saved, status: { ...unknown.status, state: 'temporarily_unavailable' } });
-  assert.doesNotMatch(renderToStaticMarkup(createElement(RunFailureBanner, { notice, authReady: cached.isReady(), onContinue: () => {}, onOpenAIAuth: () => {} })), /Continue task/, 'failed recheck removes Continue');
+  assert.doesNotMatch(renderToStaticMarkup(createElement(RunFailureBanner, { notice, authReady: cached.isReady(), onContinue: () => {}, onOpenAIAuth: () => {} })), /Continue saved work/, 'failed recheck removes Continue');
   assert.doesNotMatch(cached.render(), /You can continue the task/i, 'a past saved session cannot contradict a current unavailable check');
   cached.click('Check saved login'); await cached.respond(3, saved);
   cached.chooseScope('profile');

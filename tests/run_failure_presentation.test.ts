@@ -179,12 +179,32 @@ const resuming = renderToStaticMarkup(createElement(RunFailureBanner, {
   notice: iterationNotice, recoveryState: 'pending', onContinue: () => {},
 }));
 assert.match(resuming, /Resuming task/);
-assert.doesNotMatch(resuming, /Run paused|Continue task/);
+assert.doesNotMatch(resuming, /Run paused|Continue saved work/);
 const blocked = renderToStaticMarkup(createElement(RunFailureBanner, {
   notice: iterationNotice, recoveryState: 'blocked', onContinue: () => {},
 }));
-assert.match(blocked, /Continue task/);
+assert.match(blocked, /Continue saved work/);
 assert.match(blocked, /Needs attention/);
 assert.doesNotMatch(blocked, /Resuming task/);
 
 assert.equal(taskExecutionLabel('in_progress', { ...failedPersistedRun, recoveryState: 'waiting' }), 'Waiting to resume');
+
+for (const [code, action, label] of [
+  ['auth_error', 'provider_settings', 'Open provider settings'],
+  ['rate_limit', 'usage', 'View usage'], ['quota_exhausted', 'usage', 'View usage'],
+  ['model_error', 'model_picker', 'Choose model'], ['provider_error', 'continue', 'Continue saved work'],
+] as const) {
+  const notice = deriveRunFailureNotice({ ...failedPersistedRun, errorCode: code })!;
+  assert.equal(notice.action, action);
+  const html = renderToStaticMarkup(createElement(RunFailureBanner, { notice, onContinue: () => {}, onAction: () => {} }));
+  assert.match(html, new RegExp(label));
+  assert.doesNotMatch(html, /Reconnect OpenAI|Check OpenAI/);
+}
+for (const [reason, copy] of [['queued_message', 'Paused for your queued message'], ['awaiting_input', 'Answer the pending request first']] as const) {
+  const html = renderToStaticMarkup(createElement(RunFailureBanner, {
+    notice: iterationNotice, recoveryState: 'pending', recoveryWaitReason: reason,
+    onContinue: () => {}, onSendQueued: () => {},
+  }));
+  assert.match(html, new RegExp(copy));
+  assert.doesNotMatch(html, /Resuming task|will try to resume shortly|Continue saved work/);
+}

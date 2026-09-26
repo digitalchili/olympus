@@ -10,6 +10,7 @@ import type {
   ProjectReferenceSearchResult,
   ProjectSummary,
   ProjectVersion,
+  ProjectGitStatus,
   StudioGitHubInstallation,
   StudioGitHubRepository,
   Task,
@@ -18,6 +19,8 @@ import type {
 import {
   prepareProjectEditor,
   commitPushProject,
+  retryProjectPublication,
+  abandonProjectPublication,
   deleteTask,
   deleteProjectReference,
   fetchProject,
@@ -52,6 +55,7 @@ import { usePageHeader } from './Header';
 import { ProjectGitHubSync } from './ProjectGitHubSync';
 import { ProjectGitHubAccess } from './ProjectGitHubAccess';
 import { ProjectTaskSelector } from './ProjectTaskSelector';
+import { PendingProjectPublication } from './PendingProjectPublication';
 import { projectTaskCodeView, selectProjectCodeTask } from '../lib/projectCodeSelection';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
@@ -74,7 +78,7 @@ export function ProjectDetailPage() {
   const codeSelectionRef = useRef({ projectId, taskId: editorTaskId });
   codeSelectionRef.current = { projectId, taskId: editorTaskId };
   const [commitMessage, setCommitMessage] = useState('');
-  const [codeStatusSnapshot, setCodeStatus] = useState<{ taskId: string; clean: boolean; changedFiles: string[]; summary: string; diff: string } | null>(null);
+  const [codeStatusSnapshot, setCodeStatus] = useState<(ProjectGitStatus & { taskId: string }) | null>(null);
   const { editor, versions: taskVersions, status: codeStatus } = projectTaskCodeView(editorTaskId, editors, versions, codeStatusSnapshot);
   const [references, setReferences] = useState<ProjectReferenceListItem[]>([]);
   const [referenceSearch, setReferenceSearch] = useState('');
@@ -407,7 +411,7 @@ export function ProjectDetailPage() {
   const [generatingMessage, setGeneratingMessage] = useState(false);
 
   const releaseWorkspace = async () => {
-    if (!editor || !codeStatus?.clean) return;
+    if (!editor || !codeStatus?.clean || codeStatus.pendingPublication) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -421,7 +425,7 @@ export function ProjectDetailPage() {
   };
 
   const autoGenerateMessage = async () => {
-    if (!editor) return;
+    if (!editor || codeStatus?.pendingPublication) return;
     setGeneratingMessage(true);
     setActionError(null);
     try {
@@ -435,40 +439,85 @@ export function ProjectDetailPage() {
   };
 
   const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'success'>('idle');
-  const [lastPushedSha, setLastPushedSha] = useState<string | null>(null);
-  const [deployToDefault, setDeployToDefault] = useState(true);
+  const [lastPublication, setLastPublication] = useState<ProjectVersion | null>(null);
+  const [deployToDefault, setDeployToDefault] = useState(false);
+  const publicationGeneration = useRef(0);
+  useEffect(() => {
+    ++publicationGeneration.current;
+    setDeployToDefault(false);
+    setPushStatus('idle');
+    setLastPublication(null);
+  }, [projectId, editorTaskId, activeTab]);
+
+  const refreshPublicationStatus = async (taskId: string, request: number) => {
+    try { await refreshCode(taskId); }
+    catch { if (request === publicationGeneration.current) setCodeStatus(null); }
+  };
 
   const commitAndPush = async () => {
-    if (!editor || !codeStatus || codeStatus.clean || !commitMessage.trim()) return;
+    if (!editor || !codeStatus || codeStatus.clean || codeStatus.pendingPublication || !commitMessage.trim() || busy) return;
+    const request = publicationGeneration.current;
     const targetBranch = deployToDefault && project?.repositoryLink?.defaultBranch
       ? project.repositoryLink.defaultBranch
       : editor.branchName;
     const preview = codeStatus.changedFiles.slice(0, 12).join('\n');
-    const confirmMsg = deployToDefault && project?.repositoryLink?.defaultBranch
-      ? `Commit & Deploy directly to ${targetBranch} (triggers Dokploy build)?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`
-      : `Commit & Push to ${targetBranch}?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`;
+    const confirmMsg = `Commit & Push to ${targetBranch}?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`;
     if (!window.confirm(confirmMsg)) return;
     setBusy(true);
     setPushStatus('pushing');
     setActionError(null);
     try {
       const result = await commitPushProject(projectId, editor.taskId, commitMessage.trim(), deployToDefault);
+      if (request !== publicationGeneration.current) return;
       setVersions(result.versions);
       setCommitMessage('');
-      setLastPushedSha(result.version?.commitSha ?? null);
+      setLastPublication(result.version);
+      setDeployToDefault(false);
       setPushStatus('success');
-      setTimeout(() => setPushStatus('idle'), 6000);
-      await refreshCode(editor.taskId);
+      await refreshPublicationStatus(editor.taskId, request);
     } catch (cause) {
+      if (request !== publicationGeneration.current) return;
       setPushStatus('idle');
       setActionError(toErrorMessage(cause, 'Commit & Push failed; your changes remain available to retry'));
+      await refreshPublicationStatus(editor.taskId, request);
     } finally {
       setBusy(false);
     }
   };
 
+  const resumePublication = async () => {
+    const publication = codeStatus?.pendingPublication;
+    if (!editor || !publication || busy) return;
+    const request = publicationGeneration.current;
+    setBusy(true); setPushStatus('pushing'); setActionError(null);
+    try {
+      const result = await retryProjectPublication(projectId, editor.taskId, publication.id);
+      if (request !== publicationGeneration.current) return;
+      setVersions(result.versions); setLastPublication(result.version); setPushStatus('success');
+      setDeployToDefault(false);
+      await refreshPublicationStatus(editor.taskId, request);
+    } catch (cause) {
+      if (request !== publicationGeneration.current) return;
+      setPushStatus('idle'); setActionError(toErrorMessage(cause, 'Publication is still unconfirmed. Your saved commit remains available.'));
+      await refreshPublicationStatus(editor.taskId, request);
+    } finally { setBusy(false); }
+  };
+
+  const abandonPublication = async () => {
+    const publication = codeStatus?.pendingPublication;
+    if (!editor || !publication || busy) return;
+    const request = publicationGeneration.current;
+    setBusy(true); setActionError(null);
+    try {
+      await abandonProjectPublication(projectId, editor.taskId, publication.id);
+      await refreshCode(editor.taskId);
+    } catch (cause) {
+      if (request === publicationGeneration.current) setActionError(toErrorMessage(cause, 'Could not stop retrying this publication.'));
+    } finally { setBusy(false); }
+  };
+
   const restoreVersion = async (version: ProjectVersion) => {
-    if (!editor || version.taskId !== editor.taskId) return;
+    if (!editor || version.taskId !== editor.taskId || codeStatus?.pendingPublication) return;
     if (!window.confirm(`Revert to this version?\n\n${version.commitMessage}\n\nOlympus will create and push a new restore checkpoint. Existing history will remain intact.`)) return;
     setBusy(true);
     setActionError(null);
@@ -478,6 +527,7 @@ export function ProjectDetailPage() {
       await refreshCode(editor.taskId);
     } catch (cause) {
       setActionError(toErrorMessage(cause, 'Could not restore this version'));
+      await refreshPublicationStatus(editor.taskId, publicationGeneration.current);
     } finally {
       setBusy(false);
     }
@@ -566,11 +616,12 @@ export function ProjectDetailPage() {
                   <div><h2 className="flex items-center gap-2 text-sm font-semibold"><GitBranch size={15} /> Task changes</h2><p className="mt-1 text-xs leading-5 text-zinc-500">Each task keeps its own changes. Choose a task to review or publish its work.</p></div>
                 </div>
                 {!project.repositoryLink && <p className="mt-4 rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-700">Connect a write-enabled GitHub repository in Settings first.</p>}
-                {project.repositoryLink && <div className="mt-4 flex flex-col gap-2 sm:flex-row"><ProjectTaskSelector tasks={tasks} selectedTaskId={editorTaskId} disabled={busy || generatingMessage} canRelease={Boolean(codeStatus?.clean)} onRelease={editor ? () => void releaseWorkspace() : undefined} onSelect={taskId => { setEditorTaskId(taskId); setCommitMessage(''); setActionError(null); setPushStatus('idle'); }} />{!editor && <button type="button" disabled={busy || !editorTaskId} onClick={() => void beginEditing()} className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">View changes</button>}</div>}
+                {project.repositoryLink && <div className="mt-4 flex flex-col gap-2 sm:flex-row"><ProjectTaskSelector tasks={tasks} selectedTaskId={editorTaskId} disabled={busy || generatingMessage} canRelease={Boolean(codeStatus?.clean && !codeStatus.pendingPublication)} onRelease={editor ? () => void releaseWorkspace() : undefined} onSelect={taskId => { setEditorTaskId(taskId); setCommitMessage(''); setActionError(null); setPushStatus('idle'); }} />{!editor && <button type="button" disabled={busy || !editorTaskId} onClick={() => void beginEditing()} className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">View changes</button>}</div>}
                 {editor && <div className="mt-4 space-y-4">
                   <div className="rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-950/40"><p className="font-medium text-zinc-800 dark:text-zinc-200">{tasks.find((task) => task.id === editor.taskId)?.title ?? 'Assigned task'}</p><p className="mt-1 text-zinc-500">{codeStatus?.summary ?? 'Inspecting changes…'}</p></div>
                   {codeStatus && !codeStatus.clean && <><div><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Changed files</h3><ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded-lg border border-zinc-200 p-2 font-mono text-xs dark:border-zinc-700">{codeStatus.changedFiles.map((file) => <li key={file} className="truncate">{file}</li>)}</ul></div><details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700"><summary className="cursor-pointer text-xs font-medium">Review change preview</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">{codeStatus.diff || 'Binary or untracked files changed; review the file list above.'}</pre></details></>}
-                  <div>
+                  {codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} disabled={busy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
+                  {!codeStatus?.pendingPublication && <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-xs font-medium text-zinc-500">Checkpoint message</label>
                       <button
@@ -585,6 +636,7 @@ export function ProjectDetailPage() {
                     </div>
                     <input
                       value={commitMessage}
+                      disabled={busy}
                       onChange={(event) => setCommitMessage(event.target.value)}
                       maxLength={200}
                       placeholder="Describe what changed"
@@ -595,21 +647,22 @@ export function ProjectDetailPage() {
                         <input
                           type="checkbox"
                           checked={deployToDefault}
+                          disabled={busy}
                           onChange={(e) => setDeployToDefault(e.target.checked)}
                           className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800"
                         />
                         <span>
-                          Deploy directly to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{project.repositoryLink.defaultBranch}</span> (triggers Dokploy build)
+                          Also push to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{project.repositoryLink.defaultBranch}</span>
                         </span>
                       </label>
                     )}
-                  </div>
+                  </div>}
                   {pushStatus === 'pushing' && (
                     <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-950/30">
                       <div className="flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-300">
                         <span className="inline-flex items-center gap-1.5 font-medium">
                           <Loader2 size={13} className="animate-spin text-zinc-900 dark:text-zinc-100" />
-                          {deployToDefault && project?.repositoryLink?.defaultBranch ? 'Deploying to GitHub…' : 'Pushing to GitHub…'}
+                          Pushing to GitHub…
                         </span>
                         <span className="text-[11px] text-zinc-400">Uploading changes</span>
                       </div>
@@ -623,15 +676,13 @@ export function ProjectDetailPage() {
                     <div className="flex items-center gap-2 rounded-lg border border-emerald-200/60 bg-emerald-50/70 p-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-950/30 dark:text-emerald-300">
                       <Check size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
                       <span>
-                        {deployToDefault && project?.repositoryLink?.defaultBranch
-                          ? `Successfully committed and deployed to ${project.repositoryLink.defaultBranch}!${lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}`
-                          : `Successfully committed and pushed to GitHub!${lastPushedSha ? ` (${lastPushedSha.slice(0, 7)})` : ''}`}
+                        {lastPublication && `Pushed ${lastPublication.commitSha.slice(0, 7)} to ${lastPublication.branchName}`}
                       </span>
                     </div>
                   )}
 
                   <div className="flex flex-wrap gap-2">
-                    <button
+                    {!codeStatus?.pendingPublication && <button
                       type="button"
                       disabled={busy || !codeStatus || codeStatus.clean || !commitMessage.trim()}
                       onClick={() => void commitAndPush()}
@@ -639,18 +690,16 @@ export function ProjectDetailPage() {
                     >
                       {pushStatus === 'pushing' ? (
                         <>
-                          <Loader2 size={13} className="animate-spin" /> {deployToDefault && project?.repositoryLink?.defaultBranch ? 'Deploying…' : 'Pushing…'}
+                          <Loader2 size={13} className="animate-spin" /> Pushing…
                         </>
                       ) : pushStatus === 'success' ? (
                         <>
-                          <Check size={13} /> {deployToDefault && project?.repositoryLink?.defaultBranch ? 'Deployed!' : 'Pushed!'}
+                          <Check size={13} /> Pushed!
                         </>
                       ) : (
-                        deployToDefault && project?.repositoryLink?.defaultBranch
-                          ? `Commit & Deploy (${project.repositoryLink.defaultBranch})`
-                          : 'Commit & Push'
+                        'Commit & Push'
                       )}
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       disabled={busy}
@@ -661,15 +710,13 @@ export function ProjectDetailPage() {
                     </button>
                   </div>
                   <p className="text-[11px] leading-4 text-zinc-400">
-                    {deployToDefault && project?.repositoryLink?.defaultBranch
-                      ? `Commit & Deploy pushes directly to ${project.repositoryLink.defaultBranch} to trigger your deployment webhook.`
-                      : 'Commit & Push updates only this task’s protected working branch. It does not merge or deploy.'}
+                    Your deployment service may build this branch. Olympus does not verify deployment.
                   </p>
                 </div>}
               </section>
               <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <h2 className="flex items-center gap-2 text-sm font-semibold"><History size={15} /> Version history</h2><p className="mt-1 text-xs leading-5 text-zinc-500">Checkpoints for the selected task. Restoring creates a new checkpoint and preserves its history.</p>
-                <div className="mt-4 space-y-3">{taskVersions.length === 0 && <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-700">No checkpoints for this task yet.</p>}{taskVersions.map((version) => <article key={version.id} className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium">{version.commitMessage}</p><p className="mt-1 text-[11px] text-zinc-400">{new Date(version.pushedAt).toLocaleString()} · {version.commitSha.slice(0, 7)} · {version.changedFiles.length} file{version.changedFiles.length === 1 ? '' : 's'}</p></div>{version.action === 'revert' && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Restore</span>}</div><button type="button" disabled={busy || !editor || !codeStatus?.clean || taskVersions[0]?.id === version.id} onClick={() => void restoreVersion(version)} className="mt-3 inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-200 px-2 text-xs font-medium disabled:opacity-40 dark:border-zinc-700"><RotateCcw size={12} /> Revert to this version</button></article>)}</div>
+                <div className="mt-4 space-y-3">{taskVersions.length === 0 && <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-700">No checkpoints for this task yet.</p>}{taskVersions.map((version) => <article key={version.id} className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-800"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium">{version.commitMessage}</p><p className="mt-1 text-[11px] text-zinc-400">{new Date(version.pushedAt).toLocaleString()} · {version.commitSha.slice(0, 7)} · {version.changedFiles.length} file{version.changedFiles.length === 1 ? '' : 's'}</p></div>{version.action === 'revert' && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">Restore</span>}</div><button type="button" disabled={busy || !editor || !codeStatus?.clean || Boolean(codeStatus.pendingPublication) || taskVersions[0]?.id === version.id} onClick={() => void restoreVersion(version)} className="mt-3 inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-200 px-2 text-xs font-medium disabled:opacity-40 dark:border-zinc-700"><RotateCcw size={12} /> Revert to this version</button></article>)}</div>
               </section>
             </main>
           )}

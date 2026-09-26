@@ -1,3 +1,4 @@
+import { safeProviderErrorMessage } from '../../shared/run-errors.js';
 import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -121,6 +122,8 @@ function resolveWorkerScript(): string {
 function formatWorkerError(error: string | WorkerErrorPayload | undefined): string {
   if (!error) return 'Hermes worker error';
   if (typeof error === 'string') return error;
+  const safeMessage = safeProviderErrorMessage(error.code);
+  if (safeMessage) return safeMessage;
 
   const code = error.code ? `[${error.code}] ` : '';
   const hint = error.hint ? ` ${error.hint}` : '';
@@ -207,6 +210,7 @@ export class HermesWorkerClient {
   private pending = new Map<string, Pending>();
   private ready = false;
   private readyPromise: Promise<void> | null = null;
+  private generation = 0;
   private scheduledTasksDraining = false;
   private delegationListeners = new Set<(event: AdapterDelegationEvent) => void>();
   private delegationResetListeners = new Set<(profileId?: string) => void>();
@@ -228,9 +232,17 @@ export class HermesWorkerClient {
     if (this.ready) return;
 
     if (!this.readyPromise) {
+      const child = this.child;
+      const generation = this.generation;
+      const assertCurrent = () => {
+        if (this.child !== child || this.generation !== generation) {
+          throw Object.assign(new Error('Hermes worker changed during startup'), { code: 'worker_restarted' });
+        }
+      };
       const request = { id: randomUUID(), type: 'health' } as WorkerRequest;
-      this.readyPromise = this.sendRequest<{ ok: boolean }>(request, WORKER_READY_TIMEOUT_MS)
+      const readyPromise = this.sendRequest<{ ok: boolean }>(request, WORKER_READY_TIMEOUT_MS)
         .then(async (result) => {
+          assertCurrent();
           if (!result.ok) throw new Error('Hermes worker healthcheck failed');
           // The Python ticker starts paused. Apply the latest maintenance state
           // before readiness, including when drain changes during cold startup.
@@ -238,16 +250,18 @@ export class HermesWorkerClient {
           do {
             desired = this.scheduledTasksDraining;
             await this.syncScheduledTaskDrain(desired);
+            assertCurrent();
           } while (desired !== this.scheduledTasksDraining);
           this.ready = true;
         })
         .catch((error) => {
-          this.ready = false;
+          if (this.child === child && this.generation === generation) this.ready = false;
           throw error;
         })
         .finally(() => {
-          this.readyPromise = null;
+          if (this.readyPromise === readyPromise) this.readyPromise = null;
         });
+      this.readyPromise = readyPromise;
     }
 
     await this.readyPromise;
@@ -296,6 +310,7 @@ export class HermesWorkerClient {
 
   async stop(signal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
     const child = this.child;
+    this.generation++;
     this.child = null;
     this.ready = false;
     this.readyPromise = null;
@@ -414,6 +429,7 @@ export class HermesWorkerClient {
 
   private ensureStarted(): void {
     if (this.child && !this.child.killed && this.child.exitCode === null) return;
+    if (this.child) this.handleExit(this.child, new Error('Hermes worker is no longer running'));
 
     const python = resolvePython();
     const script = resolveWorkerScript();
@@ -431,13 +447,16 @@ export class HermesWorkerClient {
     });
 
     this.child = child;
+    this.generation++;
     this.ready = false;
     this.readline = createInterface({ input: child.stdout });
-    this.readline.on('line', (line) => this.handleLine(line));
+    this.readline.on('line', (line) => {
+      if (this.child === child) this.handleLine(line);
+    });
     child.stderr.on('data', (chunk) => process.stderr.write(String(chunk)));
-    child.on('error', (error) => this.handleExit(error));
+    child.on('error', (error) => this.handleExit(child, error));
     child.on('exit', (code, signal) => {
-      this.handleExit(new Error(`Hermes worker exited (${signal ?? code ?? 'unknown'})`));
+      this.handleExit(child, new Error(`Hermes worker exited (${signal ?? code ?? 'unknown'})`));
     });
   }
 
@@ -479,19 +498,19 @@ export class HermesWorkerClient {
     }
   }
 
-  private handleExit(error: Error): void {
-    const wasRunning = this.child !== null || this.ready;
+  private handleExit(child: ChildProcessWithoutNullStreams, error: Error): void {
+    if (this.child !== child) return;
+    this.generation++;
     if (this.readline) {
       this.readline.close();
       this.readline = null;
     }
     this.child = null;
     this.ready = false;
+    this.readyPromise = null;
 
     this.failPending(Object.assign(new Error(`Hermes worker crashed: ${error.message}`), { code: 'worker_restarted' }));
-    if (wasRunning) {
-      for (const listener of this.delegationResetListeners) listener();
-    }
+    for (const listener of this.delegationResetListeners) listener();
   }
 
   private write(request: WorkerRequest): void {

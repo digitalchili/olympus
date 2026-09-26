@@ -375,6 +375,28 @@ CREATE TABLE IF NOT EXISTS project_versions (
 CREATE INDEX IF NOT EXISTS idx_project_versions_project
   ON project_versions(project_id, pushed_at DESC);
 
+CREATE TABLE IF NOT EXISTS project_publications (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  lease_id TEXT REFERENCES project_editor_leases(id) ON DELETE SET NULL,
+  repository_json TEXT NOT NULL,
+  action TEXT NOT NULL CHECK(action IN ('commit_push', 'revert')),
+  reverted_version_id TEXT REFERENCES project_versions(id) ON DELETE SET NULL,
+  parent_sha TEXT NOT NULL,
+  tree_sha TEXT NOT NULL,
+  commit_sha TEXT,
+  commit_message TEXT NOT NULL,
+  changed_files_json TEXT NOT NULL,
+  target_branch TEXT NOT NULL,
+  refs_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('prepared', 'pending', 'confirmed', 'abandoned')),
+  created_at INTEGER NOT NULL,
+  completed_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_publication_pending_task
+  ON project_publications(task_id) WHERE task_id IS NOT NULL AND state IN ('prepared', 'pending');
+
 CREATE TABLE IF NOT EXISTS project_references (
   id                TEXT PRIMARY KEY,
   project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

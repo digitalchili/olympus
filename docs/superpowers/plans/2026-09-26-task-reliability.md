@@ -10,6 +10,8 @@
 
 **Spec:** [Reliability design](../specs/2026-09-26-reliability-improvements-design.md), especially Global constraints and R.
 
+**Implementation checkpoint:** R1–R4 are implemented on `codex/production-hardening` from v0.7.19. The original checklist below records the design; consult [integrated evidence](../../../qa/reliability-2026-09-26.md) and its linked worker-liveness-hardening.md, task-recovery-hardening.md and sse-hardening.md reports for executed steps, reviewed adjustments and current verification. Do not reimplement these tasks from the unchecked design steps. Live Docker acceptance remains separate.
+
 ## Global Constraints
 
 Every numbered Global constraint in the linked spec applies verbatim. In particular: no runtime timers, no whole-turn retry, no global worker restart, no raw error persistence, no mutation of historical completion or human task status. Node remains `>=22.22 <26`; server imports use `.js`.

@@ -447,12 +447,8 @@ export function fetchProjectTasks(projectId: string) {
   );
 }
 
-export interface ProjectGitStatus {
-  clean: boolean;
-  changedFiles: string[];
-  summary: string;
-  diff: string;
-}
+import type { ProjectGitStatus } from '@shared/types';
+export type { ProjectGitStatus } from '@shared/types';
 
 export function fetchProjectEditor(projectId: string, taskId?: string) {
   const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
@@ -496,6 +492,17 @@ export function fetchProjectVersions(projectId: string) {
 export function commitPushProject(projectId: string, taskId: string, message: string, deployToDefaultBranch = false) {
   return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/commit-push`, {
     method: 'POST', body: JSON.stringify({ taskId, message, deployToDefaultBranch }),
+  }, false);
+}
+
+export function retryProjectPublication(projectId: string, taskId: string, publicationId: string) {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/publications/${encodeURIComponent(publicationId)}/retry`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+export function abandonProjectPublication(projectId: string, taskId: string, publicationId: string) {
+  return request<{ abandoned: true }>(`/projects/${encodeURIComponent(projectId)}/publications/${encodeURIComponent(publicationId)}/abandon`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
   }, false);
 }
 
@@ -1027,6 +1034,7 @@ function fileRelativePath(file: File): string {
 export const fetchCodingEvidence = (taskId: string) => request<{ evidence: import('@shared/coding-evidence').CodingEvidence | null }>(`/tasks/${encodeURIComponent(taskId)}/verification`);
 export const runCodingVerification = (taskId: string) => request<{ evidence: import('@shared/coding-evidence').CodingEvidence | null }>(`/tasks/${encodeURIComponent(taskId)}/verification`, { method: 'POST' });
 export interface TaskRecoveryStatus {
+  waitReason: import('@shared/types').RecoveryWaitReason | null;
   kind?: 'verification' | 'native';
   state: string; attempts: number; deadlineAt: number; reason: string | null;
   checkpoint: { saved?: boolean } | null;

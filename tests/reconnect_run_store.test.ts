@@ -25,3 +25,13 @@ assert.equal(useStore.getState().taskRuns.get('task')?.runId, 'new', 'delayed sn
 useStore.getState().setTaskRun({ ...run, runId: 'new', startedAt: 500, status: 'error', recoveryState: 'blocked' });
 useStore.getState().setTaskRuns([{ ...run, runId: 'new', startedAt: 500, status: 'streaming' }]);
 assert.equal(useStore.getState().taskOutcomes.get('task')?.status, 'error', 'same-run stale streaming snapshot cannot revive terminal execution');
+
+const waiting = { ...run, runId: 'new', startedAt: 500, status: 'error' as const, recoveryState: 'pending', recoveryWaitReason: 'queued_message' as const };
+useStore.getState().setTaskRun(waiting);
+assert.equal(useStore.getState().taskOutcomes.get('task')?.recoveryWaitReason, 'queued_message');
+useStore.getState().setTaskRuns([{ ...waiting, recoveryWaitReason: undefined }]);
+assert.equal(useStore.getState().taskOutcomes.get('task')?.recoveryWaitReason, 'queued_message', 'partial snapshots retain wait reason');
+useStore.getState().setTaskRun({ ...waiting, recoveryWaitReason: null });
+assert.equal(useStore.getState().taskOutcomes.get('task')?.recoveryWaitReason, null, 'explicit null clears it');
+useStore.getState().setTaskRuns([{ ...waiting, runId: 'next', startedAt: 600, recoveryWaitReason: undefined }]);
+assert.equal(useStore.getState().taskOutcomes.get('task')?.recoveryWaitReason, undefined, 'new run never inherits the old wait');

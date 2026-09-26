@@ -119,7 +119,7 @@ try {
     }
     return promisify(execFile)('git', args, { cwd, env: { ...process.env, ...options?.env } });
   } });
-  await assert.rejects(failing.prepareTask({ projectId: project.id, taskId: failedTask.id, profileId: 'default', repositoryLink }), /Clone interrupted/);
+  await assert.rejects(failing.prepareTask({ projectId: project.id, taskId: failedTask.id, profileId: 'default', repositoryLink }), /Git operation could not be completed/);
   assert.equal((await prepare(failedTask.id)).workdir, failedPath, 'a failed initial clone can be retried without an orphan workspace blocker');
   assert.equal(await readFile(join(legacyPath, 'poster.png'), 'utf8'), 'Saved poster bytes');
 

@@ -39,7 +39,7 @@ import { visibleToolProgress } from '../lib/toolProgressDisplay';
 import { RunModelResolution } from './RunModelResolution';
 import { RunFailureBanner } from './RunFailureBanner';
 import { OpenAIAuthSettings } from './OpenAIAuthSettings';
-import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSendQueuedMessage } from '../lib/runFailurePresentation';
+import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSendQueuedMessage, isOpenAIAuthAction } from '../lib/runFailurePresentation';
 import { restoreRejectedChatDraft } from '../lib/chatSendRecovery';
 
 interface TaskChatProps {
@@ -299,6 +299,7 @@ export function TaskChat({
   const [continuing, setContinuing] = useState(false);
   const authRunKey = `${activeProfileId}:${taskId}:${taskOutcome?.runId ?? taskRun?.runId ?? ''}`;
   const [openAIAuth, setOpenAIAuth] = useState<{ key: string; ready: boolean } | null>(null);
+  const [modelPickerRequest, setModelPickerRequest] = useState(0);
   const delegationRuns = useStore((s) => s.delegationRuns.get(taskId));
   const [input, setInputValue] = useState('');
   const draftRevisionRef = useRef(0);
@@ -1181,6 +1182,12 @@ export function TaskChat({
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
         <RunFailureBanner notice={runFailureNotice} recoveryState={taskOutcome?.recoveryState}
+          recoveryWaitReason={taskOutcome?.recoveryWaitReason}
+          onSendQueued={handleRetryQueuedMessage}
+          onAction={action => {
+            if (action === 'model_picker') setModelPickerRequest(value => value + 1);
+            else if (action === 'provider_settings' || action === 'usage') window.open(`/settings?tab=${action === 'usage' ? 'usage' : 'providers'}&profile=${encodeURIComponent(activeProfileId)}`, '_blank', 'noopener,noreferrer');
+          }}
           busy={continuing || isStreaming || configPending}
           authBusy={isStreaming}
           authReady={openAIAuth?.key === authRunKey && openAIAuth.ready}
@@ -1194,7 +1201,7 @@ export function TaskChat({
               .catch(error => setUploadError(toErrorMessage(error, 'Could not continue task')))
               .finally(() => setContinuing(false));
           }} />
-        {runFailureNotice?.action && openAIAuth?.key === authRunKey && <div className="mx-auto mb-3 max-w-[760px]">
+        {isOpenAIAuthAction(runFailureNotice?.action) && openAIAuth?.key === authRunKey && <div className="mx-auto mb-3 max-w-[760px]">
           <OpenAIAuthSettings key={authRunKey} profileId={activeProfileId} profileLabel={activeProfile?.label ?? activeProfileId} initialScope="effective"
             onNotReady={() => setOpenAIAuth(current => current?.key === authRunKey ? { ...current, ready: false } : current)}
             onReady={() => setOpenAIAuth(current => current?.key === authRunKey ? { ...current, ready: true } : current)} />
@@ -1290,7 +1297,7 @@ export function TaskChat({
               isSending={queuedIsSending}
               canRetry={queuedCanManualSend}
               waitingLabel={queuedMessageWaitingLabel({ pausedByRunFailure, compactionBlocker })}
-              retryLabel={pausedByRunFailure && !queuedSendError ? 'Send now' : 'Retry'}
+              retryLabel={queuedSendError ? 'Retry sending message' : 'Send queued message'}
               canSteer={queuedMessage.invitedProfileIds.length === 0}
               isSteering={steeringQueuedId === queuedMessage.id}
               onSteer={() => void handleSteerQueuedMessage()}
@@ -1303,6 +1310,7 @@ export function TaskChat({
             <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
               <AttachButton onFiles={addFiles} disabled={configPending} />
               <InputToolbar
+                modelPickerRequest={modelPickerRequest}
                 model={model}
                 provider={provider}
                 reasoningEffort={reasoningEffort}

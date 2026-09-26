@@ -88,7 +88,7 @@ export function recoverRecoveryRecords(): void {
   db.prepare(`UPDATE task_recovery SET state='pending', reason=CASE WHEN reason='verification_failed' AND run_id IN (SELECT run_id FROM task_agent_runs WHERE status='done') THEN reason ELSE 'worker_restarted' END
     WHERE state IN ('dispatching', 'exhausted') OR (state='running' AND run_id IN (SELECT run_id FROM task_agent_runs WHERE status='error' AND error_code='worker_restarted'))`).run();
 }
-function broadcastRecovery(taskId: string): void {
+export function broadcastRecovery(taskId: string): void {
   const run = getLatestTaskAgentRun(taskId);
   if (run) broadcast({ type: 'task_run_updated', run });
 }
@@ -117,6 +117,7 @@ export async function reconcileRecoveries(
         ]);
         const current = getRecovery(row.task_id);
         if (!current || current.run_id !== row.run_id || !['pending','waiting'].includes(current.state)) continue;
+        if (getQueuedTaskMessage(row.task_id) || hasUnansweredInteractions(row.task_id, row.run_id)) continue;
         if (!inventory.available || inventory.work.length || (!repair && inventory.continuation?.status !== 'pending')) {
           const blocked = inventory.continuation?.status === 'blocked';
           db.prepare('UPDATE task_recovery SET state=?, reason=? WHERE task_id=? AND run_id=?').run(blocked && !repair ? 'blocked' : 'waiting', repair ? 'verification_failed' : inventory.continuation?.reason ?? (inventory.work.length ? 'Waiting for owned background work' : 'Waiting for recoverable continuation evidence'), row.task_id, row.run_id);

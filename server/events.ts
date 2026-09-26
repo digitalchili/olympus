@@ -3,30 +3,30 @@ import type { BoardEvent, Task } from '../shared/types.js';
 import { getTask } from './db/queries.js';
 import type { LocalProfileTarget } from './local-profiles.js';
 import { taskBelongsToProfile } from './profile-context.js';
+import { createSseWriter, type SseWriter } from './sse-writer.js';
 
 export type { BoardEvent };
 
-const clients = new Map<Response, LocalProfileTarget>();
-const projectClients = new Map<Response, string>();
+const clients = new Map<SseWriter, LocalProfileTarget>();
+const projectClients = new Map<SseWriter, string>();
 
 const KEEPALIVE_INTERVAL_MS = 30_000;
 let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopKeepaliveIfEmpty() {
+  if (clients.size === 0 && projectClients.size === 0 && keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}
 
 function startKeepalive() {
   if (keepaliveTimer) return;
   keepaliveTimer = setInterval(() => {
     for (const client of [...clients.keys(), ...projectClients.keys()]) {
-      try {
-        client.write(':keepalive\n\n');
-      } catch {
-        clients.delete(client);
-        projectClients.delete(client);
-      }
+      client.keepalive();
     }
-    if (clients.size === 0 && projectClients.size === 0) {
-      clearInterval(keepaliveTimer!);
-      keepaliveTimer = null;
-    }
+    stopKeepaliveIfEmpty();
   }, KEEPALIVE_INTERVAL_MS);
 }
 
@@ -37,29 +37,34 @@ export function initSSE(res: Response): void {
   res.flushHeaders();
 }
 
-export function addClient(res: Response, profile: LocalProfileTarget) {
-  clients.set(res, profile);
-  res.on('close', () => clients.delete(res));
+function registerClient<T>(res: Response, registry: Map<SseWriter, T>, scope: T): SseWriter {
+  const writer = createSseWriter(res);
+  const cleanup = () => {
+    registry.delete(subscriber);
+    res.off('close', cleanup);
+    res.off('error', cleanup);
+    res.off('finish', cleanup);
+    stopKeepaliveIfEmpty();
+  };
+  const subscriber = { ...writer, close() { cleanup(); writer.close(); } };
+  registry.set(subscriber, scope);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+  res.on('finish', cleanup);
   startKeepalive();
+  return subscriber;
 }
 
-export function addProjectClient(res: Response, projectId: string) {
-  projectClients.set(res, projectId);
-  res.on('close', () => projectClients.delete(res));
-  startKeepalive();
+export function addClient(res: Response, profile: LocalProfileTarget): SseWriter {
+  return registerClient(res, clients, profile);
 }
 
-function writeEvent(res: Response, event: BoardEvent): boolean {
-  const data = `data: ${JSON.stringify(event)}\n\n`;
-  try {
-    return res.write(data);
-  } catch {
-    return false;
-  }
+export function addProjectClient(res: Response, projectId: string): SseWriter {
+  return registerClient(res, projectClients, projectId);
 }
 
-export function sendEvent(res: Response, event: BoardEvent): void {
-  writeEvent(res, event);
+export function bootstrapEvents(writer: SseWriter, events: readonly BoardEvent[]): void {
+  writer.bootstrap(events.map(event => `data: ${JSON.stringify(event)}\n\n`));
 }
 
 function taskForEvent(event: BoardEvent, task?: Task): Task | undefined {
@@ -75,12 +80,12 @@ export function broadcast(event: BoardEvent, task?: Task) {
   if (!scopedTask) return;
   for (const [client, profile] of clients) {
     if (!taskBelongsToProfile(scopedTask, profile)) continue;
-    if (!writeEvent(client, event)) clients.delete(client);
+    client.send(`data: ${JSON.stringify(event)}\n\n`);
   }
   if (scopedTask.project_id) {
     for (const [client, projectId] of projectClients) {
       if (scopedTask.project_id !== projectId) continue;
-      if (!writeEvent(client, event)) projectClients.delete(client);
+      client.send(`data: ${JSON.stringify(event)}\n\n`);
     }
   }
 }
@@ -88,28 +93,16 @@ export function broadcast(event: BoardEvent, task?: Task) {
 export function closeClientsForProfile(profileId: string): void {
   for (const [client, profile] of clients) {
     if (profile.id !== profileId) continue;
-    clients.delete(client);
-    try {
-      client.end();
-    } catch {
-      // The connection is already gone.
-    }
+    client.close();
   }
-  if (clients.size === 0 && projectClients.size === 0 && keepaliveTimer) {
-    clearInterval(keepaliveTimer);
-    keepaliveTimer = null;
-  }
+  stopKeepaliveIfEmpty();
 }
 
 export function closeClientsForRestart(): void {
   const event = 'data: {"type":"maintenance_reconnect"}\n\n';
   for (const client of [...clients.keys(), ...projectClients.keys()]) {
-    try {
-      client.write(event);
-      client.end();
-    } catch {
-      // The connection is already gone.
-    }
+    client.send(event);
+    client.close();
   }
   clients.clear();
   projectClients.clear();

@@ -228,8 +228,18 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(worker.WorkerError):
             self.run_chat(result, dispatch=False, saved_history=result['messages'])
         self.assertEqual(ContinuationJournal('task-1').status()['status'], 'pending')
+        text = ''.join(event.get('content', '') for event in self.sent if event.get('type') == 'text_delta')
+        self.assertEqual(text, result['final_response'], 'nonfailed partial progress must remain visible before the iteration error')
         self.run_chat(dispatch=False, recoveryContinuation=True)
         self.assertIn('saved session history', self.messages[-1][1])
+
+    def test_failed_provider_result_does_not_emit_raw_fallback_text(self):
+        with self.assertRaises(worker.WorkerError) as error:
+            self.run_chat({'failed': True, 'completed': False, 'failure_reason': 'model_not_found',
+                           'final_response': 'secret-sentinel'}, dispatch=False)
+        self.assertEqual(error.exception.code, 'model_error')
+        self.assertNotIn('secret-sentinel', str(self.sent))
+        self.assertFalse([event for event in self.sent if event.get('type') == 'text_delta'])
 
     def test_wrong_task_result_and_profile_cannot_be_recovered(self):
         journal = ContinuationJournal('task-1')

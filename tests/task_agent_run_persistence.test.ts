@@ -37,6 +37,8 @@ try {
     taskId: task.id,
     kind: 'chat',
     status: 'done',
+    recoveryState: null,
+    recoveryWaitReason: null,
     modelResolution: {
       requested: { model: 'gpt-6-astra', provider: 'openai-codex', reasoningEffort: 'xhigh' },
       actual: { model: 'gpt-5.5', provider: 'openai-codex', reasoningEffort: 'high' },
