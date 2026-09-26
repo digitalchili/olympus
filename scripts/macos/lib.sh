@@ -180,7 +180,16 @@ backup_native_release() {
     }).catch((error) => { console.error(error.message); process.exit(1); });
   ')
   printf 'ok\n' > "$destination/olympus-$stamp.integrity"
-  (cd "$state_home" && tar --exclude='./backups' --exclude='./data/olympus-dispatch.db' --exclude='./data/olympus-dispatch.db-wal' --exclude='./data/olympus-dispatch.db-shm' --exclude='./update.sock' --exclude='*.sock' --exclude='./updater' -czf "$absolute_destination/olympus-$stamp-state.tgz" .)
+  # The release tree, logs, updater socket, and SQLite database are installation/runtime
+  # material. Archive only durable non-database user state so a native update cannot
+  # recursively package every retained release or its own backup directory.
+  state_entries=
+  for entry in workspace skills; do
+    [ ! -e "$state_home/$entry" ] || state_entries="$state_entries ./$entry"
+  done
+  [ -n "$state_entries" ] || { printf 'No durable non-database state exists to archive.\n' >&2; return 1; }
+  # shellcheck disable=SC2086 # state_entries is a controlled list of fixed names.
+  (cd "$state_home" && tar -czf "$absolute_destination/olympus-$stamp-state.tgz" $state_entries)
   printf 'timestamp=%s\nrelease=%s\n' "$stamp" "$release_root" > "$destination/olympus-$stamp.metadata"
   chmod 600 "$destination/olympus-$stamp.metadata" "$destination/olympus-$stamp.integrity"
   printf 'Verified native backup created: %s/olympus-%s.sqlite\n' "$destination" "$stamp"

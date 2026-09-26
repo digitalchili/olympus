@@ -57,7 +57,16 @@ try {
   const backupDir = join(fixture, 'backups');
   const database = join(stateHome, 'data/olympus-dispatch.db');
   await mkdir(join(stateHome, 'data'), { recursive: true });
-  await writeFile(join(stateHome, 'keep.txt'), 'portable state\n');
+  await mkdir(join(stateHome, 'workspace'), { recursive: true });
+  await mkdir(join(stateHome, 'skills'), { recursive: true });
+  await mkdir(join(stateHome, 'app', 'releases', 'old'), { recursive: true });
+  await mkdir(join(stateHome, 'logs'), { recursive: true });
+  await mkdir(join(stateHome, 'updater'), { recursive: true });
+  await writeFile(join(stateHome, 'workspace', 'keep.txt'), 'portable workspace state\n');
+  await writeFile(join(stateHome, 'skills', 'keep.txt'), 'portable skills state\n');
+  await writeFile(join(stateHome, 'app', 'releases', 'old', 'large-release-marker.txt'), 'must not archive release trees\n');
+  await writeFile(join(stateHome, 'logs', 'runtime.log'), 'must not archive logs\n');
+  await writeFile(join(stateHome, 'updater', 'runtime.txt'), 'must not archive updater runtime\n');
   const createDatabase = await run(process.execPath, ['-e', `const Database=require('better-sqlite3'); const db=new Database(process.argv[1]); db.exec("create table t(value text); insert into t values ('ok')"); db.close()`, database], {
     cwd: projectRoot,
     env: process.env,
@@ -97,8 +106,9 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   assert.equal(archive.code, 0, archive.stderr);
-  assert.match(archive.stdout, /keep\.txt/);
-  assert.doesNotMatch(archive.stdout, /update\.sock/);
+  assert.match(archive.stdout, /workspace\/keep\.txt/);
+  assert.match(archive.stdout, /skills\/keep\.txt/);
+  assert.doesNotMatch(archive.stdout, /large-release-marker\.txt|runtime\.log|runtime\.txt|olympus-dispatch\.db|update\.sock/);
 
   const fakeBin = join(fixture, 'bin');
   const launchLog = join(fixture, 'launchctl.log');
