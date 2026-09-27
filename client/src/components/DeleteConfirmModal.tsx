@@ -5,6 +5,7 @@ interface Props {
   title?: string;
   body?: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   isConfirming?: boolean;
   error?: string | null;
 }
@@ -16,6 +17,7 @@ export function DeleteConfirmModal({
   title = 'Delete task',
   body = 'This removes the task from Olympus Dispatch. The Hermes session history remains in Hermes.',
   confirmLabel = 'Delete',
+  cancelLabel = 'Cancel',
   isConfirming = false,
   error = null,
 }: Props) {
@@ -38,7 +40,7 @@ export function DeleteConfirmModal({
             disabled={isConfirming}
             className="px-3.5 py-1.5 text-sm font-medium rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
           >
-            Cancel
+            {cancelLabel}
           </button>
           <button
             onClick={onConfirm}

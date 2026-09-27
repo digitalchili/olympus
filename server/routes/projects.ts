@@ -10,6 +10,7 @@ import { DEFAULT_PROFILE_NAME } from '../../shared/types.js';
 import {
   createProject,
   createProjectWithRepository,
+  deleteProject,
   deleteProjectRepositoryLink,
   getProject,
   getProjectRepositoryLink,
@@ -24,9 +25,15 @@ import {
   upsertProjectRepositoryLink,
 } from '../db/projects.js';
 import { getTask, getTasksForProject } from '../db/queries.js';
-import { addProjectClient, initSSE, bootstrapEvents } from '../events.js';
+import { addProjectClient, initSSE, bootstrapEvents, broadcast } from '../events.js';
+import { hasPendingProjectPublication } from '../db/project-publications.js';
+import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
+import { getRecovery } from '../run-recovery.js';
+import { isProfileDeleting } from '../profile-deletion.js';
+import { getProjectCleanupReceipt, listPendingProjectDeletions } from '../db/project-cleanup.js';
+import { finishProjectDeletionCleanup, prepareProjectDeletionCleanup, ProjectStorageError } from '../project-deletion-cleanup.js';
 import { taskRunSnapshot } from '../task-run-snapshot.js';
-import { getRunStatus } from '../live-chat.js';
+import { getRunStatus, discardRun, closeSubscribersForTasks } from '../live-chat.js';
 import { isVerifying } from '../coding-verification.js';
 import { activeCollaborations, claimProjectOperation, claimProjectConfigurationOperation, claimTaskOperation, hasActiveTaskRun, hasProjectOperation } from '../task-run-lifecycle.js';
 import {
@@ -115,6 +122,10 @@ async function verifiedRepositoryLink(
 }
 
 function sendError(res: Response, error: unknown): Response {
+  if (error instanceof ProjectStorageError) return res.status(409).json({ error: error.message, code: error.code });
+  if (error instanceof ProjectDeletionBlockedError) {
+    return res.status(409).json({ error: error.message, code: error.code });
+  }
   if (error instanceof ProjectPublicationError) {
     return res.status(error.statusCode).json({ error: error.message, code: error.code, pendingPublication: error.pendingPublication });
   }
@@ -139,6 +150,8 @@ function sendError(res: Response, error: unknown): Response {
   }
   const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : null;
   const message = error instanceof Error ? error.message : 'Project request failed';
+  if (message === 'TASK_CONTROL_EVENT_IMMUTABLE') return res.status(409).json({ error: 'A task has protected history and cannot be deleted. Its history and the Project have been preserved.', code: 'TASK_CONTROL_EVENT_IMMUTABLE' });
+  if (message === 'Project tasks are busy') return res.status(409).json({ error: 'A task’s profile is being changed. Wait for it to finish, then try deleting this Project again.', code: 'PROJECT_TASK_WORK_PENDING' });
   if (statusCode === 400) return res.status(400).json({ error: message, code: 'INVALID_PROJECT_REQUEST' });
   if (statusCode === 404) return res.status(404).json({ error: message, code: /task/i.test(message) ? 'PROJECT_TASK_NOT_FOUND' : 'PROJECT_REPOSITORY_NOT_FOUND' });
   if (statusCode === 409 && /permission upgrade/i.test(message)) return res.status(409).json({ error: message, code: 'GITHUB_PERMISSION_UPGRADE_REQUIRED' });
@@ -232,6 +245,24 @@ class ProjectOperationActiveError extends Error {
   constructor(projectId: string, task?: Task) {
     const blocker = task ? { kind: 'active_task' as const, task: syncTask(task), message: 'Wait for this task and its checks to finish, then try again.', releaseEditorLeaseId: null } : operationBlocker(projectId);
     super(blocker.message); this.blocker = blocker;
+  }
+}
+
+class ProjectDeletionBlockedError extends Error {
+  constructor(readonly code: string, message: string) { super(message); }
+}
+
+function assertProjectDeletionIdle(projectId: string, tasks: Task[]): void {
+  if (hasPendingProjectPublication(projectId)) {
+    throw new ProjectDeletionBlockedError('PROJECT_PUBLICATION_PENDING', 'Resolve or abandon the pending GitHub publication before deleting this Project.');
+  }
+  for (const task of tasks) {
+    if (taskIsActive(task) || getLatestTaskAgentRun(task.id)?.status === 'streaming') throw new ProjectOperationActiveError(projectId, task);
+    const recovery = getRecovery(task.id);
+    if (isProfileDeleting(task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME)
+      || (recovery && ['running', 'pending', 'waiting', 'dispatching'].includes(recovery.state))) {
+      throw new ProjectDeletionBlockedError('PROJECT_TASK_WORK_PENDING', 'Wait for profile changes and finish or stop pending task recovery before deleting this Project.');
+    }
   }
 }
 
@@ -369,7 +400,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         ? listProjects().filter((project) => canProfileAccessProject(project.id, actor, 'view'))
         : listProjects();
       const projects = await Promise.all(visible.map((project) => projectResponse(project, registry)));
-      return res.json({ projects });
+      return res.json({ projects, pendingDeletions: actor ? [] : listPendingProjectDeletions() });
     } catch (error) {
       return sendError(res, error);
     }
@@ -453,6 +484,55 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     } catch (error) {
       return sendError(res, error);
     }
+  });
+
+  router.delete('/:id', async (req, res) => {
+    let release: (() => void) | null = null;
+    try {
+      const projectId = routeId(req.params.id);
+      const project = getProject(projectId);
+      if (!project && (req.query.profile !== undefined || !getProjectCleanupReceipt(projectId))) throw new Error('Project not found');
+      if (project) requireProjectRouteAccess(req, registry, projectId, 'manage');
+      release = claimProjectConfigurationOperation(projectId);
+      if (!release) throw new ProjectOperationActiveError(projectId);
+      if (!project) {
+        await finishProjectDeletionCleanup(projectId, registry);
+        return res.status(204).end();
+      }
+      const tasks = getTasksForProject(projectId);
+      assertProjectDeletionIdle(projectId, tasks);
+      await Promise.all(tasks.map(async task => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const inventory = await Promise.race([
+            options.adapter?.getBackgroundWork?.(task.id) ?? Promise.resolve({ available: false, work: [], continuation: undefined }),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Background check timed out')), 5_000); }),
+          ]);
+          if (!inventory.available || !Array.isArray(inventory.work) || inventory.work.length || inventory.continuation?.status === 'pending') throw new Error('Task has pending work');
+        } catch {
+          throw new ProjectDeletionBlockedError('PROJECT_TASK_WORK_PENDING', 'Could not confirm that every task is idle. Check or stop background work, then try deleting this Project again.');
+        } finally { if (timer) clearTimeout(timer); }
+      }));
+      const cleanupPaths = await prepareProjectDeletionCleanup(projectId, tasks, registry);
+      // New tasks may arrive while the read-only checks await.
+      requireProjectRouteAccess(req, registry, projectId, 'manage');
+      const currentTasks = getTasksForProject(projectId);
+      const checked = new Set(tasks.map(task => task.id));
+      if (currentTasks.length !== tasks.length || currentTasks.some(task => !checked.has(task.id))) {
+        throw new ProjectDeletionBlockedError('PROJECT_TASK_WORK_PENDING', 'This Project’s tasks changed while checking. Review them and try deleting the Project again.');
+      }
+      assertProjectDeletionIdle(projectId, currentTasks);
+      deleteProject(projectId, cleanupPaths);
+      closeSubscribersForTasks(currentTasks.map(task => task.id));
+      for (const task of currentTasks) {
+        discardRun(task.id);
+        broadcast({ type: 'task_deleted', taskId: task.id }, task);
+      }
+      await finishProjectDeletionCleanup(projectId, registry);
+      return res.status(204).end();
+    } catch (error) {
+      return sendError(res, error);
+    } finally { release?.(); }
   });
 
   router.get('/:id/grants', (req, res) => {
@@ -807,9 +887,12 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
 
   router.post('/:id/references', async (req, res) => {
     let file: Express.Multer.File | undefined;
+    let release: (() => void) | null = null;
     try {
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      release = claimProjectOperation(projectId);
+      if (!release) throw new ProjectOperationActiveError(projectId);
       file = await uploadReferenceFile(req, res, projectId);
       const reference = await createProjectReferenceFromQuarantine({
         projectId,
@@ -823,7 +906,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     } catch (error) {
       if (file?.path) void rm(file.path, { force: true });
       return sendError(res, error);
-    }
+    } finally { release?.(); }
   });
 
   router.get('/:id/references/search', (req, res) => {
@@ -867,15 +950,18 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
   });
 
   router.post('/:id/references/:referenceId/reindex', async (req, res) => {
+    let release: (() => void) | null = null;
     try {
       const projectId = routeId(req.params.id);
       const referenceId = routeId(req.params.referenceId);
       requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      release = claimProjectOperation(projectId);
+      if (!release) throw new ProjectOperationActiveError(projectId);
       const reference = await reindexProjectReference(projectId, referenceId, now());
       return res.json({ reference: publicProjectReference(reference) });
     } catch (error) {
       return sendError(res, error);
-    }
+    } finally { release?.(); }
   });
 
   router.delete('/:id/references/:referenceId', (req, res) => {

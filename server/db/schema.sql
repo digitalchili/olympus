@@ -249,6 +249,14 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at         INTEGER NOT NULL
 );
 
+-- Survives Project deletion so interrupted local storage cleanup can be retried.
+CREATE TABLE IF NOT EXISTS project_deletion_cleanup (
+  project_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  paths_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_updated
   ON projects(updated_at DESC);
 

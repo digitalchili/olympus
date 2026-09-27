@@ -45,7 +45,7 @@ import {
   updateProject,
   uploadProjectReference,
 } from '../lib/api';
-import { useProfile } from '../contexts/ProfileContext';
+import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { toWithProfile } from '../lib/profileQuery';
 import { toErrorMessage } from '../lib/format';
 import { useProjectBoardEvents } from '../hooks/useProjectBoardEvents';
@@ -56,6 +56,7 @@ import { ProjectGitHubSync } from './ProjectGitHubSync';
 import { ProjectGitHubAccess } from './ProjectGitHubAccess';
 import { ProjectTaskSelector } from './ProjectTaskSelector';
 import { PendingProjectPublication } from './PendingProjectPublication';
+import { DeleteProjectSection } from './DeleteProjectSection';
 import { projectTaskCodeView, selectProjectCodeTask } from '../lib/projectCodeSelection';
 
 const accessRoles: ProjectAccessRole[] = ['view', 'contribute', 'manage'];
@@ -64,6 +65,7 @@ type ProjectTab = typeof projectTabs[number];
 
 export function ProjectDetailPage() {
   const { projectId = '' } = useParams();
+  const navigate = useProfileNavigate();
   const { profiles, activeProfileId } = useProfile();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
@@ -753,6 +755,7 @@ export function ProjectDetailPage() {
               <button type="button" disabled={busy || !grantProfileId} onClick={() => void saveGrant()} className="mt-2 h-8 w-full rounded-lg border border-zinc-200 text-xs font-medium disabled:opacity-40 dark:border-zinc-700">Grant access</button>
             </section>
             <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"><h2 className="flex items-center gap-2 text-sm font-medium"><GitBranch size={15} /> Repository</h2>{project.repositoryLink ? <><a href={project.repositoryLink.htmlUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-sm font-medium text-zinc-800 hover:underline dark:text-zinc-200">{project.repositoryLink.fullName}</a><p className="mt-1 text-xs text-zinc-500">{project.repositoryLink.defaultBranch} · protected branch · verified installation {project.repositoryLink.installationId}</p></> : <p className="mt-2 text-xs text-zinc-500">No repository selected.</p>}<Link to="/settings#github" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300">GitHub setup <ExternalLink size={12} /></Link></section>
+            <DeleteProjectSection key={project.id} projectId={project.id} projectName={project.name} disabled={busy || uploadingReference} onDeleted={() => navigate('/projects', { replace: true })} />
             </>)}
             {activeTab === 'references' && (
             <section className="w-full max-w-5xl rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 lg:col-span-2">

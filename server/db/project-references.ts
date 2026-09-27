@@ -17,6 +17,7 @@ import { getProject } from './projects.js';
 import { expandHomePrefix, resolveProjectReferencesDir } from '../paths.js';
 import { operationalLog, redactOperationalReason } from '../observability.js';
 import { validateOfficeArchive, type ExtractionResult } from '../project-references/extraction-worker.js';
+import { claimProjectOperation } from '../task-run-lifecycle.js';
 
 export const PROJECT_REFERENCE_MAX_BYTES = 25 * 1024 * 1024;
 
@@ -404,13 +405,20 @@ export async function syncMessageAttachmentsToProjectReferences(
 ): Promise<ProjectReference[]> {
   const paths = extractAttachmentPaths(content);
   if (paths.length === 0) return [];
-  const results: ProjectReference[] = [];
-  for (const rawPath of paths) {
-    const filePath = resolve(expandHomePrefix(rawPath));
-    const ref = await createProjectReferenceFromFile({ projectId, filePath });
-    if (ref) results.push(ref);
+  const release = claimProjectOperation(projectId);
+  if (!release) return [];
+  try {
+    if (!getProject(projectId)) return [];
+    const results: ProjectReference[] = [];
+    for (const rawPath of paths) {
+      const filePath = resolve(expandHomePrefix(rawPath));
+      const ref = await createProjectReferenceFromFile({ projectId, filePath });
+      if (ref) results.push(ref);
+    }
+    return results;
+  } finally {
+    release();
   }
-  return results;
 }
 
 export function getProjectReference(projectId: string, referenceId: string): ProjectReference | undefined {

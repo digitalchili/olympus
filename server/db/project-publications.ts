@@ -26,6 +26,9 @@ export function getProjectPublication(id: string): ProjectPublication | null {
 export function getPendingProjectPublication(projectId: string, taskId: string): ProjectPublication | null {
   return fromRow(db.prepare("SELECT * FROM project_publications WHERE project_id = ? AND task_id = ? AND state IN ('prepared','pending')").get(projectId, taskId));
 }
+export function hasPendingProjectPublication(projectId: string): boolean {
+  return Boolean(db.prepare("SELECT 1 FROM project_publications WHERE project_id = ? AND state IN ('prepared','pending') LIMIT 1").get(projectId));
+}
 function sha(value: string): string {
   if (!/^[0-9a-f]{40}$/.test(value)) throw new Error('Invalid publication commit or tree');
   return value;

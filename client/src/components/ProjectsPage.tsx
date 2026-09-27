@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight, FolderKanban, GitBranch, Plus, X } from 'lucide-react';
 import type { ProjectSummary, StudioGitHubInstallation, StudioGitHubRepository } from '@shared/types';
-import { createProject, fetchProjects, fetchStudioGitHubStatus, fetchStudioRepositories } from '../lib/api';
+import { ApiError, createProject, deleteProject, fetchProjects, fetchStudioGitHubStatus, fetchStudioRepositories } from '../lib/api';
 import { ProfileLink, useProfile } from '../contexts/ProfileContext';
 import { toErrorMessage } from '../lib/format';
 import { selectableStudioRepositories } from '../lib/studio-projects';
@@ -9,6 +9,8 @@ import { selectableStudioRepositories } from '../lib/studio-projects';
 export function ProjectsPage() {
   const { profiles } = useProfile();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [pendingDeletions, setPendingDeletions] = useState<Array<{ id: string; name: string }>>([]);
+  const [cleaningId, setCleaningId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
@@ -30,7 +32,7 @@ export function ProjectsPage() {
       })
       .catch(() => undefined);
     fetchProjects()
-      .then(({ projects: next }) => setProjects(next))
+      .then(({ projects: next, pendingDeletions: pending = [] }) => { setProjects(next); setPendingDeletions(pending); })
       .catch((cause) => setError(toErrorMessage(cause, 'Could not load Projects')))
       .finally(() => setLoading(false));
   }, []);
@@ -90,6 +92,19 @@ export function ProjectsPage() {
     }
   };
 
+  const retryCleanup = async (projectId: string) => {
+    if (cleaningId) return;
+    setCleaningId(projectId);
+    setError(null);
+    try {
+      await deleteProject(projectId);
+      setPendingDeletions(current => current.filter(project => project.id !== projectId));
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 404) setPendingDeletions(current => current.filter(project => project.id !== projectId));
+      else setError(toErrorMessage(cause, 'Could not finish disk cleanup'));
+    } finally { setCleaningId(null); }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto p-5 sm:p-7">
       <div className="mx-auto max-w-5xl">
@@ -106,6 +121,11 @@ export function ProjectsPage() {
         </div>
 
         {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-300">{error}</p>}
+
+        {pendingDeletions.map(project => <section key={project.id} className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/20">
+          <div className="min-w-0 text-sm"><h2 className="font-medium">{project.name} — disk cleanup pending</h2><p className="mt-1 text-xs text-zinc-500">The Project and its tasks were deleted. Finish removing their local files to free disk space.</p></div>
+          <button type="button" disabled={cleaningId !== null} onClick={() => void retryCleanup(project.id)} className="h-9 rounded-lg border border-amber-300 px-3 text-sm font-medium disabled:opacity-50 dark:border-amber-800">{cleaningId === project.id ? 'Cleaning up…' : 'Retry cleanup'}</button>
+        </section>)}
 
         {showCreate && (
           <section className="mt-5 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">

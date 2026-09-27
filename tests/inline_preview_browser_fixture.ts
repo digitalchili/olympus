@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import type { Task } from '../shared/types.js';
 
 // Explicitly disposable, credential-free fixture. Never imports the production app.
 const root = await mkdtemp(resolve('.tmp-native-qa-inline-'));
@@ -14,8 +13,9 @@ const workspace = join(root, 'hermes/workspace');
 await mkdir(workspace, { recursive: true });
 const { LocalProfileRegistry } = await import('../server/local-profiles.js');
 const { createTaskArtifactsRouter, publishTaskAttachments } = await import('../server/task-artifacts.js');
+const { insertTask } = await import('../server/db/queries.js');
 const registry = new LocalProfileRegistry(process.env.HERMES_HOME);
-const task = { id: 'inline-preview-fixture', title: 'Explore homepage directions', profile_name: null, status: 'in_progress', workdir: workspace } as Task;
+const task = insertTask({ title: 'Explore homepage directions', profile_name: null, status: 'in_progress', workdir: workspace });
 const designs = [
   { id: 'a', title: 'Editorial', description: 'Warm paper, generous whitespace, and a restrained serif headline.', bg: '#f6f1e8', ink: '#292b27', accent: '#b95434', font: 'Georgia,serif', heading: 'Make room<br>for good ideas.' },
   { id: 'b', title: 'Expressive', description: 'High contrast, oversized typography, and a playful graphic.', bg: '#332065', ink: '#f3f1ff', accent: '#d6fd74', font: 'Arial,sans-serif', heading: 'Small team.<br>Big ideas.' },

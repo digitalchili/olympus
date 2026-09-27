@@ -5,13 +5,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import express from 'express';
 import { LocalProfileRegistry } from '../server/local-profiles.js';
-import { createTaskArtifactsRouter, publishTaskAttachments } from '../server/task-artifacts.js';
-import { publishTaskArtifactPreview, openPublishedTaskPreview } from '../server/task-previews.js';
 import type { Task, TaskAttachment, TaskDraftSelection } from '../shared/types.js';
 
 const root = await mkdtemp(join(tmpdir(), 'olympus-inline-previews-'));
 process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
 process.env.HERMES_HOME = join(root, 'hermes');
+process.env.DB_PATH = join(root, 'state', 'test.db');
+const { createTaskArtifactsRouter, publishTaskAttachments } = await import('../server/task-artifacts.js');
+const { publishTaskArtifactPreview, openPublishedTaskPreview } = await import('../server/task-previews.js');
+const { insertTask } = await import('../server/db/queries.js');
+const { default: db } = await import('../server/db/index.js');
 
 const hermesHome = join(root, 'hermes');
 const stateHome = join(root, 'state');
@@ -43,10 +46,8 @@ const unsafeHtml = '<!doctype html><html><body><script src="https://example.inva
 const renamedHtml = '<!doctype html><html><body><script>alert("not an image")</script></body></html>';
 const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert("x")</script><rect width="10" height="10"/></svg>';
 
-function makeTask(id: string): Task {
-  const now = Date.now();
-  return {
-    id,
+function makeTask(): Task {
+  return insertTask({
     title: 'Review homepage drafts',
     description: null,
     status: 'in_review',
@@ -57,15 +58,10 @@ function makeTask(id: string): Task {
     reasoning_effort: null,
     workdir: projectWorkdir,
     project_id: null,
-    handling_profile_id: null,
+    handling_profile_id: profileId,
     delegated_worker_id: null,
-    created_at: now,
-    updated_at: now,
-    last_agent_response_at: now,
-    last_viewed_at: null,
-    last_context_used_tokens: null,
-    last_context_window_tokens: null,
-  };
+    last_agent_response_at: Date.now(),
+  });
 }
 
 function byName(attachments: TaskAttachment[], name: string): TaskAttachment {
@@ -92,8 +88,8 @@ try {
   await writeFile(svgPath, svg);
   await writeFile(pdfPath, pdfBytes);
 
-  const task = makeTask(`task-preview-${process.pid}`);
-  const otherTask = makeTask(`task-preview-other-${process.pid}`);
+  const task = makeTask();
+  const otherTask = makeTask();
   const registry = new LocalProfileRegistry(hermesHome, stateHome);
   const manifestContent = `Generated drafts are ready.\n\nMEDIA:${imagePath}\n\n\`\`\`olympus-preview\n${JSON.stringify({
     id: 'homepage-r1',
@@ -280,6 +276,7 @@ try {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 } finally {
+  db.close();
   await rm(root, { recursive: true, force: true });
 }
 

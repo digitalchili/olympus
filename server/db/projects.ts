@@ -9,6 +9,8 @@ import type {
 } from '../../shared/types.js';
 import { PROJECT_ACCESS_ROLES } from '../../shared/types.js';
 import db from './index.js';
+import { deleteTask, getTasksForProject } from './queries.js';
+import { saveProjectCleanupReceipt, type ProjectCleanupPath } from './project-cleanup.js';
 
 type ProjectRow = {
   id: string;
@@ -193,6 +195,20 @@ export function updateProject(
     WHERE id = ?
   `).run(name, nameKey, purpose, now, projectId);
   return getProject(projectId)!;
+}
+
+/** Cleanup is journaled with metadata deletion; files are removed only after commit. */
+export function deleteProject(projectId: string, cleanupPaths: ProjectCleanupPath[]): boolean {
+  return db.transaction(() => {
+    const project = getProject(projectId);
+    if (!project) return false;
+    saveProjectCleanupReceipt(projectId, project.name, cleanupPaths);
+    db.prepare('DELETE FROM project_reference_chunks_fts WHERE project_id = ?').run(projectId);
+    for (const task of getTasksForProject(projectId)) {
+      if (!deleteTask(task.id)) throw new Error('Project tasks are busy');
+    }
+    return db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).changes > 0;
+  })();
 }
 
 export function reassignProject(input: {

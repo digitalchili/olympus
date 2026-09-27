@@ -6,6 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { TextDecoder } from 'node:util';
 import type { Task, TaskAttachment, TaskArtifactPreview, TaskDraftSelection } from '../shared/types.js';
 import { resolveOlympusDataDir } from './paths.js';
+import { getTask } from './db/queries.js';
 
 const STORE_VERSION = 1;
 const MAX_MANIFESTS_PER_MESSAGE = 5;
@@ -32,6 +33,15 @@ async function withTaskWrite<T>(taskId: string, action: () => Promise<T>): Promi
   writes.set(taskId, settled);
   try { return await result; }
   finally { if (writes.get(taskId) === settled) writes.delete(taskId); }
+}
+
+/** Drain accepted writes and hold their queues while deleted-task files are removed. */
+export function withTaskPreviewCleanup<T>(taskIds: string[], cleanup: () => Promise<T>): Promise<T> {
+  const ids = [...new Set(taskIds)].sort();
+  const next = (index: number): Promise<T> => index === ids.length
+    ? cleanup()
+    : withTaskWrite(ids[index], () => next(index + 1));
+  return next(0);
 }
 
 const SIMPLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -137,16 +147,16 @@ function taskStorageKey(taskId: string): string {
   return sha256(taskId).slice(0, 32);
 }
 
-function taskStoreDir(taskId: string): string {
+export function taskPreviewStorageDir(taskId: string): string {
   return join(taskStoreRoot(), 'tasks', taskStorageKey(taskId));
 }
 
 function snapshotsDir(taskId: string): string {
-  return join(taskStoreDir(taskId), 'snapshots');
+  return join(taskPreviewStorageDir(taskId), 'snapshots');
 }
 
 function indexPath(taskId: string): string {
-  return join(taskStoreDir(taskId), 'index.json');
+  return join(taskPreviewStorageDir(taskId), 'index.json');
 }
 
 function emptyStore(taskId: string): TaskPreviewStore {
@@ -467,6 +477,7 @@ async function publishTaskArtifactPreviewUnlocked(
   artifact: PreviewableTaskArtifact,
   hint?: TaskPreviewPublicationHint,
 ): Promise<TaskArtifactPreview | undefined> {
+  if (!getTask(task.id)) return undefined;
   const previewId = hint?.previewId ?? mediaPreviewId(task.id, artifact.path);
   validatePreviewId(previewId);
   const store = await readStore(task.id);
@@ -512,6 +523,7 @@ async function publishTaskArtifactPreviewUnlocked(
 }
 
 export function publishTaskArtifactPreview(task: Task, artifact: PreviewableTaskArtifact, hint?: TaskPreviewPublicationHint): Promise<TaskArtifactPreview | undefined> {
+  if (!getTask(task.id)) return Promise.resolve(undefined);
   return withTaskWrite(task.id, () => publishTaskArtifactPreviewUnlocked(task, artifact, hint));
 }
 
@@ -568,6 +580,7 @@ function buildSelectionPrompt(preview: TaskArtifactPreview, feedback: string): s
 }
 
 async function saveTaskDraftSelectionUnlocked(taskId: string, input: unknown): Promise<TaskDraftSelection> {
+  if (!getTask(taskId)) throw new TaskPreviewError(404, 'Task not found', 'TASK_NOT_FOUND');
   const body = recordValue(input);
   if (!body) throw new TaskPreviewError(400, 'Request body is required', 'BAD_SELECTION_REQUEST');
   const groupId = validateGroupId(body.groupId);

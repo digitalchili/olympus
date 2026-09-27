@@ -346,7 +346,7 @@ export function importStudioProject(installationId: number, repositoryId: number
 }
 
 export function fetchProjects() {
-  return request<{ projects: ProjectSummary[] }>('/projects', undefined, false);
+  return request<{ projects: ProjectSummary[]; pendingDeletions?: Array<{ id: string; name: string }> }>('/projects', undefined, false);
 }
 
 export function createProject(input: { name: string; purpose: string; managerProfileId: string; repositoryLink?: { installationId: number; repositoryId: number } | null }) {
@@ -372,6 +372,10 @@ export function updateProject(projectId: string, input: { name?: string; purpose
     method: 'PATCH',
     body: JSON.stringify(input),
   }, false);
+}
+
+export function deleteProject(projectId: string) {
+  return request<void>(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' }, false);
 }
 
 export interface ProjectGitHubAccess {

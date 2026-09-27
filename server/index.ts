@@ -19,6 +19,7 @@ import { hasActiveTaskRun } from './task-run-lifecycle.js';
 import { localProfileRegistry } from './local-profiles.js';
 import { botDeliveryContent, listPendingBotMessages, markBotMessageFailed, recoverBotMessages, requireQueuedBotMessage } from './db/bot-messages.js';
 import { configureBotMessageDispatcher, createBotMessageDispatcher } from './bot-message-dispatcher.js';
+import { retryPendingProjectDeletionCleanup } from './project-deletion-cleanup.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -67,6 +68,7 @@ async function listenWithFallback(
 }
 
 async function main() {
+  await retryPendingProjectDeletionCleanup();
   recoverInterruptedTaskAgentRuns();
   recoverRecoveryRecords();
   recoverBotMessages();
