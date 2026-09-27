@@ -151,29 +151,17 @@ async function fetchStatus(force = false): Promise<UpdateStatus> {
     let releaseUrl: string | null = null;
 
     if (response.ok) {
-      const release = await response.json() as { tag_name?: unknown; html_url?: unknown };
-      latestVersion = typeof release.tag_name === 'string' ? release.tag_name.replace(/^v/, '') : null;
-      releaseUrl = typeof release.html_url === 'string' ? release.html_url : null;
-    }
-
-    if (!latestVersion || !isVersionNewer(latestVersion, currentVersion)) {
-      try {
-        const tagsResponse = await fetch(`${GITHUB_API}/repos/${repository}/tags?per_page=10`, {
-          headers: githubHeaders(),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        if (tagsResponse.ok) {
-          const tags = await tagsResponse.json() as Array<{ name?: unknown }>;
-          for (const tag of tags) {
-            const tagVersion = typeof tag.name === 'string' ? tag.name.replace(/^v/, '') : null;
-            if (tagVersion && (!latestVersion || isVersionNewer(tagVersion, latestVersion))) {
-              latestVersion = tagVersion;
-              releaseUrl = `https://github.com/${repository}/releases/tag/v${tagVersion}`;
-            }
-          }
-        }
-      } catch {
-        // Fallback to releases result
+      const release = await response.json() as {
+        tag_name?: unknown; html_url?: unknown; draft?: unknown; prerelease?: unknown; published_at?: unknown;
+      } | null;
+      // The release workflow publishes this only after the image is ready. A tag
+      // alone (or a draft/prerelease) does not establish an installable update.
+      if (release?.draft === false && release.prerelease === false
+        && typeof release.published_at === 'string' && Number.isFinite(Date.parse(release.published_at))
+        && typeof release.tag_name === 'string' && /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(release.tag_name)
+        && parseVersion(release.tag_name)?.every(Number.isSafeInteger)) {
+        latestVersion = release.tag_name.replace(/^v/, '');
+        releaseUrl = typeof release.html_url === 'string' ? release.html_url : null;
       }
     }
 
@@ -181,14 +169,13 @@ async function fetchStatus(force = false): Promise<UpdateStatus> {
       cachedStatus = { ...base, error: 'No GitHub release is published yet.' };
     } else if (!latestVersion && !response.ok) {
       cachedStatus = { ...base, error: `GitHub release check failed (${response.status}).` };
+    } else if (!latestVersion) {
+      cachedStatus = { ...base, error: 'No valid stable GitHub release is published yet.' };
     } else {
-      const resolvedLatest = latestVersion && isVersionNewer(currentVersion, latestVersion)
-        ? currentVersion
-        : latestVersion;
       cachedStatus = {
         ...base,
-        latestVersion: resolvedLatest,
-        updateAvailable: resolvedLatest ? isVersionNewer(resolvedLatest, currentVersion) : false,
+        latestVersion,
+        updateAvailable: isVersionNewer(latestVersion, currentVersion),
         releaseUrl,
       };
     }

@@ -504,7 +504,14 @@ def _discover_agent_dir() -> Path:
 
     env_dir = os.environ.get("HERMES_AGENT_DIR", "").strip()
     if env_dir:
-        candidates.append(Path(env_dir).expanduser())
+        selected = Path(env_dir).expanduser()
+        if not (selected / "run_agent.py").is_file():
+            raise WorkerError(
+                "The configured Hermes source is unavailable.",
+                code="hermes_not_found",
+                hint="Check HERMES_AGENT_DIR for the selected local Hermes installation.",
+            )
+        return selected.resolve()
 
     hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
     candidates.append(hermes_home / "hermes-agent")

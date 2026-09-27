@@ -37,6 +37,8 @@ curl --fail http://127.0.0.1:6969/api/ready
 
 The installer discovers Hermes at `HERMES_AGENT_DIR` or `~/.hermes/hermes-agent`, builds production assets, installs a per-user LaunchAgent, and checks readiness. Releases live under `~/.olympus-dispatch/app/releases`; an atomic `current` symlink is the LaunchAgent working directory. State remains under `~/.olympus-dispatch` and uninstall preserves it.
 
+For a nondefault installation, set `HERMES_AGENT_DIR` to its source checkout and `HERMES_HOME` to its existing profile home before the dry-run. The installer reports and saves both paths; updates retain that identity. An invalid selection fails instead of switching to a different installation.
+
 ## Docker with existing Hermes data
 
 Run this on the same Docker host as the Hermes data you intend to use:
@@ -44,13 +46,17 @@ Run this on the same Docker host as the Hermes data you intend to use:
 ```bash
 git clone https://github.com/digitalchili/olympus.git
 cd olympus
-./scripts/docker/install.sh --dry-run --hermes-volume YOUR_VOLUME
+# Replace RELEASE_VERSION with a published version from GitHub Releases.
+OLYMPUS_RELEASE_IMAGE=ghcr.io/digitalchili/olympus:RELEASE_VERSION
+./scripts/docker/install.sh --dry-run --hermes-volume YOUR_VOLUME --image "$OLYMPUS_RELEASE_IMAGE"
 # After confirming that volume belongs to this local Hermes installation:
-./scripts/docker/install.sh --hermes-volume YOUR_VOLUME
+./scripts/docker/install.sh --hermes-volume YOUR_VOLUME --image "$OLYMPUS_RELEASE_IMAGE"
 ./scripts/docker/status.sh
 ```
 
 Without `--hermes-volume`, the installer proceeds only when exactly one running named volume is mounted at `/opt/data`; otherwise it fails closed. Confirmation remains required unless `--yes` is supplied. It creates/checks the external Olympus state volume, writes mode-600 local secrets and immutable per-slot image pins, and starts only its own containers. Dry-run performs no writes or Docker mutations.
+
+Select the image from [published releases](https://github.com/digitalchili/olympus/releases). There is no built-in release fallback. Updates require `--image` each time, even if an old image is saved in `.env`. If an existing `.env` names a different Hermes volume, the installer stops before changing Docker; resolve the installation selection first. These scripts create the bundled blue/green topology. An existing single-service Dokploy/Compose installation must use its existing deployment process or the [installation-local updater](docs/standalone-self-update.md), not these HA scripts.
 
 The listener defaults to `127.0.0.1:6969`. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately if remote access is required.
 

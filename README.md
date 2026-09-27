@@ -29,6 +29,8 @@ Prerequisites are Node.js 22.22–25 (Node 22 LTS recommended) and an installed 
 ```bash
 git clone https://github.com/digitalchili/olympus.git
 cd olympus
+./scripts/macos/install.sh --dry-run
+# After reviewing the selected paths:
 ./scripts/macos/install.sh
 ```
 
@@ -39,10 +41,16 @@ The installer discovers Hermes at `~/.hermes/hermes-agent`, builds production as
 ```bash
 git clone https://github.com/digitalchili/olympus.git
 cd olympus
-./scripts/docker/install.sh
+# Choose a published release and this installation's existing Hermes volume.
+OLYMPUS_RELEASE_IMAGE=ghcr.io/digitalchili/olympus:RELEASE_VERSION
+./scripts/docker/install.sh --dry-run --hermes-volume YOUR_VOLUME --image "$OLYMPUS_RELEASE_IMAGE"
+# After reviewing the selected volume and image:
+./scripts/docker/install.sh --hermes-volume YOUR_VOLUME --image "$OLYMPUS_RELEASE_IMAGE"
 ```
 
 The installer identifies a sole running named volume mounted at Hermes `/opt/data`, prints only its volume name, asks before reuse, writes a mode-600 `.env`, and verifies readiness. Use `--hermes-volume NAME` when discovery is ambiguous or `--yes` for confirmed automation.
+
+Use a version from [GitHub Releases](https://github.com/digitalchili/olympus/releases); public images need no GitHub token. Existing single-service Dokploy installations use their current deployment process or the [local update runner](docs/standalone-self-update.md), rather than the blue/green installer.
 
 Open `http://127.0.0.1:6969` by default. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately for remote access.
 

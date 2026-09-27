@@ -22,19 +22,18 @@ while [ "$#" -gt 0 ]; do
 done
 . "$(dirname "$0")/lib.sh"
 select_node
-if [ "$DRY_RUN" = 0 ] && [ -L "$current" ]; then
+if [ -L "$current" ]; then
   if [ "$HOST_VALUE" != "${OLYMPUS_HOST:-127.0.0.1}" ] || [ "$#" -gt 0 ]; then
     printf 'Network binding is configured during first install only; use a dedicated reconfigure command for an existing installation.\n' >&2
     exit 2
   fi
+  if [ "$DRY_RUN" = 1 ]; then exec "$source_root/scripts/macos/update.sh" --dry-run; fi
   exec "$source_root/scripts/macos/update.sh"
 fi
-hermes=${HERMES_AGENT_DIR:-$HOME/.hermes/hermes-agent}
-[ -x "$hermes/venv/bin/python" ] || [ -x "$hermes/.venv/bin/python" ] || { printf 'Hermes Python environment not found at %s\n' "$hermes" >&2; exit 1; }
-python="$hermes/venv/bin/python"; [ -x "$python" ] || python="$hermes/.venv/bin/python"
+select_hermes
 version=$($node -p 'require(process.argv[1]).version' "$source_root/package.json")
 release="$releases/$version-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-if [ "$DRY_RUN" = 1 ]; then printf 'dry-run: build candidate release under %s with Node 22 preference; atomically initialize current and %s (host %s)\n' "$releases" "$plist" "$HOST_VALUE"; exit 0; fi
+if [ "$DRY_RUN" = 1 ]; then printf 'dry-run: Hermes source %s; profile home %s; Python %s; build candidate release under %s with Node 22 preference; atomically initialize current and %s (host %s)\n' "$hermes" "$hermes_home" "$python" "$releases" "$plist" "$HOST_VALUE"; exit 0; fi
 recover_install() {
   status=$?
   launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
@@ -47,8 +46,8 @@ trap recover_install EXIT INT TERM
 build_release "$release"
 mkdir -p "$install_root" "$(dirname "$plist")" "$state_home/logs"; atomic_link "$release"; umask 077
 token=$(openssl rand -hex 32)
-escape_sed() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
-sed -e "s|@@LABEL@@|$(escape_sed "$label")|g" -e "s|@@ROOT@@|$(escape_sed "$current")|g" -e "s|@@NODE@@|$(escape_sed "$node")|g" -e "s|@@PYTHON@@|$(escape_sed "$python")|g" -e "s|@@STATE_HOME@@|$(escape_sed "$state_home")|g" -e "s|@@PORT@@|${PORT:-6969}|g" -e "s|@@HOST@@|$(escape_sed "$HOST_VALUE")|g" -e "s|@@TOKEN@@|$token|g" "$release/deploy/macos/com.olympus.dispatch.plist" > "$plist"
+escape_sed() { printf '%s' "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/[&|\\]/\\&/g'; }
+sed -e "s|@@LABEL@@|$(escape_sed "$label")|g" -e "s|@@ROOT@@|$(escape_sed "$current")|g" -e "s|@@NODE@@|$(escape_sed "$node")|g" -e "s|@@PYTHON@@|$(escape_sed "$python")|g" -e "s|@@HERMES_AGENT_DIR@@|$(escape_sed "$hermes")|g" -e "s|@@HERMES_HOME@@|$(escape_sed "$hermes_home")|g" -e "s|@@STATE_HOME@@|$(escape_sed "$state_home")|g" -e "s|@@PORT@@|${PORT:-6969}|g" -e "s|@@HOST@@|$(escape_sed "$HOST_VALUE")|g" -e "s|@@TOKEN@@|$token|g" "$release/deploy/macos/com.olympus.dispatch.plist" > "$plist"
 chmod 600 "$plist"
 restart_launchd
 wait_ready_mac "$version"

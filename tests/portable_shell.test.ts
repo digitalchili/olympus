@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, writeFile, cp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, cp, readFile, rm, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -50,13 +51,15 @@ await cp('docker-compose.ha.yml', join(fixture, 'docker-compose.ha.yml'));
 await writeFile(join(fixture, '.env'), 'HERMES_DATA_VOLUME=hermes\nOLYMPUS_MAINTENANCE_TOKEN=fake-secret\n');
 await writeFile(join(fixture, '.olympus-active-slot'), 'blue\n');
 await writeFile(join(fixture, '.olympus-slots.env'), 'OLYMPUS_BLUE_IMAGE=repo@sha256:oldblue\nOLYMPUS_GREEN_IMAGE=repo@sha256:oldgreen\n');
-await writeFile(join(fixture, 'deploy/nginx/conf.d/active.conf'), 'blue\n');
+await cp('deploy/nginx/active-blue.conf', join(fixture, 'deploy/nginx/conf.d/active.conf'));
 const bin = join(fixture, 'bin'); await mkdir(bin);
 await writeFile(join(bin, 'docker'), `#!/bin/sh
 echo "docker $*" >> "$FAKE_LOG"
 case "$*" in
   "image inspect"*) case "$*" in *version*) echo 0.3.0;; *) echo repo@sha256:newimage;; esac ;;
   "compose"*"ps -q"*) echo fake-container ;;
+  "compose"*"up -d --no-deps olympus-green"*) [ "${'$'}{FAIL_START:-0}" = 1 ] && exit 23 ;;
+  "compose"*"stop olympus-green"*) [ "${'$'}{FAIL_STOP:-0}" = 1 ] && exit 24 ;;
 esac
 exit 0
 `, { mode: 0o755 });
@@ -70,16 +73,37 @@ exit 0
 const log = join(fixture, 'commands.log');
 const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, DRAIN_INTERVAL_SECONDS: '0', BACKUP_DIR: join(fixture, 'backups') };
 
+// Nginx opens/stats a file before reading it. Keep that real descriptor open
+// across a switch: replacing the path must not mutate or truncate its inode.
+async function holdProxyConfig() {
+  const path = join(fixture, 'deploy/nginx/conf.d/active.conf');
+  const reader = await open(path, 'r');
+  const previous = await readFile(path);
+  return async () => {
+    try {
+      const buffer = Buffer.alloc(previous.length);
+      const { bytesRead } = await reader.read(buffer, 0, buffer.length, 0);
+      assert.equal(bytesRead, previous.length, 'an open Nginx reader must not see a truncated configuration');
+      assert.deepEqual(buffer, previous, 'an open Nginx reader must finish reading the previous configuration');
+    } finally {
+      await reader.close();
+    }
+  };
+}
+
 // A live operation lock must reject concurrent lifecycle work before Docker is touched.
 await mkdir(join(fixture, '.olympus-operation.lock'));
 await writeFile(join(fixture, '.olympus-operation.lock/pid'), `${process.pid}\n`);
-const lockedUpdate = await run('sh', ['scripts/docker/update.sh', '--yes'], { cwd: fixture, env, stdio: ['ignore', 'pipe', 'pipe'] });
+const lockedUpdate = await run('sh', ['scripts/docker/update.sh', '--yes', '--image', 'fixture:next'], { cwd: fixture, env, stdio: ['ignore', 'pipe', 'pipe'] });
 assert.notEqual(lockedUpdate.code, 0);
 assert.match(lockedUpdate.stderr, /Another Olympus operation is running/);
 await rm(join(fixture, '.olympus-operation.lock'), { recursive: true });
 
-const update = await run('sh', ['scripts/docker/update.sh', '--yes'], { cwd: fixture, env, stdio: ['ignore', 'pipe', 'pipe'] });
+const verifyPromotionReader = await holdProxyConfig();
+const update = await run('sh', ['scripts/docker/update.sh', '--yes', '--image', 'fixture:next'], { cwd: fixture, env, stdio: ['ignore', 'pipe', 'pipe'] });
 assert.equal(update.code, 0, update.stderr);
+await test('promotion preserves a configuration already opened by Nginx', verifyPromotionReader);
+assert.equal(await readFile(join(fixture, 'deploy/nginx/conf.d/active.conf'), 'utf8'), await readFile('deploy/nginx/active-green.conf', 'utf8'));
 const commands = await readFile(log, 'utf8');
 const positions = ['docker pull', 'olympus-preflight-state', 'maintenance/drain', 'maintenance/status', ':/state -v', 'up -d --no-deps olympus-green', 'nginx -s reload', '--retry 10', 'stop olympus-blue']
   .map((needle) => commands.indexOf(needle));
@@ -89,8 +113,11 @@ assert.match(await readFile(join(fixture, '.olympus-slots.env'), 'utf8'), /OLYMP
 assert.doesNotMatch(commands + update.stdout + update.stderr, /fake-secret/);
 
 await writeFile(log, '');
+const verifyRollbackReader = await holdProxyConfig();
 const rollback = await run('sh', ['scripts/docker/rollback.sh', '--yes'], { cwd: fixture, env, stdio: ['ignore', 'pipe', 'pipe'] });
 assert.equal(rollback.code, 0, rollback.stderr);
+await test('rollback cannot truncate a configuration already opened by Nginx', verifyRollbackReader);
+assert.equal(await readFile(join(fixture, 'deploy/nginx/conf.d/active.conf'), 'utf8'), await readFile('deploy/nginx/active-blue.conf', 'utf8'));
 const rollbackCommands = await readFile(log, 'utf8');
 const rollbackBackup = rollbackCommands.indexOf(':/state -v');
 const rollbackStart = rollbackCommands.indexOf('up -d --no-deps olympus-blue');
@@ -99,7 +126,7 @@ assert.equal(await readFile(join(fixture, '.olympus-active-slot'), 'utf8'), 'blu
 
 const metadataBeforeFailure = await readFile(join(fixture, '.olympus-slots.env'), 'utf8');
 await writeFile(log, '');
-const failedUpdate = await run('sh', ['scripts/docker/update.sh', '--yes'], { cwd: fixture, env: { ...env, FAIL_PROXY: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const failedUpdate = await run('sh', ['scripts/docker/update.sh', '--yes', '--image', 'fixture:next'], { cwd: fixture, env: { ...env, FAIL_PROXY: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 assert.notEqual(failedUpdate.code, 0);
 assert.equal(await readFile(join(fixture, '.olympus-active-slot'), 'utf8'), 'blue\n');
 assert.equal(await readFile(join(fixture, '.olympus-slots.env'), 'utf8'), metadataBeforeFailure);
@@ -109,11 +136,38 @@ assert.match(recovery, /stop olympus-green/);
 assert.match(recovery, /maintenance\/cancel/);
 assert.match(recovery, /exec -T olympus-blue node -e/);
 
+// Docker can reject a stop, or lose the response after a start. Neither permits
+// resuming the old writer while the other slot may still use the shared volumes.
+for (const script of ['update.sh', 'rollback.sh']) {
+  for (const failure of ['proxy', 'start']) {
+    await test(`${script} keeps the old writer drained when stop fails after ${failure} failure`, async () => {
+      await writeFile(log, '');
+      const environmentBefore = await readFile(join(fixture, '.env'), 'utf8');
+      const result = await run('sh', [join('scripts/docker', script), '--yes', '--image', 'fixture:next'], {
+        cwd: fixture,
+        env: { ...env, FAIL_PROXY: failure === 'proxy' ? '1' : '0', FAIL_START: failure === 'start' ? '1' : '0', FAIL_STOP: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const calls = await readFile(log, 'utf8');
+      assert.notEqual(result.code, 0);
+      assert.match(calls, /up -d --no-deps olympus-green/);
+      assert.match(calls, /stop olympus-green/, 'even an uncertain start must attempt to stop the other writer');
+      assert.doesNotMatch(calls, /maintenance\/cancel/, 'old slot must remain drained when the other slot may still run');
+      assert.match(result.stderr, /CRITICAL.*olympus-green.*olympus-blue.*drained/i);
+      assert.equal(await readFile(join(fixture, '.env'), 'utf8'), environmentBefore);
+      assert.equal(await readFile(join(fixture, '.olympus-active-slot'), 'utf8'), 'blue\n');
+      assert.equal(await readFile(join(fixture, '.olympus-slots.env'), 'utf8'), metadataBeforeFailure);
+      await assert.rejects(readFile(join(fixture, '.olympus-operation.lock/pid')), { code: 'ENOENT' });
+    });
+  }
+}
+
 // macOS dry-runs are isolated and cannot touch the real HOME, launchd, or Hermes state.
 const fakeHome = await mkdtemp(join(tmpdir(), 'olympus-macos-home-'));
 const fakeHermesPython = join(fakeHome, '.hermes/hermes-agent/venv/bin/python');
 await mkdir(join(fakeHome, '.hermes/hermes-agent/venv/bin'), { recursive: true });
 await writeFile(fakeHermesPython, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+await writeFile(join(fakeHome, '.hermes/hermes-agent/run_agent.py'), '# fixture checkout\n');
 for (const script of ['install.sh', 'update.sh']) {
   const dry = await run('sh', [join(process.cwd(), 'scripts/macos', script), '--dry-run'], {
     cwd: process.cwd(), env: { ...process.env, HOME: fakeHome, OLYMPUS_INSTALL_ROOT: join(fakeHome, 'install') }, stdio: ['ignore', 'pipe', 'pipe'],

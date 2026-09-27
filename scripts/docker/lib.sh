@@ -8,6 +8,7 @@ METADATA_FILE=${METADATA_FILE:-.olympus-slots.env}
 ACTIVE_SLOT_FILE=${ACTIVE_SLOT_FILE:-.olympus-active-slot}
 OPERATION_LOCK_DIR=${OLYMPUS_OPERATION_LOCK_DIR:-.olympus-operation.lock}
 operation_lock_owned=0
+explicit_image=
 
 read_env_value() { awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' .env; }
 if [ -f .env ]; then
@@ -57,11 +58,18 @@ parse_common() {
       --dry-run) DRY_RUN=1 ;;
       --yes) YES=1 ;;
       --hermes-volume) shift; HERMES_DATA_VOLUME=${1:?missing volume} ;;
-      --image) shift; OLYMPUS_DISPATCH_IMAGE=${1:?missing image}; export OLYMPUS_DISPATCH_IMAGE ;;
+      --image) shift; explicit_image=${1:?missing image}; OLYMPUS_DISPATCH_IMAGE=$explicit_image; export OLYMPUS_DISPATCH_IMAGE ;;
       *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
     esac
     shift
   done
+  if [ -f .env ]; then
+    saved_hermes_volume=$(read_env_value HERMES_DATA_VOLUME)
+    if [ -n "$saved_hermes_volume" ] && [ "$saved_hermes_volume" != "${HERMES_DATA_VOLUME:-}" ]; then
+      printf 'Selected Hermes volume conflicts with HERMES_DATA_VOLUME in .env; use the saved volume or a separate installation directory.\n' >&2
+      exit 1
+    fi
+  fi
 }
 
 require_command() { command -v "$1" >/dev/null 2>&1 || { printf 'Required command not found: %s\n' "$1" >&2; exit 1; }; }
@@ -82,6 +90,16 @@ set_env_value() {
   fi
   chmod 600 "$tmp"
   mv "$tmp" "$file"
+}
+
+write_proxy_config() {
+  # The directory is bind-mounted: rename leaves already-open readers intact.
+  proxy_tmp=$(mktemp deploy/nginx/conf.d/active.conf.tmp.XXXXXX) || return 1
+  if cp "deploy/nginx/active-$1.conf" "$proxy_tmp" && mv -f "$proxy_tmp" deploy/nginx/conf.d/active.conf; then
+    return 0
+  fi
+  rm -f "$proxy_tmp"
+  return 1
 }
 
 maintenance_at() {

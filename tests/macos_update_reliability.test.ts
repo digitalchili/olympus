@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -64,6 +64,8 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   assert.equal(createDatabase.code, 0, createDatabase.stderr);
+  await chmod(database, 0o600);
+  await mkdir(backupDir, { mode: 0o755 });
 
   const socketPath = join(stateHome, 'update.sock');
   const socketServer = createServer();
@@ -72,7 +74,7 @@ try {
     socketServer.listen(socketPath, resolve);
   });
   try {
-    const backup = await run('sh', ['-c', '. ./scripts/macos/lib.sh; node="$NODE"; backup_native_release "$RELEASE_ROOT"'], {
+    const backup = await run('sh', ['-c', 'umask 022; . ./scripts/macos/lib.sh; node="$NODE"; backup_native_release "$RELEASE_ROOT"'], {
       cwd: projectRoot,
       env: {
         ...process.env,
@@ -99,6 +101,26 @@ try {
   assert.equal(archive.code, 0, archive.stderr);
   assert.match(archive.stdout, /keep\.txt/);
   assert.doesNotMatch(archive.stdout, /update\.sock/);
+  assert.equal((await stat(backupDir)).mode & 0o777, 0o700, 'backup directory must be private regardless of caller umask');
+  for (const name of await readdir(backupDir)) {
+    assert.equal((await stat(join(backupDir, name))).mode & 0o777, 0o600, `${name} must be private`);
+  }
+  for (const [stage, failure] of Object.entries({
+    archive: 'tar() { while [ "$#" -gt 0 ]; do if [ "$1" = -czf ]; then shift; printf partial > "$1"; return 23; fi; shift; done; return 23; }',
+    finalize: 'chmod() { case "$2" in *-state.tgz) return 23 ;; *) command chmod "$@" ;; esac; }',
+  })) {
+    const failedBackupDir = join(fixture, `failed-${stage}-backups`);
+    const failedArchive = await run('sh', ['-c', `umask 022; . ./scripts/macos/lib.sh; node="$NODE"\n${failure}\nbackup_native_release "$RELEASE_ROOT"`], {
+      cwd: projectRoot, env: { ...process.env, NODE: process.execPath, RELEASE_ROOT: projectRoot,
+        OLYMPUS_STATE_HOME: stateHome, OLYMPUS_BACKUP_DIR: failedBackupDir, DB_PATH: database,
+      }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.equal(failedArchive.code, 23, failedArchive.stderr);
+    const failedFiles = await readdir(failedBackupDir);
+    assert.ok(failedFiles.some(name => name.endsWith('.sqlite')), 'a verified SQLite copy remains available after archive failure');
+    assert.ok(failedFiles.every(name => !/\.integrity$|\.metadata$|-state\.tgz$/.test(name)), `${stage} failure must not leave success markers or partial archive`);
+    for (const name of failedFiles) assert.equal((await stat(join(failedBackupDir, name))).mode & 0o777, 0o600);
+  }
 
   const fakeBin = join(fixture, 'bin');
   const launchLog = join(fixture, 'launchctl.log');

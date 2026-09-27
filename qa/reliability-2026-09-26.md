@@ -1,6 +1,6 @@
 # Olympus production-hardening evidence — 2026-09-26
 
-This is the authorized R1–R4/G1–G3 continuation after authentication shipped in v0.7.19. The implementation is on local branch `codex/production-hardening`, based on `1dd01b22eb70cd923f82c9e2da9e48f9093f1ade`. It is saved as a local implementation checkpoint, not pushed, deployed or released. The original checkout and its installed Hermes state were not changed.
+This records the authorized R1–R4/G1–G3 continuation after authentication shipped in v0.7.19. The implementation checkpoint is `0f2194b` on `codex/production-hardening`, based on `1dd01b22eb70cd923f82c9e2da9e48f9093f1ade`. The user subsequently authorized publication as v0.7.20. See [the release acceptance record](release-0.7.20.md) for the later gates; this original report does not establish a live deployment.
 
 ## Delivered scope and focused evidence
 
@@ -72,14 +72,16 @@ The focused fixtures exercised actual failure/banner/model-picker components, th
 
 Authentication's complete device-flow UI evidence remains in [the v0.7.19 authentication report](../docs/testing/openai-authentication.md). Existing auth UI regressions run in the integrated suite; real account reauthorization remains user-driven live acceptance.
 
-## Pending Docker and operational acceptance
+## Docker and operational acceptance
 
-The local Docker daemon was unavailable at `/Users/michael/.orbstack/run/docker.sock`. No daemon or installed container was started. `INSTALL.md` and `tests/docker_e2e.sh` were inspected. No changed-image build or container-runtime acceptance is claimed. This branch is not yet image-release-ready.
+Update on 27 September: the user started OrbStack, and the released-image upgrade, recovery, rollback and restore gate passed with disposable state. Built-container worker/authentication and pending Git-publication restart checks also passed on the v0.7.20 candidate. See [the release acceptance record](release-0.7.20.md), [installer hardening report](installer-hardening-2026-09-27.md) and [worker report](docker-worker-acceptance-2026-09-27.md). Live acceptance remains separate.
 
-For a later selected test Docker host, use the E2E harness only with unique disposable images, volumes, project name and loopback port. It already covers install/update, zero-run drain, backup/restore, proxy promotion recovery and rollback. Additional hardening acceptance must verify copied worker assets, delayed model catalog responsiveness, restart with pending receipts and a fake provider/auth transport. Never reuse live `.env` files or live volumes for that harness.
+Historical limitation on 26 September: the local Docker daemon was unavailable at `/Users/michael/.orbstack/run/docker.sock`, so the original R/G checkpoint had no container-runtime acceptance. The later disposable acceptance above supersedes that limitation.
+
+The integrated E2E harness uses unique disposable images, volumes, project name and loopback port. It covers install/update, zero-run drain, backup/restore, proxy promotion recovery and rollback, copied worker/helper assets, delayed model catalog responsiveness, restart with pending receipts and a fake provider/auth transport. Never reuse live `.env` files or live volumes for that harness.
 
 For the actual installation, first obtain its exact URL/host, operator method and Hermes/Olympus volumes. The required sequence remains: report running image; installer update dry-run; review selected paths/volumes; explicit approval; verified backup and restore evidence; disposable candidate preflight; authenticated drain to zero; candidate readiness as the sole live writer; proxy switch; `/api/ready`; safe task reaching review. Preserve credential rotation when planning rollback. Use a separately authorized test repository for real GitHub permissions/branch protection. Olympus still requires a trusted/private or externally authenticated server boundary.
 
 ## Scope still separate
 
-Performance P1–P4 is not implemented here. R1 removes a catalog-reader bottleneck, but no before/after latency baseline or fair Hermes Desktop comparison was run. No claim that the reported live disconnects are solved is supported yet. No new task timeouts, automatic whole-turn replays, model fallback, version bump, tag, remote push or deployment was introduced.
+Performance P1–P4 is not implemented here. R1 removes a catalog-reader bottleneck, but no before/after latency baseline or fair Hermes Desktop comparison was run. No claim that the reported live disconnects are solved is supported yet. No new task timeouts, automatic whole-turn replays or model fallback were introduced. Release publication and live deployment are separate from these original implementation checks.

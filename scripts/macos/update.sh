@@ -13,6 +13,7 @@ while [ "$#" -gt 0 ]; do
 done
 . "$(dirname "$0")/lib.sh"
 select_node
+if [ -f "$plist" ]; then load_installed_hermes; else select_hermes; fi
 if [ -n "$requested_version" ]; then
   printf '%s' "$requested_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || {
     printf 'A semantic --version is required.\n' >&2
@@ -23,7 +24,7 @@ else
   version=$($node -p 'require(process.argv[1]).version' "$source_root/package.json")
 fi
 release="$releases/$version-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-if [ "$DRY_RUN" = 1 ]; then printf 'dry-run: fetch requested release %s; build and verify candidate in %s; drain activeRuns=0; verified backup; atomically switch current; restart/verify with rollback\n' "$version" "$release"; exit 0; fi
+if [ "$DRY_RUN" = 1 ]; then printf 'dry-run: Hermes source %s; profile home %s; Python %s; fetch requested release %s; build and verify candidate in %s; drain activeRuns=0; verified backup; atomically switch current; restart/verify with rollback\n' "$hermes" "$hermes_home" "$python" "$version" "$release"; exit 0; fi
 [ -L "$current" ] || { printf 'Current release link is missing; run install first.\n' >&2; exit 1; }
 previous_current=$(readlink "$current")
 previous_version=$($node -p 'require(process.argv[1]).version' "$previous_current/package.json")
@@ -42,9 +43,9 @@ candidate_version=$($node -p 'require(process.argv[1]).version' "$release/packag
 [ "$candidate_version" = "$version" ] || { printf 'Built candidate version %s does not match requested release %s.\n' "$candidate_version" "$version" >&2; exit 1; }
 cleanup_candidate; candidate_source=
 [ -f "$plist" ] || { printf 'LaunchAgent plist is missing: %s\n' "$plist" >&2; exit 1; }
-token=${OLYMPUS_MAINTENANCE_TOKEN:-$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:OLYMPUS_MAINTENANCE_TOKEN' "$plist")}
-PORT=${PORT:-$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:PORT' "$plist")}; export PORT
-[ -n "${OLYMPUS_STATE_HOME:-}" ] || state_home=$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:OLYMPUS_DISPATCH_HOME' "$plist")
+token=${OLYMPUS_MAINTENANCE_TOKEN:-$("$plistbuddy" -c 'Print :EnvironmentVariables:OLYMPUS_MAINTENANCE_TOKEN' "$plist")}
+PORT=${PORT:-$("$plistbuddy" -c 'Print :EnvironmentVariables:PORT' "$plist")}; export PORT
+[ -n "${OLYMPUS_STATE_HOME:-}" ] || state_home=$("$plistbuddy" -c 'Print :EnvironmentVariables:OLYMPUS_DISPATCH_HOME' "$plist")
 [ -n "$token" ] || { printf 'Maintenance token is unavailable.\n' >&2; exit 1; }
 plist_backup="$plist.before-update.$$"
 cp "$plist" "$plist_backup"; chmod 600 "$plist_backup"
@@ -74,6 +75,7 @@ atomic_link "$release"
 [ "$(readlink "$current")" = "$release" ] || { printf 'Current release symlink did not select the candidate.\n' >&2; exit 1; }
 [ "$($node -p 'require(process.argv[1]).version' "$current/package.json")" = "$version" ] || { printf 'Current release version does not match the requested update.\n' >&2; exit 1; }
 set_launch_agent_program_arguments "$current/dist/server/server/index.js"
+set_launch_agent_hermes_paths
 restart_launchd
 wait_ready_mac "$version"
 rm -f "$plist_backup"

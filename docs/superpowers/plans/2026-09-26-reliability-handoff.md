@@ -68,7 +68,7 @@ Not included: replacing Hermes, adding another provider, automatic whole-turn re
 
 ## Execution order and progress ledger
 
-The original package order remains below. Authentication shipped in v0.7.19. The subsequent production-hardening approval covers R1–R4/G1–G3 and their integrated checks; performance P1–P4 and live rollout remain separate:
+The original package order remains below. Authentication shipped in v0.7.19. The subsequent production-hardening approval covers R1–R4/G1–G3 and their integrated checks. On 27 September the user approved finishing container acceptance, publishing v0.7.20 and preparing the selected Dokploy pilot. Performance P1–P4 and actual live changes remain separate:
 
 | Order | Task | Dependencies | Status |
 |---|---|---|---|
@@ -86,7 +86,7 @@ The original package order remains below. Authentication shipped in v0.7.19. The
 | 12 | A2 — worker OAuth manager/helper | A1; auth-only reader/admission safety | Shipped in v0.7.19; native helper rerun for hardening; live acceptance pending |
 | 13 | A3 — routes/UI/task reconnect | A2; OpenAI-specific R2 mapping | Shipped in v0.7.19; task action regressions retained; live acceptance pending |
 | 14 | P4 — performance acceptance/comparison handoff | P1–P3, R1/R4; A1 revision recorded | Not started |
-| 15 | V1 — final integrated gates | Authorized R/G subset | Local suite/build/native/browser/review complete; Docker/live acceptance and P1–P4 pending |
+| 15 | V1 — final integrated gates | Authorized R/G subset | Local suite/build/native/browser/Docker/review complete; v0.7.20 publication authorized; live acceptance and P1–P4 pending |
 
 For a separately authorized whole-package continuation, if A1 is blocked by unavailable/incompatible native runtime, complete independent R/G/P tasks with fake providers; record the runtime used for performance fixtures. R2 can retain its typed error mapping using mocked native attributes, but do not claim real candidate compatibility. Do not substitute another model/provider or silently redesign OAuth. A2/A3 remain gated on a verified native contract. An unavailable Desktop benchmark does not block independently tested local changes.
 
@@ -100,11 +100,11 @@ For authentication, use `docs/testing/openai-authentication.md`. When the broade
 - [x] Use `node scripts/run-tests.mjs <test files>` for focused tests. It makes disposable state, DB, Hermes home and Project root before importing test modules. New Python tests must be added to its explicit list; `.test.ts` files are discovered automatically. Do not run production app startup just to inspect code.
 - [x] Run one focused baseline set (the continuation used the five-file set recorded in the integrated evidence): `node scripts/run-tests.mjs tests/runtime_liveness.test.ts tests/task_failure_persistence.test.ts tests/automatic_recovery.test.ts tests/reconnect_chat.test.ts tests/project_cp_safety.test.ts tests/project_empty_repository.test.ts tests/test_worker_usage.py tests/test_worker_providers.py`. Record failures as baseline evidence; do not repeatedly rerun a flaky full suite before beginning.
 
-## Task V1: Integrated verification and review handoff — R/G local gates complete
+## Task V1: Integrated verification and review handoff — R/G local and Docker gates complete
 
 **Files:** Create/update `qa/reliability-2026-09-26.md` and `qa/response-performance-2026-09-26.md`; update `docs/coding-harness.md`, `docs/project-task-workspaces.md`, and affected AGENTS contracts to match implemented behavior. Do not erase historical version notes; clearly label old behavior and the new contract.
 
-**Current evidence:** [Integrated R/G report and pending Docker checklist](../../../qa/reliability-2026-09-26.md). The unchecked Docker and P4 steps remain outstanding; browser completion below refers to R/G fixtures, with authentication UI evidence retained from v0.7.19.
+**Current evidence:** [Integrated R/G report](../../../qa/reliability-2026-09-26.md) and [v0.7.20 acceptance](../../../qa/release-0.7.20.md). Docker acceptance is complete. P4 and the selected installation's live pilot remain outstanding; browser completion below refers to R/G fixtures, with authentication UI evidence retained from v0.7.19.
 
 **Output:** A tested local branch with reproducible evidence, no unresolved high-impact correctness findings, and a separate pending live-acceptance checklist. No success claim for unexecuted native or deployment checks.
 
@@ -122,16 +122,16 @@ For authentication, use `docs/testing/openai-authentication.md`. When the broade
   Expect zero failures and successful exit for each. There is no general linter in this repo. Do not add one. Repeat a check only after relevant changes/failures. `npm run typecheck` emits server build output by existing design; generated artifacts should remain ignored.
 
 - [x] **Run native candidate contracts without the default skips.** Use the isolated candidate source path from A1 as `OLYMPUS_NATIVE_HERMES_SOURCE` for `tests/test_worker_recovery.py`, `tests/test_background_work_native.py`, and `tests/test_project_github_worker.py` through the isolated runner. Run `tests/test_worker_usage_native.py` and new `tests/test_worker_openai_auth_native.py` with that source as explicit argument under the candidate's test Python/dependencies. Use temporary profile/default stores and mocked HTTP. Also exercise `tests/hermes_021_native_interactions_test.py` with the selected native source on its import path and disposable state. Write exact runtime/path/commands to the evidence report; do not point at or alter the installed live Hermes directory.
-- [ ] **Validate candidate Docker packaging.** Build the changed image locally with temporary state/volumes only. Verify selected native source/image digest, new Python helper assets, ready/drain behavior, worker responsiveness during auth/model-list operations, and clean restart with pending publication receipts. Keep fake authentication/provider HTTP. Read the existing Docker E2E harness before invoking it: it contains disposable installers and must be confined to its unique test resources, never reused with live `.env` or volumes. If Docker is unavailable, mark this gate incomplete and do not label the image release-ready.
+- [x] **Validate candidate Docker packaging.** Build the changed image locally with temporary state/volumes only. Verify selected native source/image digest, new Python helper assets, ready/drain behavior, worker responsiveness during auth/model-list operations, and clean restart with pending publication receipts. Keep fake authentication/provider HTTP. Read the existing Docker E2E harness before invoking it: it contains disposable installers and must be confined to its unique test resources, never reused with live `.env` or volumes. If Docker is unavailable, mark this gate incomplete and do not label the image release-ready.
 - [x] **Complete browser acceptance using disposable fixtures.** OpenAI card: status/check/start/cancel/expiry/wait-for-idle/save/profile-switch/reload. Task: auth versus quota/model failure, preserved unsent draft, queued pause/removal/send, no unsolicited task POST. Streams: large bootstrap and lost terminal event recover correctly. Git: both interfaces, task-branch default, exact pending target, resume/abandon, successful push labels, baseline-only sync. Stop fixture servers afterward.
-- [x] **Inspect the final diff.** All product changes must map to a task in this package. No credential fixtures, local state, temporary scripts, native checkout changes, unrelated formatting, version bump or generated bundles are included. Add regression tests for a discovered interaction rather than weakening assertions.
+- [x] **Inspect the final diff.** All product changes must map to a task in this package. No real credentials, local state, temporary scripts, native checkout changes, unrelated formatting or generated bundles are included. Synthetic isolated fixtures and the subsequently authorized v0.7.20 version bump are included. Add regression tests for a discovered interaction rather than weakening assertions.
 - [ ] **Include P4 performance evidence.** Report Send-to-first-activity and Send-to-first-answer separately from verification completion, with before/after fixtures and exact revisions. Confirm diagnostics are opt-in and contain no sensitive content. Preserve source identity, selected model/reasoning and recovery safety. State explicitly whether a real Hermes Desktop comparison occurred; do not turn synthetic timing into a production speed claim.
 - [x] **Obtain one final independent review where available.** Focus on auth ownership/cancel-save races, worker generation safety, exact-ref Git recovery and credential transport. A stronger reviewer at this final gate is more economical than expensive broad reviews after every small task. If unavailable, record that limitation; do not invent independent review evidence. Fix actionable findings and rerun affected checks before finishing.
 - [x] **Report completion precisely.** List tasks done/blocked, source commits, selected Hermes tag/digest, tests and skipped gates, UI evidence, and remaining operational checks. State explicitly that code is local and whether any commit/push/deployment occurred. Do not say the server disconnects are solved until live acceptance supports that claim.
 
 ## Later live rollout checklist — a separate approved operation
 
-This is a plan for a later operator, not authorization to contact a host now.
+The user authorized preparing a pilot on the selected Dokploy installation. Identify its exact service and review the concrete dry-run before seeking approval for any live change.
 
 1. Michael identifies the exact Docker installation/host and existing Hermes/Olympus volumes. Read `INSTALL.md`; run its update dry-run on that selected installation and report the source/image/volumes/actions. Get the required explicit approval before non-dry-run changes.
 2. Record the actual running image/revision and sanitized failure categories around one affected task. Check whether profiles share default authorization. Do not print tokens, whole environment files, transcripts or raw auth dumps.

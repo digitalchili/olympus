@@ -14,7 +14,7 @@ jobs:
       - run: npm run lint:shell
       - run: npm run build
       - run: HERMES_DATA_VOLUME=ci-hermes docker compose config --quiet
-      - run: HERMES_DATA_VOLUME=ci-hermes docker compose -f docker-compose.ha.yml config --quiet
+      - run: HERMES_DATA_VOLUME=ci-hermes OLYMPUS_BLUE_IMAGE=olympus-dispatch:test OLYMPUS_GREEN_IMAGE=olympus-dispatch:test docker compose -f docker-compose.ha.yml config --quiet
       - run: docker build -t olympus-dispatch:test .
-      - name: Verify Docker backup, restore, update and rollback
+      - name: Verify released-image upgrade, backup, restore and rollback
         run: npm run test:docker-e2e

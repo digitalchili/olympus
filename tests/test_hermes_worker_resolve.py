@@ -9,6 +9,7 @@ instances (HTTP 401 "User not found").
 
 import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -37,6 +38,32 @@ MANAGED_CFG = {
 
 
 class ResolveModelProviderTest(unittest.TestCase):
+    def test_missing_explicit_source_never_falls_back_to_another_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            default = home / '.hermes' / 'hermes-agent'
+            default.mkdir(parents=True)
+            (default / 'run_agent.py').write_text('# Default fixture source')
+            selected = home / 'missing-selected-source'
+            with patch.dict(os.environ, {'HOME': str(home), 'HERMES_HOME': str(home / '.hermes'),
+                                         'HERMES_AGENT_DIR': str(selected)}), \
+                 patch.object(hermes_worker, '_resolve_agent_dir_from_hermes_cli') as cli:
+                with self.assertRaises(hermes_worker.WorkerError) as caught:
+                    hermes_worker._discover_agent_dir()
+                self.assertEqual(caught.exception.code, 'hermes_not_found')
+                self.assertNotIn(str(selected), str(caught.exception))
+                cli.assert_not_called()
+
+    def test_unset_source_keeps_default_local_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            default = home / '.hermes' / 'hermes-agent'
+            default.mkdir(parents=True)
+            (default / 'run_agent.py').write_text('# Default fixture source')
+            with patch.dict(os.environ, {'HOME': str(home), 'HERMES_HOME': str(home / '.hermes')}):
+                os.environ.pop('HERMES_AGENT_DIR', None)
+                self.assertEqual(hermes_worker._discover_agent_dir(), default.resolve())
+
     def test_olympus_uses_native_iteration_default_and_explicit_limits(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OLYMPUS_AGENT_MAX_ITERATIONS", None)

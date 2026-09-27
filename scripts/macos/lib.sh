@@ -41,6 +41,51 @@ select_node() {
   npm=$(command -v npm) || { printf 'npm is required.\n' >&2; return 1; }
 }
 
+validate_hermes_paths() {
+  [ -f "$hermes/run_agent.py" ] || { printf 'Hermes source not found at %s; check HERMES_AGENT_DIR.\n' "$hermes" >&2; return 1; }
+  [ -d "$hermes_home" ] || { printf 'Hermes profile home not found at %s; check HERMES_HOME.\n' "$hermes_home" >&2; return 1; }
+  [ -x "$python" ] || { printf 'Hermes Python environment not found at %s.\n' "$python" >&2; return 1; }
+  hermes=$(CDPATH= cd -- "$hermes" && pwd -P)
+  hermes_home=$(CDPATH= cd -- "$hermes_home" && pwd -P)
+}
+
+select_hermes() {
+  hermes=${HERMES_AGENT_DIR-$HOME/.hermes/hermes-agent}
+  hermes_home=${HERMES_HOME-$HOME/.hermes}
+  python="$hermes/venv/bin/python"; [ -x "$python" ] || python="$hermes/.venv/bin/python"
+  validate_hermes_paths
+  # Keep the venv executable path, rather than resolving its interpreter symlink.
+  case "$python" in */.venv/bin/python) python="$hermes/.venv/bin/python" ;; *) python="$hermes/venv/bin/python" ;; esac
+}
+
+load_installed_hermes() {
+  plistbuddy=${PLISTBUDDY:-/usr/libexec/PlistBuddy}
+  python=$("$plistbuddy" -c 'Print :EnvironmentVariables:HERMES_PYTHON' "$plist")
+  hermes=$("$plistbuddy" -c 'Print :EnvironmentVariables:HERMES_AGENT_DIR' "$plist" 2>/dev/null || true)
+  hermes_home=$("$plistbuddy" -c 'Print :EnvironmentVariables:HERMES_HOME' "$plist" 2>/dev/null || true)
+  if [ -z "$hermes" ]; then
+    # A custom home can select its own source even with the default Python.
+    # Only old standard source/home pairs can be inferred without guessing.
+    if [ -n "$hermes_home" ] && [ "$hermes_home" != "$HOME/.hermes" ]; then
+      printf 'Installed Hermes source is ambiguous. Set HERMES_AGENT_DIR and HERMES_HOME in the LaunchAgent before updating.\n' >&2
+      return 1
+    fi
+    case "$python" in
+      "$HOME/.hermes/hermes-agent/venv/bin/python"|"$HOME/.hermes/hermes-agent/.venv/bin/python") hermes="$HOME/.hermes/hermes-agent" ;;
+      *) printf 'Installed Hermes source is ambiguous. Set HERMES_AGENT_DIR and HERMES_HOME in the LaunchAgent before updating.\n' >&2; return 1 ;;
+    esac
+  fi
+  hermes_home=${hermes_home:-$HOME/.hermes}
+  validate_hermes_paths
+}
+
+set_launch_agent_hermes_paths() {
+  "$plistbuddy" -c "Set :EnvironmentVariables:HERMES_AGENT_DIR $hermes" "$plist" >/dev/null 2>&1 ||
+    "$plistbuddy" -c "Add :EnvironmentVariables:HERMES_AGENT_DIR string $hermes" "$plist"
+  "$plistbuddy" -c "Set :EnvironmentVariables:HERMES_HOME $hermes_home" "$plist" >/dev/null 2>&1 ||
+    "$plistbuddy" -c "Add :EnvironmentVariables:HERMES_HOME string $hermes_home" "$plist"
+}
+
 build_release() {
   release=$1
   build_source=${2:-$source_root}
@@ -158,13 +203,15 @@ wait_ready_mac() {
   return 1
 }
 
-backup_native_release() {
+backup_native_release() (
+  umask 077
   release_root=$1
   destination=${OLYMPUS_BACKUP_DIR:-$state_home/backups}
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
   database=${DB_PATH:-$state_home/data/olympus-dispatch.db}
   [ -f "$database" ] || { printf 'Olympus database not found: %s\n' "$database" >&2; return 1; }
   mkdir -p "$destination"
+  chmod 700 "$destination"
   absolute_destination=$(CDPATH= cd -- "$destination" && pwd)
   (cd "$release_root" && BACKUP_SOURCE="$database" BACKUP_DESTINATION="$absolute_destination/olympus-$stamp.sqlite" "$node" -e '
     const Database = require("better-sqlite3");
@@ -179,9 +226,12 @@ backup_native_release() {
       if (check !== "ok") throw new Error(`integrity_check: ${check}`);
     }).catch((error) => { console.error(error.message); process.exit(1); });
   ')
+  chmod 600 "$destination/olympus-$stamp.sqlite"
+  archive="$absolute_destination/olympus-$stamp-state.tgz"
+  trap 'status=$?; [ "$status" = 0 ] || rm -f "$archive" "$destination/olympus-$stamp.integrity" "$destination/olympus-$stamp.metadata"; exit "$status"' EXIT
+  (cd "$state_home" && tar --exclude='./backups' --exclude='./data/olympus-dispatch.db' --exclude='./data/olympus-dispatch.db-wal' --exclude='./data/olympus-dispatch.db-shm' --exclude='./update.sock' --exclude='*.sock' --exclude='./updater' -czf "$archive" .)
   printf 'ok\n' > "$destination/olympus-$stamp.integrity"
-  (cd "$state_home" && tar --exclude='./backups' --exclude='./data/olympus-dispatch.db' --exclude='./data/olympus-dispatch.db-wal' --exclude='./data/olympus-dispatch.db-shm' --exclude='./update.sock' --exclude='*.sock' --exclude='./updater' -czf "$absolute_destination/olympus-$stamp-state.tgz" .)
   printf 'timestamp=%s\nrelease=%s\n' "$stamp" "$release_root" > "$destination/olympus-$stamp.metadata"
-  chmod 600 "$destination/olympus-$stamp.metadata" "$destination/olympus-$stamp.integrity"
+  chmod 600 "$archive" "$destination/olympus-$stamp.metadata" "$destination/olympus-$stamp.integrity"
   printf 'Verified native backup created: %s/olympus-%s.sqlite\n' "$destination" "$stamp"
-}
+)

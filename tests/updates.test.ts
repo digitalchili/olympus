@@ -4,6 +4,7 @@ import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
+import type { UpdateStatus } from '../shared/types.js';
 import { createUpdatesRouter, isVersionNewer, parseGitHubRepositoryUrl } from '../server/routes/updates.js';
 
 assert.equal(isVersionNewer('1.2.11', '1.2.10'), true);
@@ -32,7 +33,7 @@ try {
   assert.ok(address && typeof address === 'object');
   const callRoute = (path: string, method = 'GET') => new Promise<{
     status: number;
-    body: { error?: string; updateAvailable?: boolean; updateConfigured?: boolean };
+    body: Partial<UpdateStatus>;
   }>((resolve, reject) => {
     const req = request({
       host: '127.0.0.1',
@@ -56,15 +57,94 @@ try {
   assert.equal(response.status, 503);
   assert.match(response.body.error ?? '', /installation-local update hook.*available/i);
 
-  process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET = `/tmp/missing-olympus-update-${process.pid}.sock`;
-  globalThis.fetch = async () => new Response(JSON.stringify({
+  const publishedRelease = {
     tag_name: 'v99.0.0',
     html_url: 'https://github.com/digitalchili/olympus/releases/tag/v99.0.0',
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    draft: false,
+    prerelease: false,
+    published_at: '2026-01-01T00:00:00Z',
+  };
+  const mockRelease = (body: unknown, status = 200) => {
+    const calls: string[] = [];
+    globalThis.fetch = async input => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/releases/latest')) return Response.json(body, { status });
+      if (url.includes('/tags?')) return Response.json([{ name: 'v100.0.0' }]);
+      if (url === 'http://127.0.0.1:9876/update') return Response.json({ accepted: true }, { status: 202 });
+      throw new Error(`Unexpected fixture request: ${url}`);
+    };
+    return calls;
+  };
+  process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET = `/tmp/missing-olympus-update-${process.pid}.sock`;
+  mockRelease(publishedRelease);
   const unavailableStatus = await callRoute('/api/updates?refresh=true');
   assert.equal(unavailableStatus.status, 200);
   assert.equal(unavailableStatus.body.updateAvailable, true);
   assert.equal(unavailableStatus.body.updateConfigured, false);
+  assert.equal(unavailableStatus.body.latestVersion, '99.0.0');
+
+  // A pushed tag may exist while the release/image workflow is still running.
+  const missingCalls = mockRelease({ message: 'Not Found' }, 404);
+  const missingRelease = await callRoute('/api/updates?refresh=true');
+  assert.equal(missingRelease.body.updateAvailable, false, 'bare tags cannot advertise an unfinished release');
+  assert.equal(missingRelease.body.latestVersion, null);
+  assert.equal(missingRelease.body.releaseUrl, null);
+  assert.match(missingRelease.body.error ?? '', /No GitHub release.*published/i);
+  assert.equal(missingCalls.length, 1, 'release discovery must not fall back to tags');
+
+  const olderReleaseUrl = 'https://github.com/digitalchili/olympus/releases/tag/v0.0.1';
+  const oldCalls = mockRelease({ ...publishedRelease, tag_name: 'v0.0.1', html_url: olderReleaseUrl });
+  const olderRelease = await callRoute('/api/updates?refresh=true');
+  assert.equal(olderRelease.body.updateAvailable, false, 'new tags cannot supersede the published stable release');
+  assert.equal(olderRelease.body.currentVersion, unavailableStatus.body.currentVersion);
+  assert.equal(olderRelease.body.latestVersion, '0.0.1', 'latest version and release notes refer to the same published release');
+  assert.equal(olderRelease.body.releaseUrl, olderReleaseUrl);
+  assert.equal(olderRelease.body.error, undefined);
+  assert.equal(oldCalls.length, 1);
+
+  for (const invalid of [
+    { ...publishedRelease, draft: true },
+    { ...publishedRelease, prerelease: true },
+    { ...publishedRelease, tag_name: 'v99.0.0-rc.1' },
+    { ...publishedRelease, tag_name: 'v099.0.0' },
+    { ...publishedRelease, tag_name: 'v99999999999999999999.0.0' },
+    { ...publishedRelease, tag_name: 'nightly' },
+    { ...publishedRelease, tag_name: 'v99.0' },
+    { ...publishedRelease, published_at: null },
+    { ...publishedRelease, published_at: 'not-a-date' },
+    { tag_name: 'v99.0.0' },
+    null,
+  ]) {
+    mockRelease(invalid);
+    const ignored = await callRoute('/api/updates?refresh=true');
+    assert.equal(ignored.body.updateAvailable, false, 'only a valid published stable release is installable');
+    assert.equal(ignored.body.latestVersion, null);
+    assert.equal(ignored.body.releaseUrl, null);
+    assert.ok(ignored.body.error);
+  }
+
+  mockRelease({ message: 'SECRET upstream detail' }, 503);
+  const failedRelease = await callRoute('/api/updates?refresh=true');
+  assert.equal(failedRelease.body.updateAvailable, false);
+  assert.equal(failedRelease.body.latestVersion, null);
+  assert.match(failedRelease.body.error ?? '', /release check failed \(503\)/);
+  assert.doesNotMatch(JSON.stringify(failedRelease.body), /SECRET/);
+
+  delete process.env.OLYMPUS_DISPATCH_UPDATE_SOCKET;
+  process.env.OLYMPUS_DISPATCH_UPDATE_URL = 'http://127.0.0.1:9876/update';
+  const applyCalls = mockRelease({ message: 'Not Found' }, 404);
+  const unreadyApply = await callRoute('/api/updates/apply', 'POST');
+  assert.equal(unreadyApply.status, 409);
+  assert.ok(applyCalls.every(url => url.endsWith('/releases/latest')), 'no update hook invocation for a bare tag');
+  delete process.env.OLYMPUS_DISPATCH_UPDATE_URL;
+
+  const cachedCalls = mockRelease(publishedRelease);
+  const refreshed = await callRoute('/api/updates?refresh=true');
+  const cached = await callRoute('/api/updates');
+  assert.equal(cached.body.latestVersion, '99.0.0');
+  assert.equal(cached.body.checkedAt, refreshed.body.checkedAt);
+  assert.equal(cachedCalls.length, 1, 'normal status reads reuse the release cache');
 
   // Relative Unix-socket addresses also work in deeply nested worktrees.
   const socketDirectory = await mkdtemp('.tmp-olympus-portable-update-status-');

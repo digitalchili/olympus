@@ -18,7 +18,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run lint:shell
-      - name: Verify Docker lifecycle before publishing
+      - name: Verify released-image upgrade and rollback before publishing
         run: npm run test:docker-e2e
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3

@@ -7,7 +7,7 @@ require_command docker
 require_command openssl
 require_command curl
 
-image=${OLYMPUS_DISPATCH_IMAGE:-ghcr.io/digitalchili/olympus:0.3.0}
+image=${OLYMPUS_DISPATCH_IMAGE:?Select a release with --image or OLYMPUS_DISPATCH_IMAGE}
 state_volume=${OLYMPUS_DISPATCH_STATE_VOLUME:-olympus-dispatch-state}
 [ ! -e "$ACTIVE_SLOT_FILE" ] && [ ! -e "$METADATA_FILE" ] || { printf 'Portable slot metadata already exists; use update or uninstall instead of reinstalling.\n' >&2; exit 1; }
 
@@ -28,8 +28,9 @@ if [ "$YES" != 1 ]; then
 fi
 
 if [ "$DRY_RUN" = 1 ]; then
+  printf 'dry-run: selected image %s; Hermes volume %s\n' "$image" "$HERMES_DATA_VOLUME"
   printf 'dry-run: create/check Olympus state volume %s\n' "$state_volume"
-  printf 'dry-run: authenticate to GHCR if required, pull and resolve an immutable image pin\n'
+  printf 'dry-run: pull the public image and resolve an immutable image pin\n'
   printf 'dry-run: create mode-600 environment and slot metadata; start proxy and blue slot\n'
   exit 0
 fi
@@ -52,11 +53,7 @@ trap recover_install EXIT INT TERM
 
 docker volume inspect "$state_volume" >/dev/null 2>&1 || docker volume create "$state_volume" >/dev/null
 if ! docker pull "$image" >/dev/null 2>&1; then
-  if ! docker image inspect "$image" >/dev/null 2>&1; then
-    require_command gh
-    gh auth token | docker login ghcr.io -u "$(gh api user --jq .login)" --password-stdin >/dev/null
-    docker pull "$image" >/dev/null
-  fi
+  docker image inspect "$image" >/dev/null 2>&1 || { printf 'Could not pull or find selected image: %s\n' "$image" >&2; exit 1; }
 fi
 pin=$(resolve_image_pin "$image")
 # A newly-created named volume is root-owned. Make only its mount root writable by
@@ -73,10 +70,11 @@ if [ ! -f .env ]; then
   chmod 600 .env
 fi
 [ -n "${OLYMPUS_MAINTENANCE_TOKEN:-}" ] || { printf 'Existing .env has no maintenance token.\n' >&2; exit 1; }
+set_env_value HERMES_DATA_VOLUME "$HERMES_DATA_VOLUME"
 OLYMPUS_BLUE_IMAGE=$pin OLYMPUS_GREEN_IMAGE=$pin write_slot_metadata "$pin" "$pin"
 printf 'blue\n' > "$ACTIVE_SLOT_FILE"
 mkdir -p deploy/nginx/conf.d
-cp deploy/nginx/active-blue.conf deploy/nginx/conf.d/active.conf
+write_proxy_config blue
 export HERMES_DATA_VOLUME OLYMPUS_DISPATCH_STATE_VOLUME=$state_volume
 compose --profile blue up -d proxy olympus-blue
 wait_ready "$(docker compose -f "$COMPOSE_FILE" ps -q olympus-blue)"
