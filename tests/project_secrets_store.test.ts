@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rename, chmod, stat, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const root = await mkdtemp(join(tmpdir(), 'olympus-secrets-store-'));
+process.env.DB_PATH = join(root, 'state/data/test.db');
+process.env.OLYMPUS_DISPATCH_HOME = join(root, 'state');
+process.env.HERMES_HOME = join(root, 'hermes');
+await mkdir(process.env.HERMES_HOME, { recursive: true });
+await writeFile(join(process.env.HERMES_HOME, 'config.yaml'), '{}\n');
+const { default: db } = await import('../server/db/index.js');
+const { createProject } = await import('../server/db/projects.js');
+const { listProjectSecrets, saveProjectSecrets, getProjectSecretValues, removeProjectSecret } = await import('../server/db/project-secrets.js');
+const keyPath = join(root, 'state/data/project-secrets.key');
+const one = createProject({ name: 'One', purpose: 'test', managerProfileId: 'default', changedBy: 'test' });
+const two = createProject({ name: 'Two', purpose: 'test', managerProfileId: 'default', changedBy: 'test' });
+const secret = 'synthetic-secret-value-only-for-tests';
+try {
+  saveProjectSecrets(one.id, [{ name: 'API_KEY', value: secret }]);
+  saveProjectSecrets(two.id, [{ name: 'API_KEY', value: 'different-test-value' }]);
+  assert.deepEqual(getProjectSecretValues(one.id, ['API_KEY']), { API_KEY: secret });
+  assert.deepEqual(getProjectSecretValues(two.id, ['API_KEY']), { API_KEY: 'different-test-value' });
+  const metadata = listProjectSecrets(one.id);
+  assert.deepEqual(Object.keys(metadata[0]).sort(), ['name', 'updatedAt']);
+  assert.equal(JSON.stringify(metadata).includes(secret), false);
+  const rows = db.prepare('SELECT * FROM project_secrets').all();
+  assert.equal(JSON.stringify(rows).includes(secret), false);
+  assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
+  assert.equal((await readFile(keyPath)).length, 32);
+  assert.throws(() => saveProjectSecrets(one.id, [{ name: 'NEW_KEY', value: 'valid-test' }, { name: 'BAD_KEY', value: '' }]), /value/i);
+  assert.equal(listProjectSecrets(one.id).length, 1, 'invalid batches do not partially save');
+  assert.throws(() => getProjectSecretValues(one.id, ['MISSING_KEY']), /not available/i);
+  assert.throws(() => getProjectSecretValues(one.id, ['API_KEY', 'API_KEY']), /once/i);
+
+  const encrypted = (db.prepare('SELECT encrypted_value FROM project_secrets WHERE project_id = ?').get(one.id) as any).encrypted_value;
+  db.prepare('UPDATE project_secrets SET encrypted_value = ? WHERE project_id = ?').run(encrypted, two.id);
+  assert.throws(() => getProjectSecretValues(two.id, ['API_KEY']), /unavailable/i, 'ciphertext is bound to project/name');
+  saveProjectSecrets(two.id, [{ name: 'API_KEY', value: 'different-test-value' }]);
+  await rename(keyPath, keyPath + '.original');
+  assert.throws(() => getProjectSecretValues(one.id, ['API_KEY']), /unavailable/i);
+  assert.throws(() => saveProjectSecrets(one.id, [{ name: 'API_KEY', value: 'replacement' }]), /unavailable/i, 'missing key never silently rotates');
+  await rename(keyPath + '.original', keyPath);
+  await chmod(keyPath, 0o644);
+  assert.throws(() => getProjectSecretValues(one.id, ['API_KEY']), /unavailable/i);
+  await chmod(keyPath, 0o600);
+  assert.equal(getProjectSecretValues(one.id, ['API_KEY']).API_KEY, secret);
+  removeProjectSecret(one.id, 'API_KEY');
+  assert.deepEqual(listProjectSecrets(one.id), []);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(two.id);
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM project_secrets').get() as any).count, 0);
+} finally { db.close(); await rm(root, { recursive: true, force: true }); }
+console.log('Encrypted project secret storage, key safety, isolation and cascade tests passed');

@@ -1,3 +1,4 @@
+import { isProjectSecretInput } from '@shared/project-secrets';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { validateInteractionResponse, type InteractionResponse, type TaskInteraction } from '@shared/interactions';
 import { fetchTaskInteractions, respondTaskInteraction } from '../lib/api';
@@ -24,7 +25,8 @@ export function TaskQuestionForm({ item, busy, onSubmit }: {
     }
   }
   const validation = validateInteractionResponse(item, { answers });
-  const ready = validation.ok && !emptyOther;
+  const containsSecrets = Object.values(answers).flat().some(isProjectSecretInput);
+  const ready = validation.ok && !emptyOther && !containsSecrets;
   const choose = (qid: string, value: string, multiple: boolean, checked: boolean) => {
     if (!multiple) setUseOther((previous) => ({ ...previous, [qid]: false }));
     setValues((previous) => {
@@ -64,6 +66,7 @@ export function TaskQuestionForm({ item, busy, onSubmit }: {
           )}
         </fieldset>
       ))}
+      {containsSecrets && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">Use Add secret in task chat or Project Settings to save credentials, then answer without the value. These answers have not been sent.</p>}
       <button type="submit" disabled={!ready || busy} className={primary}>Submit answers</button>
     </form>
   );

@@ -3,7 +3,7 @@ import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/p
 import { getTask } from '../db/queries.js';
 import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
 import { localProfileRegistry, type LocalProfileRegistry, type LocalProfileTarget } from '../local-profiles.js';
-import type { AgentAdapter, AgentRunOptions, ProjectGitHubRespondRequest, BotMessageRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
+import type { AgentAdapter, AgentRunOptions, ProjectRunRespondRequest, ProjectGitHubRespondRequest, BotMessageRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import { HermesWorkerAdapter } from './hermes-worker.js';
 import type { AdapterDelegationEvent, AgentDefaults, AgentModelsResponse } from '../../shared/types.js';
 import { acquireProfileWork } from '../profile-deletion.js';
@@ -213,6 +213,12 @@ export class ProfileAgentAdapter implements AgentAdapter {
     return await (await this.adapterForSession(sessionId)).steerChat(sessionId, message);
   }
 
+
+  async respondProjectRun(request: ProjectRunRespondRequest): Promise<void> {
+    const worker = await this.adapterForTaskId(request.taskId);
+    if (!worker.respondProjectRun) throw Object.assign(new Error('Project commands are unavailable'), { code: 'project_run_unavailable' });
+    await worker.respondProjectRun(request);
+  }
 
   async respondProjectGitHub(request: ProjectGitHubRespondRequest): Promise<void> {
     const worker = await this.adapterForTaskId(request.taskId);

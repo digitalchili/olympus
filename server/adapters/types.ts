@@ -53,9 +53,26 @@ export interface ProjectGitHubRespondRequest {
   result: Record<string, unknown>;
 }
 
+export interface ProjectRunRequest {
+  requestId: string;
+  workerRunId: string;
+  command: string;
+  secrets: string[];
+}
+
+export interface ProjectRunRespondRequest {
+  taskId: string;
+  requestId: string;
+  workerRunId: string;
+  result: { ok: false; error: string } | { ok: true; exitCode: number; output: string; truncated: boolean };
+}
+
 export interface AgentRunOptions {
+  /** Internal lifecycle signal; never included in the worker request. */
+  onStreamClosed?: () => void;
   timingTraceId?: string;
   projectGitHub?: boolean;
+  projectRun?: boolean;
   bot?: { profileId: string; peers: Array<{ id: string; label: string; description?: string }> };
   recoveryContinuation?: boolean;
   systemMessage?: string;
@@ -68,9 +85,10 @@ export interface AgentRunOptions {
 }
 
 export interface StreamEvent {
-  type: 'project_github_requested' | 'bot_message_requested' | 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
+  type: 'project_run_requested' | 'project_github_requested' | 'bot_message_requested' | 'checkpoint' | 'text_delta' | 'thinking_delta' | 'tool_progress' | 'model_resolution' | 'interaction_requested' | 'interaction_settled' | 'done' | 'error';
   botMessage?: BotMessageRequest;
   projectGitHub?: ProjectGitHubRequest;
+  projectRun?: ProjectRunRequest;
   checkpoint?: unknown;
   content?: string;
   error?: string;
@@ -118,6 +136,8 @@ export interface AgentAdapter {
   stopBackgroundWork?(sessionId: string, processIds: string[]): Promise<TaskBackgroundWork>;
 
   steerChat(sessionId: string, message: string): Promise<boolean>;
+
+  respondProjectRun?(request: ProjectRunRespondRequest): Promise<void>;
 
   respondProjectGitHub?(request: ProjectGitHubRespondRequest): Promise<void>;
 

@@ -257,6 +257,15 @@ CREATE TABLE IF NOT EXISTS project_deletion_cleanup (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS project_secrets (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  encrypted_value TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_updated
   ON projects(updated_at DESC);
 

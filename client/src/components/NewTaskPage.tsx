@@ -1,3 +1,5 @@
+import { isProjectSecretInput } from '@shared/project-secrets';
+import { useProjectSecretEntry } from '../hooks/useProjectSecretEntry';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { ArrowUp, FolderKanban, Loader2, UserRound } from 'lucide-react';
@@ -58,6 +60,12 @@ export function NewTaskPage() {
   const uploadBucketRef = useRef<string | null>(null);
   if (uploadBucketRef.current === null) uploadBucketRef.current = `draft-${createUuid()}`;
   const uploadBucketId = uploadBucketRef.current;
+  const secretEntry = useProjectSecretEntry({ projectId: selectedProjectId || null, profileId: activeProfileId });
+  const interceptSecretInput = useCallback((text: string) => {
+    if (!secretEntry.intercept(text)) return false;
+    setInput(''); setActiveMention(null);
+    return true;
+  }, [secretEntry.intercept]);
   const {
     pendingFiles,
     dragOver,
@@ -73,7 +81,7 @@ export function NewTaskPage() {
     clearFiles,
     dragHandlers,
     handlePaste,
-  } = useFileAttachments(uploadBucketId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
+  } = useFileAttachments(uploadBucketId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef, onSecretInput: interceptSecretInput });
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -132,6 +140,7 @@ export function NewTaskPage() {
 
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
+    if (interceptSecretInput(text)) return;
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasFiles) || isCreating || configPending || uploadBlocksSend || projectSelectionPending) return;
     if (runMode === 'goal' && selectedProfiles.length > 0) {
@@ -161,7 +170,7 @@ export function NewTaskPage() {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [configPending, handlerProfileId, uploadBlocksSend, input, isCreating, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
+  }, [configPending, interceptSecretInput, handlerProfileId, uploadBlocksSend, input, isCreating, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -247,6 +256,8 @@ export function NewTaskPage() {
             onSelect={selectMentionProfile}
             onRemove={(profileId) => setSelectedProfiles((current) => removeProfileInvite(current, profileId))}
           />
+          {secretEntry.notice}
+          {secretEntry.dialog}
           <textarea
             ref={inputRef}
             value={input}
@@ -271,6 +282,7 @@ export function NewTaskPage() {
           <div className="flex items-end justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               <AttachButton onFiles={addFiles} disabled={isCreating} />
+              <button type="button" onClick={secretEntry.open} disabled={isCreating} className="shrink-0 text-xs text-zinc-500 hover:underline">Add secret</button>
               <label className="inline-flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                 <FolderKanban size={14} className="shrink-0" />
                 <span className="shrink-0">Project</span>
@@ -331,7 +343,7 @@ export function NewTaskPage() {
             </div>
             <button
               onClick={handleSubmit}
-              disabled={(!input.trim() && pendingFiles.length === 0) || isCreating || configPending || uploadBlocksSend || projectSelectionPending}
+              disabled={isCreating || (!isProjectSecretInput(input) && ((!input.trim() && pendingFiles.length === 0) || configPending || uploadBlocksSend || projectSelectionPending))}
               title={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               aria-label={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-colors hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"

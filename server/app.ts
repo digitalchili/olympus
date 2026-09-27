@@ -2,8 +2,8 @@ import { taskRunSnapshot } from './task-run-snapshot.js';
 import { createCodingVerificationRouter } from './routes/coding-verification.js';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
-import { tasksRouter } from './routes/tasks.js';
-import { chatRouter } from './routes/chat.js';
+import { tasksRouter, taskSecretInputGuard } from './routes/tasks.js';
+import { chatRouter, projectSecretChatInputGuard } from './routes/chat.js';
 import { createAgentRouter, createTaskAgentSettingsRouter } from './routes/agent.js';
 import { createScheduledTasksRouter } from './routes/scheduled-tasks.js';
 import { skillsRouter } from './routes/skills.js';
@@ -21,6 +21,7 @@ import { createStudioRouter } from './routes/studio.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createProjectTaskWorkspaceRouter } from './routes/project-task-workspace.js';
 import { createProjectGitHubAccessRouter } from './routes/project-github-access.js';
+import { createProjectSecretsRouter } from './routes/project-secrets.js';
 import { createProjectGitHubService } from './project-github.js';
 import { localProfileRegistry } from './local-profiles.js';
 import { createInteractionRouter } from './routes/interactions.js';
@@ -144,6 +145,7 @@ const projectGitHub = createProjectGitHubService({
   workspaceForTask: task => localProfileRegistry.require(task.profile_name ?? 'default').workspaceDir,
 });
 const projectCp = createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts') });
+app.use('/api/tasks', taskSecretInputGuard, projectSecretChatInputGuard);
 app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));
@@ -159,6 +161,7 @@ app.use('/api/installation', createInstallationRouter());
 app.use('/api/storage', createStorageRouter(() => drainController.status().ready));
 app.use('/api/updates', createUpdatesRouter());
 app.use('/api/projects', createProjectGitHubAccessRouter(studioGitHubGateway));
+app.use('/api/projects', createProjectSecretsRouter());
 app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp, adapter }));
 app.use('/api/studio', createStudioRouter({
   github: studioGitHubGateway,
@@ -171,6 +174,10 @@ app.use('/api/scheduled-tasks', createScheduledTasksRouter(adapter));
 app.use('/api/skills', skillsRouter);
 
 app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (!res.headersSent && error && typeof error === 'object' && (error as { type?: string }).type === 'entity.parse.failed') {
+    res.set('Cache-Control', 'no-store').status(400).json({ error: 'Invalid JSON request body', code: 'INVALID_JSON' });
+    return;
+  }
   if (!res.headersSent && error && typeof error === 'object' && (error as { type?: string }).type === 'entity.too.large') {
     res.status(413).json({ error: 'Request body is too large', code: 'PAYLOAD_TOO_LARGE' });
     return;

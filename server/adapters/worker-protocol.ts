@@ -16,7 +16,7 @@ import type {
 } from '../../shared/types.js';
 import type { InteractionResponse, NativeInteraction } from '../../shared/interactions.js';
 import type { ProviderUsageResponse } from '../../shared/provider-usage.js';
-import type { AgentRunOptions, ProjectGitHubRequest, ProjectGitHubRespondRequest, BotMessageRequest, BotMessageRespondRequest, AgentRunSettings, ScheduledTaskDrainStatus, TaskBackgroundWork } from './types.js';
+import type { AgentRunOptions, ProjectRunRequest, ProjectRunRespondRequest, ProjectGitHubRequest, ProjectGitHubRespondRequest, BotMessageRequest, BotMessageRespondRequest, AgentRunSettings, ScheduledTaskDrainStatus, TaskBackgroundWork } from './types.js';
 
 export type WorkerRequest =
   | ({ id: string; type: 'auth.openai' } & OpenAIAuthWorkerRequest)
@@ -48,6 +48,7 @@ export type WorkerRequest =
   | { id: string; type: 'goal.evaluate'; sessionId: string; responseText: string }
   | { id: string; type: 'chat.interrupt'; taskId?: string; sessionId?: string; reason?: string }
   | { id: string; type: 'chat.steer'; taskId?: string; sessionId?: string; message: string }
+  | ({ id: string; type: 'project.run.respond' } & ProjectRunRespondRequest)
   | ({ id: string; type: 'project.github.respond' } & ProjectGitHubRespondRequest)
   | ({ id: string; type: 'bot.message.respond' } & BotMessageRespondRequest)
   | { id: string; type: 'interaction.respond'; taskId: string; interactionId: string; workerRunId: string; response: InteractionResponse }
@@ -57,6 +58,7 @@ export type WorkerRequest =
       timingTraceId?: string;
       bot?: AgentRunOptions['bot'];
       projectGitHub?: boolean;
+      projectRun?: boolean;
       recoveryContinuation?: boolean;
       sessionId: string;
       message: string;
@@ -118,6 +120,7 @@ export type WorkerResult =
     };
 
 export type WorkerEvent =
+  | { id: string; type: 'project_run_requested'; projectRun: ProjectRunRequest }
   | { id: string; type: 'project_github_requested'; projectGitHub: ProjectGitHubRequest }
   | { id: string; type: 'bot_message_requested'; botMessage: BotMessageRequest }
   | { id: string; type: 'checkpoint'; checkpoint: unknown }

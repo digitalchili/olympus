@@ -1,3 +1,4 @@
+import { isProjectSecretInput } from '../../shared/project-secrets.js';
 import { Router } from 'express';
 import { getRunStatus } from '../live-chat.js';
 import { getTask } from '../db/queries.js';
@@ -46,6 +47,10 @@ export function createInteractionRouter(adapter: AgentAdapter): Router {
     const validation = validateInteractionResponse(interaction, body.response);
     if (!validation.ok) {
       return res.status(400).json({ error: validation.error, code: 'INVALID_INTERACTION_RESPONSE' });
+    }
+
+    if ('answers' in validation.response && Object.values(validation.response.answers).flat().some(isProjectSecretInput)) {
+      return res.status(400).json({ error: 'Use Add secret in Olympus task chat or Project Settings to save credentials. This question is still waiting for an answer.', code: 'PROJECT_SECRET_INPUT_REQUIRED' });
     }
 
     const active = getRunStatus(task.id);

@@ -23,6 +23,7 @@ const pythonTests = [
   'hermes_worker_interactions_test.py',
   'test_bot_messaging.py',
   'test_project_github_worker.py',
+  'test_project_run_worker.py',
 ];
 const selected = process.argv.slice(2);
 const tests = selected.length ? selected : [

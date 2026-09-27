@@ -1,3 +1,5 @@
+import { isProjectSecretInput } from '@shared/project-secrets';
+import { useProjectSecretEntry } from '../hooks/useProjectSecretEntry';
 import { pauseTaskRecovery } from '../lib/api';
 import { CodingEvidencePanel } from './CodingEvidencePanel';
 import { BackgroundWorkNotice } from './BackgroundWorkNotice';
@@ -335,6 +337,12 @@ export function TaskChat({
     setActiveMention(null);
     inputRef.current?.focus();
   }, []);
+  const secretEntry = useProjectSecretEntry({ projectId, taskId, profileId: activeProfileId, disabled: isBot });
+  const interceptSecretInput = useCallback((text: string) => {
+    if (!secretEntry.intercept(text)) return false;
+    setInput(''); setActiveMention(null);
+    return true;
+  }, [secretEntry.intercept, setInput]);
   const {
     pendingFiles,
     dragOver,
@@ -351,7 +359,7 @@ export function TaskChat({
     submitWithAttachments,
     dragHandlers,
     handlePaste,
-  } = useFileAttachments(taskId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
+  } = useFileAttachments(taskId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef, onSecretInput: interceptSecretInput });
   const startupRef = useRef({ taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds });
   if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) {
     startupRef.current = { taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds };
@@ -492,7 +500,7 @@ export function TaskChat({
           const invitedProfileIds = isBot ? [] : startupRef.current.initialInvitedProfileIds ?? [];
           startupRef.current.initialMessage = undefined;
           startupRef.current.initialInvitedProfileIds = undefined;
-          if (loadedMessages.length === 0) {
+          if (loadedMessages.length === 0 && !interceptSecretInput(firstMessage)) {
             pendingRevealRef.current = true;
             setOutgoingRevealActive(true);
             void sendMessage(taskId, firstMessage, isBot ? { ...startupRef.current.initialSettings, mode: 'task' } : startupRef.current.initialSettings, { invitedProfileIds }).then(result => {
@@ -734,6 +742,7 @@ export function TaskChat({
 
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
+    if (interceptSecretInput(text)) return;
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasFiles) || configPending || uploadBlocksSend) return;
     if (queuedMessage) return;
@@ -808,7 +817,7 @@ export function TaskChat({
         setConfirmPersistentCollaboration(confirmationAtSend);
       }
     }
-  }, [activeProfileId, isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
+  }, [activeProfileId, interceptSecretInput, isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;
@@ -970,7 +979,7 @@ export function TaskChat({
       }
     : {
         onClick: handleSubmit,
-        disabled: (!input.trim() && pendingFiles.length === 0) || configPending || queuedMessage !== null || uploadBlocksSend,
+        disabled: !isProjectSecretInput(input) && ((!input.trim() && pendingFiles.length === 0) || configPending || queuedMessage !== null || uploadBlocksSend),
         label: sendBlockedLabel ?? 'Send message',
         icon: hasUploadingFiles ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} />,
       };
@@ -1270,6 +1279,8 @@ export function TaskChat({
               )}
             </div>
           )}
+          {secretEntry.notice}
+          {secretEntry.dialog}
           <textarea
             ref={inputRef}
             value={input}
@@ -1312,6 +1323,7 @@ export function TaskChat({
           <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
             <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
               <AttachButton onFiles={addFiles} disabled={configPending} />
+              {!isBot && <button type="button" onClick={secretEntry.open} className="shrink-0 text-xs text-zinc-500 hover:underline">Add secret</button>}
               <InputToolbar
                 modelPickerRequest={modelPickerRequest}
                 model={model}

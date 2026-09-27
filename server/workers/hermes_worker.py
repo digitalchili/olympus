@@ -35,6 +35,7 @@ from hermes_worker_utils import (
     string_or_none,
     truncate_with_ellipsis,
 )
+from hermes_project_run import ProjectRunBroker, ProjectRunError, configure_project_run_agent
 from hermes_project_github import ProjectGitHubBroker, ProjectGitHubError, configure_project_github_agent
 from hermes_bot_messaging import BotMessageBroker, BotMessageError, configure_bot_agent, install_native_guard
 from hermes_recovery import ContinuationJournal, RecoveryBlocked, saved_turn_matches
@@ -197,6 +198,7 @@ def _strip_internal_deadline_steers(value: str | None) -> str | None:
 
 INTERACTIONS = InteractionBroker(lambda event: _send(event))
 BOT_MESSAGES = BotMessageBroker(lambda event: _send(event))
+PROJECT_RUN = ProjectRunBroker(lambda event: _send(event))
 PROJECT_GITHUB = ProjectGitHubBroker(lambda event: _send(event))
 
 
@@ -935,6 +937,9 @@ def _try_interrupt_agent(agent: Any, reason: str) -> bool:
     if agent is not None and hasattr(agent, "interrupt"):
         setattr(agent, "_olympus_interrupt_reason", reason)
         agent.interrupt(reason)
+        secret_run = getattr(agent, "_olympus_project_run", None)
+        if secret_run is not None:
+            PROJECT_RUN.cancel_run(secret_run.worker_run_id)
         project_run = getattr(agent, "_olympus_project_github_run", None)
         if project_run is not None:
             PROJECT_GITHUB.cancel_run(project_run.worker_run_id)
@@ -1049,6 +1054,7 @@ def _interrupt_active_chat(request: dict[str, Any]) -> dict[str, bool]:
         INTERACTIONS.cancel_run(active_run_id)
         BOT_MESSAGES.cancel_run(active_run_id)
         PROJECT_GITHUB.cancel_run(active_run_id)
+        PROJECT_RUN.cancel_run(active_run_id)
     return {"interrupted": _try_interrupt_agent(agent, reason)}
 
 
@@ -2164,6 +2170,11 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
             configure_project_github_agent(agent, PROJECT_GITHUB, task_id, request_id, session_id)
         except ProjectGitHubError as exc:
             raise WorkerError(str(exc), code=exc.code) from exc
+    if request.get("projectRun") is True:
+        try:
+            configure_project_run_agent(agent, PROJECT_RUN, task_id, request_id, session_id)
+        except ProjectRunError as exc:
+            raise WorkerError(str(exc), code=exc.code) from exc
     requested_resolution.update(
         _requested_model_resolution(
             agent,
@@ -2376,6 +2387,9 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
             )
             if request.get("projectGitHub") is True:
                 PROJECT_GITHUB.continue_session(agent, request_id, session_id)
+            project_run = getattr(agent, "_olympus_project_run", None)
+            if project_run is not None and not project_run.closed and project_run.worker_run_id == request_id:
+                PROJECT_RUN.continue_session(agent, request_id, session_id)
             history = load_agent_history(session_db, session_id)
     except (RecoveryBlocked, ImportError, AttributeError) as exc:
         journal.block("Native child recovery is unavailable or incompatible; explicit continuation is required.")
@@ -2444,6 +2458,7 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
         INTERACTIONS.cancel_run(request_id)
         BOT_MESSAGES.cancel_run(request_id)
         PROJECT_GITHUB.cancel_run(request_id)
+        PROJECT_RUN.cancel_run(request_id)
         if acquired:
             AGENT_SEMAPHORE.release()
         _clear_task_active(task_key, request_id)
@@ -2854,6 +2869,11 @@ def _handle_request(request: dict[str, Any]) -> None:
                 request_id, request, name_prefix="goal", handler=handler,
                 task_key=_task_key_for(request),
             )
+        elif request_type == "project.run.respond":
+            try:
+                _result(request_id, PROJECT_RUN.respond(request))
+            except ProjectRunError as exc:
+                raise WorkerError(str(exc), code=exc.code) from exc
         elif request_type == "project.github.respond":
             try:
                 _result(request_id, PROJECT_GITHUB.respond(request))

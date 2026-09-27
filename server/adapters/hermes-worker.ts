@@ -21,7 +21,7 @@ import type {
   SessionMetadata,
   TaskMessage,
 } from '../../shared/types.js';
-import type { AgentAdapter, AgentRunOptions, AgentRunSettings, ProjectGitHubRespondRequest, BotMessageRespondRequest, InteractionRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
+import type { AgentAdapter, AgentRunOptions, AgentRunSettings, ProjectRunRespondRequest, ProjectGitHubRespondRequest, BotMessageRespondRequest, InteractionRespondRequest, ScheduledTaskDrainStatus, StreamEvent, TaskBackgroundWork } from './types.js';
 import type { WorkerEvent, WorkerRequest, WorkerResult, WorkerErrorPayload } from './worker-protocol.js';
 import { expandHomePrefix, resolveHermesHome, resolveOlympusWorkspaceDir } from '../paths.js';
 import { operationalLog, redactOperationalReason } from '../observability.js';
@@ -53,6 +53,7 @@ export function buildChatWorkerRequest(
     taskId: options?.task?.id,
     taskTitle: options?.task?.title ?? null,
     workdir: options?.task?.workdir ?? null,
+    ...(options?.projectRun === true ? { projectRun: true } : {}),
     ...(options?.projectGitHub === true ? { projectGitHub: true } : {}),
     ...(options?.bot ? { bot: options.bot } : {}),
     ...(options?.recoveryContinuation ? { recoveryContinuation: true } : {}),
@@ -365,17 +366,23 @@ export class HermesWorkerClient {
     return await this.sendRequest<T>(request, timeoutMs);
   }
 
-  async *stream(request: Omit<Extract<WorkerRequest, { type: 'chat' }>, 'id'>): AsyncIterable<WorkerEvent> {
+  async *stream(request: Omit<Extract<WorkerRequest, { type: 'chat' }>, 'id'>, onClosed?: () => void): AsyncIterable<WorkerEvent> {
     await this.start();
     const id = randomUUID();
     const queue = createAsyncQueue<WorkerEvent>();
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try { onClosed?.(); } catch { /* An observer cannot change transport settlement. */ }
+    };
 
     try {
       this.pending.set(id, {
         kind: 'stream',
         push: queue.push,
-        end: queue.end,
-        fail: queue.fail,
+        end: () => { close(); queue.end(); },
+        fail: error => { close(); queue.fail(error); },
       });
 
       this.write({ ...request, id });
@@ -385,6 +392,7 @@ export class HermesWorkerClient {
         yield event;
       }
     } finally {
+      close();
       this.pending.delete(id);
     }
   }
@@ -596,8 +604,11 @@ export class HermesWorkerAdapter implements AgentAdapter {
     message: string,
     options?: AgentRunOptions,
   ): AsyncIterable<StreamEvent> {
-    for await (const event of this.client.stream(buildChatWorkerRequest(sessionId, message, options))) {
+    for await (const event of this.client.stream(buildChatWorkerRequest(sessionId, message, options), options?.onStreamClosed)) {
       switch (event.type) {
+        case 'project_run_requested':
+          yield { type: 'project_run_requested', projectRun: event.projectRun };
+          break;
         case 'project_github_requested':
           yield { type: 'project_github_requested', projectGitHub: event.projectGitHub };
           break;
@@ -680,6 +691,10 @@ export class HermesWorkerAdapter implements AgentAdapter {
     return result.steered;
   }
 
+
+  async respondProjectRun(request: ProjectRunRespondRequest): Promise<void> {
+    await this.client.request<{ accepted: true }>({ type: 'project.run.respond', ...request }, WORKER_INTERRUPT_TIMEOUT_MS);
+  }
 
   async respondProjectGitHub(request: ProjectGitHubRespondRequest): Promise<void> {
     await this.client.request<{ accepted: true }>({ type: 'project.github.respond', ...request }, WORKER_INTERRUPT_TIMEOUT_MS);

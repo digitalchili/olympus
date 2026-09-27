@@ -128,6 +128,57 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(calls, ['task-1', 'compacted-session'])
         self.assertEqual(len(self.completed), 1)
 
+    def test_project_secrets_with_terminal_disabled_do_not_break_native_continuation(self):
+        from hermes_project_run import ProjectRunBroker
+        broker = ProjectRunBroker(lambda _event: self.fail('Disabled terminal dispatched a Project command'))
+        sessions = []
+        def turn(agent, kwargs):
+            sessions.append(kwargs['task_id'])
+            self.assertFalse(hasattr(agent, '_olympus_project_run'))
+            if len(sessions) == 1:
+                agent.session_id = 'compacted-without-terminal'
+        with patch.object(worker, 'PROJECT_RUN', broker), \
+                patch.object(broker, 'continue_session', wraps=broker.continue_session) as continuation:
+            self.run_chat(projectRun=True, on_turn=turn)
+            continuation.assert_not_called()
+        self.assertEqual(sessions, ['task-1', 'compacted-without-terminal'])
+        self.assertEqual(len(self.completed), 1, 'Saved child result is acknowledged normally')
+
+    def test_project_run_active_binding_survives_rotated_native_continuation(self):
+        import json
+        from hermes_project_run import ProjectRunBroker
+        from unittest.mock import Mock
+        registry = types.ModuleType('tools.registry')
+        registry.registry = types.SimpleNamespace(register=Mock())
+        mcp = types.ModuleType('tools.mcp_tool_agent')
+        mcp._reinject_post_build_tools = lambda *args: set()
+        def send(event):
+            broker.respond({'taskId': 'task-1', **event['projectRun'],
+                'result': {'ok': True, 'exitCode': 0, 'output': 'safe', 'truncated': False}})
+        broker = ProjectRunBroker(send)
+        sessions = []
+        def turn(agent, kwargs):
+            sessions.append(kwargs['task_id'])
+            self.assertTrue(json.loads(broker.dispatch({'command': 'true', 'secrets': ['TEST_KEY']}, task_id=kwargs['task_id']))['ok'])
+            if len(sessions) == 1:
+                agent.session_id = 'compacted-project-run'
+            else:
+                self.assertFalse(json.loads(broker.dispatch({'command': 'true', 'secrets': ['TEST_KEY']}, task_id='task-1'))['ok'])
+        configure = worker.configure_project_run_agent
+        def configure_agent(agent, *args):
+            agent.tools, agent.valid_tool_names = [], {'terminal'}
+            configure(agent, *args)
+        try:
+            with patch.object(worker, 'PROJECT_RUN', broker), \
+                    patch.object(worker, 'configure_project_run_agent', configure_agent), \
+                    patch('hermes_project_run._approve_command', return_value=True), \
+                    patch.dict(sys.modules, {'tools.registry': registry, 'tools.mcp_tool_agent': mcp}):
+                self.run_chat(projectRun=True, on_turn=turn)
+        finally:
+            broker.cancel_run('request-1')
+        self.assertEqual(sessions, ['task-1', 'compacted-project-run'])
+        self.assertEqual(len(self.completed), 1)
+
     def test_claim_busy_never_replays_user_request(self):
         self.native.claim_event_delivery = lambda *_: None
         with self.assertRaises(worker.WorkerError):

@@ -1,3 +1,4 @@
+import type { ProjectSecretEntry, ProjectSecretMetadata } from '@shared/project-secrets';
 import type {
   AgentDefaults,
   AgentModelsResponse,
@@ -376,6 +377,23 @@ export function updateProject(projectId: string, input: { name?: string; purpose
 
 export function deleteProject(projectId: string) {
   return request<void>(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' }, false);
+}
+
+export function fetchProjectSecrets(projectId: string) {
+  return request<{ secrets: ProjectSecretMetadata[] }>(`/projects/${encodeURIComponent(projectId)}/secrets`, undefined, false);
+}
+
+export function saveProjectSecrets(projectId: string, entries: ProjectSecretEntry[], taskId?: string) {
+  return request<{ secrets: ProjectSecretMetadata[]; savedNames: string[] }>(`/projects/${encodeURIComponent(projectId)}/secrets`, {
+    method: 'PUT', headers: { 'X-Olympus-Secret-Entry': '1' },
+    body: JSON.stringify({ entries, ...(taskId ? { taskId } : {}) }),
+  }, false);
+}
+
+export function deleteProjectSecret(projectId: string, name: string) {
+  return request<void>(`/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`, {
+    method: 'DELETE', headers: { 'X-Olympus-Secret-Entry': '1' },
+  }, false);
 }
 
 export interface ProjectGitHubAccess {
