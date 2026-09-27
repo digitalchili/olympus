@@ -1,28 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
-import type { CodingEvidence } from '@shared/coding-evidence';
 import { codingFailureDetails } from '@shared/coding-failure';
-import { fetchCodingEvidence, fetchTaskRecovery, pauseTaskRecovery, interruptTask, runCodingVerification, type TaskRecoveryStatus } from '../lib/api';
+import { pauseTaskRecovery, interruptTask, runCodingVerification } from '../lib/api';
+import { useCodingEvidencePolling } from '../hooks/useCodingEvidencePolling';
 
 export function CodingEvidencePanel({ taskId, isStreaming, collapsed = false, onViewAgentReply }: { taskId: string; isStreaming: boolean; collapsed?: boolean; onViewAgentReply?: () => void }) {
-  const [evidence, setEvidence] = useState<CodingEvidence | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
-  const [recovery, setRecovery] = useState<TaskRecoveryStatus | null>(null);
-  const repairQueued = recovery?.kind === 'verification' && ['pending', 'waiting', 'dispatching'].includes(recovery.state);
-  const refresh = useCallback(async () => {
-    await Promise.all([
-      fetchCodingEvidence(taskId).then(checks => setEvidence(checks.evidence)),
-      fetchTaskRecovery(taskId).then(result => setRecovery(result.recovery)),
-    ]);
-  }, [taskId]);
-  useEffect(() => {
-    let active = true;
-    const load = () => { if (active) void refresh().catch(() => {}); };
-    load(); const timer = setInterval(load, isStreaming || busy || repairQueued || evidence?.status === 'running' ? 1000 : 10_000);
-    return () => { active = false; clearInterval(timer); };
-  }, [refresh, isStreaming, busy, repairQueued, evidence?.status]);
+  const { evidence, recovery, repairQueued, refresh, isCurrent } = useCodingEvidencePolling(taskId, isStreaming, busy);
+  useEffect(() => { setBusy(false); setStopping(false); setError(''); }, [isCurrent]);
   const visibleEvidence = evidence && !(evidence.status === 'pending' && isStreaming) ? evidence : null;
   if (!visibleEvidence) return null;
   const running = busy || evidence?.status === 'running';
@@ -83,14 +70,14 @@ export function CodingEvidencePanel({ taskId, isStreaming, collapsed = false, on
           : 'The checks failed. Run checks again to retry; a failed result will return to the agent for repair.'}</p>}
       {!running && evidence.status === 'failed' && !repairQueued && onViewAgentReply && <button type="button" className="mt-2 block underline" onClick={onViewAgentReply}>Read the agent’s explanation</button>}
       <button disabled={busy || isStreaming || repairQueued || evidence.status === 'running'} className="mt-3 rounded bg-zinc-900 px-3 py-2 text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900" onClick={() => {
-        setBusy(true); setError(''); void runCodingVerification(taskId).then(result => { setEvidence(result.evidence); return refresh(); }).catch(e => setError(String(e))).finally(() => setBusy(false));
+        setBusy(true); setError(''); void runCodingVerification(taskId).then(refresh).catch(e => { if (isCurrent()) setError(String(e)); }).finally(() => { if (isCurrent()) setBusy(false); });
       }}>{running ? 'Running checks…' : evidence.checks.length ? 'Run checks again' : 'Run checks'}</button>
       {repairQueued && <button disabled={stopping} className="ml-3 underline disabled:opacity-40" onClick={() => {
-        setStopping(true); setError(''); void pauseTaskRecovery(taskId).then(refresh).catch(e => setError(String(e))).finally(() => setStopping(false));
+        setStopping(true); setError(''); void pauseTaskRecovery(taskId).then(refresh).catch(e => { if (isCurrent()) setError(String(e)); }).finally(() => { if (isCurrent()) setStopping(false); });
       }}>{stopping ? 'Pausing…' : 'Pause automatic repair'}</button>}
       {running && <button disabled={stopping} className="ml-3 py-1 underline disabled:opacity-40" onClick={() => {
         setStopping(true); setError('');
-        void interruptTask(taskId, 'Verification stopped by user').then(refresh).catch(e => setError(String(e))).finally(() => setStopping(false));
+        void interruptTask(taskId, 'Verification stopped by user').then(refresh).catch(e => { if (isCurrent()) setError(String(e)); }).finally(() => { if (isCurrent()) setStopping(false); });
       }}>{stopping ? 'Stopping…' : 'Stop checks'}</button>}
       </details>
 

@@ -1,4 +1,5 @@
 import { safeProviderErrorMessage } from '../../shared/run-errors.js';
+import { logWorkerDispatch } from '../performance-timing.js';
 import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -55,6 +56,7 @@ export function buildChatWorkerRequest(
     ...(options?.projectGitHub === true ? { projectGitHub: true } : {}),
     ...(options?.bot ? { bot: options.bot } : {}),
     ...(options?.recoveryContinuation ? { recoveryContinuation: true } : {}),
+    ...(options?.timingTraceId ? { timingTraceId: options.timingTraceId } : {}),
   };
 }
 
@@ -377,6 +379,7 @@ export class HermesWorkerClient {
       });
 
       this.write({ ...request, id });
+      logWorkerDispatch(request.timingTraceId, id);
 
       for await (const event of queue) {
         yield event;

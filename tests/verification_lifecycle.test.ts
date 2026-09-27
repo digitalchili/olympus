@@ -429,7 +429,9 @@ exec ${quote(realGit)} "$@"
     const originalBudget = process.env.OLYMPUS_CHAT_MAX_RUN_MS;
     process.env.OLYMPUS_CHAT_MAX_RUN_MS = '2000';
     adapter.getBackgroundWork = idle;
+    let modelRequests = 0;
     adapter.chatStream = async function* (sessionId) {
+      modelRequests++;
       process.env.PATH = `${bin}:${originalPath}`;
       yield { type: 'done', sessionId };
     };
@@ -441,6 +443,7 @@ exec ${quote(realGit)} "$@"
       await new Promise(resolve => setTimeout(resolve, 2100));
       assert.equal(getLatestTaskAgentRun(task.id)?.status, 'streaming', 'legacy runtime cap must not stop the snapshot');
       assert.equal(snapshotAlive(), true);
+      assert.equal(modelRequests, phase === 'baseline' ? 0 : 1, 'The agent cannot start before the baseline settles');
       await post(task.id, {}, 'interrupt');
       await wait(() => getLatestTaskAgentRun(task.id)?.status !== 'streaming');
       assert.equal(getLatestTaskAgentRun(task.id)?.status, 'stopped');
@@ -449,6 +452,7 @@ exec ${quote(realGit)} "$@"
       await wait(() => !snapshotAlive());
       assert.equal(activeAtSettlement, false, 'a settled run cannot leave its verification behind');
       assert.equal(existsSync(marker), false, 'explicit Stop cancels the pending Git snapshot');
+      assert.equal(modelRequests, phase === 'baseline' ? 0 : 1, 'Stopping baseline capture must send no model request');
     } finally {
       if (snapshotAlive()) process.kill(Number(readFileSync(snapshotStarted, 'utf8')), 'SIGKILL');
       process.env.PATH = originalPath;

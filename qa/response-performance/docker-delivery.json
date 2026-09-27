@@ -1,0 +1,62 @@
+[
+  {
+    "base": "http://127.0.0.1:4191",
+    "sample": 0,
+    "firstActivityMs": 816.660542,
+    "firstAnswerMs": 1615.769209,
+    "doneMs": 2417.275334,
+    "exactDeltas": true,
+    "terminalRecovered": true,
+    "starts": 1
+  },
+  {
+    "base": "http://127.0.0.1:4191",
+    "sample": 1,
+    "firstActivityMs": 804.821375,
+    "firstAnswerMs": 1604.9199999999996,
+    "doneMs": 2407.9946669999995,
+    "exactDeltas": true,
+    "terminalRecovered": true,
+    "starts": 1
+  },
+  {
+    "base": "http://127.0.0.1:4191",
+    "sample": 2,
+    "firstActivityMs": 805.4662500000004,
+    "firstAnswerMs": 1606.6374999999998,
+    "doneMs": 2410.7684580000005,
+    "exactDeltas": true,
+    "terminalRecovered": true,
+    "starts": 1
+  },
+  {
+    "base": "http://127.0.0.1:4192",
+    "sample": 0,
+    "firstActivityMs": 816.9954580000003,
+    "firstAnswerMs": 1616.4870419999997,
+    "doneMs": 2418.383125000001,
+    "exactDeltas": true,
+    "terminalRecovered": true,
+    "starts": 1
+  },
+  {
+    "base": "http://127.0.0.1:4192",
+    "sample": 1,
+    "firstActivityMs": 813.9933330000003,
+    "firstAnswerMs": 1613.1302910000013,
+    "doneMs": 2421.346208000001,
+    "exactDeltas": true,
+    "terminalRecovered": true,
+    "starts": 1
+  },
+  {
+    "base": "http://127.0.0.1:4192",
+    "sample": 2,
+    "firstActivityMs": 821.4982089999994,
+    "firstAnswerMs": 1622.3259589999998,
+    "doneMs": 2427.3295419999995,
+    "exactDeltas": true,
+    "terminalRecovered": true,
+    "starts": 1
+  }
+]

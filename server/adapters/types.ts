@@ -54,6 +54,7 @@ export interface ProjectGitHubRespondRequest {
 }
 
 export interface AgentRunOptions {
+  timingTraceId?: string;
   projectGitHub?: boolean;
   bot?: { profileId: string; peers: Array<{ id: string; label: string; description?: string }> };
   recoveryContinuation?: boolean;

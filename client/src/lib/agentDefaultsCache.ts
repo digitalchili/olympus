@@ -26,10 +26,10 @@ function isAgentDefaults(value: unknown): value is AgentDefaults {
   );
 }
 
-export function readCachedAgentDefaults(): AgentDefaults | null {
+export function readCachedAgentDefaults(profileId = 'default'): AgentDefaults | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(AGENT_DEFAULTS_CACHE_KEY);
+    const raw = window.localStorage.getItem(`${AGENT_DEFAULTS_CACHE_KEY}:${profileId}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return isAgentDefaults(parsed) ? parsed : null;
@@ -38,10 +38,10 @@ export function readCachedAgentDefaults(): AgentDefaults | null {
   }
 }
 
-export function writeCachedAgentDefaults(defaults: AgentDefaults): void {
+export function writeCachedAgentDefaults(defaults: AgentDefaults, profileId = 'default'): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(AGENT_DEFAULTS_CACHE_KEY, JSON.stringify(defaults));
+    window.localStorage.setItem(`${AGENT_DEFAULTS_CACHE_KEY}:${profileId}`, JSON.stringify(defaults));
   } catch {
     // Defaults cache only improves first paint; failed writes should not block the app.
   }

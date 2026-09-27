@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { performanceSpan } from '../performance-timing.js';
 import type { ProjectCpService } from '../project-cp.js';
 import { ProjectRepositoryBusyError, ProjectRepositoryMergeConflictError, ProjectRepositoryCheckpointError, ProjectPublicationError } from '../project-cp.js';
 import { getQueuedTaskMessage, consumeQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
@@ -40,7 +41,8 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
   router.post('/:id/messages', requireTask, async (req, res, next) => {
     const task = res.locals.task as Task;
     if (!task.project_id) return next();
-    const repositoryLink = getProjectRepositoryLink(task.project_id);
+    const projectId = task.project_id;
+    const repositoryLink = getProjectRepositoryLink(projectId);
     if (!repositoryLink || repositoryLink.mode !== 'branch_pr') return next();
 
     const content = req.body?.content;
@@ -76,13 +78,13 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
 
     res.locals.preparingProjectTask = true;
     try {
-      await options.projectCp.prepareTask({
-        projectId: task.project_id,
+      await performanceSpan(res.locals.performanceTrace, 'workspace', () => options.projectCp.prepareTask({
+        projectId,
         taskId: task.id,
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
         repositoryLink,
         tokenProvider: tokenProvider(options.github),
-      });
+      }));
     } catch (error) {
       restoreConsumedQueue();
       if (error instanceof ProjectPublicationError) {

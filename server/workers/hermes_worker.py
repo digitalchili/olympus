@@ -24,6 +24,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 from typing import Any, Callable
+from hermes_performance import PerformanceTrace
 
 # Alias so submodules importing `hermes_worker` see this module even when run as `__main__`.
 sys.modules.setdefault("hermes_worker", sys.modules[__name__])
@@ -1657,12 +1658,15 @@ def _create_agent(
     reasoning_effort: str | None,
     requested_provider: str | None = None,
     callbacks: dict[str, Any] | None = None,
+    performance_trace: PerformanceTrace | None = None,
 ) -> Any:
     _ensure_imports()
     install_native_guard()
     _install_delegate_child_reasoning_compat()
     cfg = _load_config()
     _register_mcp_servers(cfg)
+    if performance_trace:
+        performance_trace.mark('mcp_ready')
     defaults = _defaults_from_config(cfg)
     resolved_reasoning_effort = reasoning_effort or defaults.get("reasoningEffort")
     resolved_model, resolved_provider, resolved_base_url = _resolve_model_provider(
@@ -1684,6 +1688,9 @@ def _create_agent(
     except Exception as exc:
         err = _error_payload(exc)
         raise WorkerError(err['message'], code=err.get("code", "worker_error"), hint=err.get("hint")) from exc
+
+    if performance_trace:
+        performance_trace.mark('runtime_ready')
 
     if not resolved_provider:
         resolved_provider = string_or_none(runtime.get("provider"))
@@ -1747,6 +1754,8 @@ def _create_agent(
     }
 
     agent = _AIAgent(**filtered_kwargs)
+    if performance_trace:
+        performance_trace.mark('agent_ready')
     # Olympus supplies its own opted-in Bot roster and owns every delivery run.
     agent._bot_mode_protocol = False
     return agent
@@ -1943,7 +1952,7 @@ def _goal_evaluate(request: dict[str, Any]) -> dict[str, Any]:
     return _project_goal_decision(decision, mgr.state)
 
 
-def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
+def _run_chat(request_id: str, request: dict[str, Any], performance_trace: PerformanceTrace | None = None) -> list[dict[str, Any]]:
     settings = request.get("settings") if isinstance(request.get("settings"), dict) else {}
     requested_model = string_or_none(settings.get("model"))
     requested_provider = string_or_none(settings.get("provider"))
@@ -1972,6 +1981,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         journal.resume()
     history = load_agent_history(session_db, session_id)
+    if performance_trace:
+        performance_trace.mark('history_ready')
     system_message = request.get("systemMessage")
     if not isinstance(system_message, str):
         system_message = None
@@ -1996,6 +2007,9 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         if text is None:
             return
         chunk = str(text)
+        if chunk and performance_trace:
+            performance_trace.mark('first_activity')
+            performance_trace.mark('first_text')
         state["text"] += chunk
         _send({"id": request_id, "type": "text_delta", "content": chunk})
 
@@ -2005,6 +2019,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         chunk = str(text)
         if not chunk:
             return
+        if performance_trace:
+            performance_trace.mark('first_activity')
         state["thinking"] += chunk
         _send({"id": request_id, "type": "thinking_delta", "content": chunk})
 
@@ -2031,6 +2047,8 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         emit_model_resolution()
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
+        if performance_trace:
+            performance_trace.mark('first_activity')
         nonlocal active_delegation_id, pending_background_delegations
         event_type = None
         name = None
@@ -2112,18 +2130,24 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
                         pending_background_delegations.add(dispatched_id)
                 active_delegation_id = None
 
+    def timed_interaction(callback, *args, **kwargs):
+        if performance_trace:
+            performance_trace.mark('first_activity')
+        return callback(*args, **kwargs)
+
     agent = _create_agent(
         session_id=session_id,
         requested_model=requested_model,
         requested_provider=requested_provider,
         reasoning_effort=requested_effort,
+        performance_trace=performance_trace,
         callbacks={
             "stream_delta_callback": on_text_delta,
             "reasoning_callback": on_reasoning_delta,
             "tool_progress_callback": on_tool_progress,
             "status_callback": on_status,
             "clarify_callback": partial(
-                INTERACTIONS.clarify, task_id, request_id,
+                timed_interaction, INTERACTIONS.clarify, task_id, request_id,
                 deadline_monotonic=interaction_deadline,
                 interrupt=lambda reason: _try_interrupt_agent(agent_ref["agent"], reason) if agent_ref.get("agent") else None,
             ),
@@ -2217,13 +2241,15 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
             text_before = len(state["text"])
             thinking_before = len(state["thinking"])
             approval_callback = partial(
-                INTERACTIONS.approve, task_id, request_id,
+                timed_interaction, INTERACTIONS.approve, task_id, request_id,
                 deadline_monotonic=interaction_deadline,
                 interrupt=lambda reason: _try_interrupt_agent(agent, reason),
             )
             completed_turn = False
             journal.set_turn_state("running")
             with native_approval_context(approval_callback, session_id):
+                if performance_trace:
+                    performance_trace.mark('native_started')
                 result = agent.run_conversation(
                     user_message=next_message,
                     system_message=system_message,
@@ -2402,13 +2428,16 @@ def _run_chat(request_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) -> None:
+    performance_trace = PerformanceTrace(request.get('timingTraceId'))
+    performance_trace.mark('dispatched')
     terminal_events = []
     failure = None
     acquired = False
     try:
         AGENT_SEMAPHORE.acquire()
         acquired = True
-        terminal_events = _run_chat(request_id, request) or []
+        performance_trace.mark('slot_acquired')
+        terminal_events = _run_chat(request_id, request, performance_trace=performance_trace) or []
     except Exception as exc:
         failure = exc
     finally:
@@ -2418,6 +2447,8 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
         if acquired:
             AGENT_SEMAPHORE.release()
         _clear_task_active(task_key, request_id)
+        performance_trace.mark('cleaned_up')
+        performance_trace.finish('error' if failure else 'stopped' if any(event.get('interrupted') for event in terminal_events) else 'done')
     # A terminal event can trigger an immediate evaluator or follow-up. All
     # old-run writes and cleanup must finish before the client observes it.
     if failure is not None:

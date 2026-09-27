@@ -356,13 +356,14 @@ export function TaskChat({
   if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) {
     startupRef.current = { taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds };
   }
-  const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig(
+  const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading, isLoadingModels, settingsError, retrySettings } = useAgentConfig(
     taskId,
     startupRef.current.initialSettings,
+    activeProfileId,
   );
   const waitingForTaskSettings = isLoading && !startupRef.current.initialSettings;
   const toolbarDefaults = waitingForTaskSettings ? null : defaults;
-  const configPending = waitingForTaskSettings || (!defaults && isLoading);
+  const configPending = Boolean(settingsError) || waitingForTaskSettings || (!defaults && isLoading);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const latestUserMessageRef = useRef<HTMLDivElement>(null);
   const didInitialScrollRef = useRef(false);
@@ -1178,6 +1179,9 @@ export function TaskChat({
       </div>
 
       <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800 sm:px-6 sm:py-4">
+        {settingsError && <div role="alert" className="mx-auto mb-2 max-w-[760px] text-sm text-amber-700 dark:text-amber-300">
+          {settingsError} <button type="button" className="underline" onClick={retrySettings}>Retry settings</button>
+        </div>}
         {isGoalStreaming && <GoalRunStatus goal={taskRun?.goal} />}
         {connectionState === 'reconnecting' && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">Reconnecting. Run status will refresh when the connection returns.</div>}
         {connectionState === 'connected' && historyRefreshError && <div role="status" className="mx-auto mb-2 max-w-[760px] text-xs text-amber-600">{historyRefreshError}</div>}
@@ -1273,7 +1277,6 @@ export function TaskChat({
             onClick={(e) => updateInput(input, e.currentTarget.selectionStart)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            disabled={configPending}
             placeholder={isBot ? 'Message this bot… Type @ to mention another bot' : runMode === 'goal' ? GOAL_MODE_PLACEHOLDER : 'Message your assistant… Type @ to invite profiles'}
             rows={2}
             className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-relaxed text-zinc-900 placeholder-zinc-400 focus:outline-none disabled:opacity-60 dark:text-zinc-100 dark:placeholder-zinc-500 sm:px-5 sm:text-sm"
@@ -1317,6 +1320,7 @@ export function TaskChat({
                 runMode={isBot ? undefined : runMode}
                 defaults={toolbarDefaults}
                 modelGroups={modelGroups}
+                isLoadingModels={isLoadingModels}
                 disabled={goalToggleDisabled}
                 compactMobile
                 onModelChange={(nextModel, nextProvider) => {

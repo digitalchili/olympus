@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, stat, utimes, chmod } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -21,8 +22,29 @@ try {
  assert.equal(await verifyCodingRun(task, 'run'), true);
  let evidence = await readCodingEvidence(task);
  assert.equal(evidence?.status, 'passed'); assert.equal(evidence?.checks[0]?.exitCode, 0); assert.match(evidence?.checks[0]?.output ?? '', /checked/);
- await writeFile(join(cwd, 'source.txt'), 'after more edits');
- evidence = await readCodingEvidence(task); assert.equal(evidence?.status, 'stale', 'same HEAD does not mean same source');
+ // Hold an older scan before hashing, then change same-length bytes and restore
+ // mtime. A later freshness request must scan independently, not reuse that read.
+ const bin = join(root, 'git-bin'); await mkdir(bin);
+ const entered = join(root, 'scan-entered'); const released = join(root, 'scan-released');
+ const realGit = (await promisify(execFile)('which', ['git'])).stdout.trim();
+ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+ const waitScript = `require('fs').writeFileSync(${JSON.stringify(entered)},'ready');const timer=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(released)})){clearInterval(timer)}},5);`;
+ await writeFile(join(bin, 'git'), `#!/bin/sh\nif [ "$1" = ls-files ] && mkdir ${quote(join(root, 'first-scan'))} 2>/dev/null; then\n${quote(process.execPath)} -e ${quote(waitScript)}\nfi\nexec ${quote(realGit)} "$@"\n`);
+ await chmod(join(bin, 'git'), 0o755);
+ const originalPath = process.env.PATH; let older: ReturnType<typeof readCodingEvidence> | undefined;
+ try {
+  process.env.PATH = `${bin}:${originalPath}`;
+  older = readCodingEvidence(task);
+  for (let i = 0; i < 500 && !existsSync(entered); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(existsSync(entered), true, 'Older scan reached its deterministic latch');
+  const metadata = await stat(join(cwd, 'source.txt'));
+  await writeFile(join(cwd, 'source.txt'), 'other');
+  await utimes(join(cwd, 'source.txt'), metadata.atime, metadata.mtime);
+  evidence = await readCodingEvidence(task);
+  assert.equal(evidence?.status, 'stale', 'A newer scan independently detects same-HEAD/length/mtime edits');
+ } finally {
+  await writeFile(released, 'continue'); await older; process.env.PATH = originalPath;
+ }
  assert.equal(codingReviewAllowed(task.id, 'run'), false, 'a detected stale result must not remain passed in the review gate');
  await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'process.exit(1)']] }));
  assert.equal(await verifyCodingRun(task, 'run'), false);

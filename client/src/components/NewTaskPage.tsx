@@ -52,7 +52,8 @@ export function NewTaskPage() {
   const [selectedProfiles, setSelectedProfiles] = useState<HermesProfile[]>([]);
   const [activeMention, setActiveMention] = useState<ActiveProfileMention | null>(null);
   const [highlightedProfileIndex, setHighlightedProfileIndex] = useState(0);
-  const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading } = useAgentConfig();
+  const { defaults, modelGroups, model, setModel, provider, setProvider, reasoningEffort, setReasoningEffort, isLoading, isLoadingModels, settingsError, retrySettings } = useAgentConfig(undefined, undefined, handlerProfileId);
+  const configPending = isLoading || Boolean(settingsError);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const uploadBucketRef = useRef<string | null>(null);
   if (uploadBucketRef.current === null) uploadBucketRef.current = `draft-${createUuid()}`;
@@ -132,7 +133,7 @@ export function NewTaskPage() {
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
     const hasFiles = pendingFiles.length > 0;
-    if ((!text && !hasFiles) || isCreating || (!defaults && isLoading) || uploadBlocksSend || projectSelectionPending) return;
+    if ((!text && !hasFiles) || isCreating || configPending || uploadBlocksSend || projectSelectionPending) return;
     if (runMode === 'goal' && selectedProfiles.length > 0) {
       setUploadError('Remove invited profiles before starting Goal mode. Collaboration runs in Task mode.');
       return;
@@ -160,7 +161,7 @@ export function NewTaskPage() {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [defaults, handlerProfileId, uploadBlocksSend, input, isCreating, isLoading, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
+  }, [configPending, handlerProfileId, uploadBlocksSend, input, isCreating, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -234,6 +235,9 @@ export function NewTaskPage() {
       </h1>
 
       <div className="w-full max-w-4xl">
+        {settingsError && <div role="alert" className="mb-2 text-sm text-amber-700 dark:text-amber-300">
+          {settingsError} <button type="button" className="underline" onClick={retrySettings}>Retry settings</button>
+        </div>}
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 shadow-sm">
           <ProfileInviteControls
             selected={selectedProfiles}
@@ -308,6 +312,7 @@ export function NewTaskPage() {
                 runMode={runMode}
                 defaults={defaults}
                 modelGroups={modelGroups}
+                isLoadingModels={isLoadingModels}
                 disabled={isCreating}
                 compactMobile
                 onModelChange={(nextModel, nextProvider) => {
@@ -326,7 +331,7 @@ export function NewTaskPage() {
             </div>
             <button
               onClick={handleSubmit}
-              disabled={(!input.trim() && pendingFiles.length === 0) || isCreating || (!defaults && isLoading) || uploadBlocksSend || projectSelectionPending}
+              disabled={(!input.trim() && pendingFiles.length === 0) || isCreating || configPending || uploadBlocksSend || projectSelectionPending}
               title={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               aria-label={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-colors hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"

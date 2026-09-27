@@ -753,8 +753,8 @@ export function deleteHermesProfile(profileId: string, confirmation: string) {
   });
 }
 
-export function fetchAgentDefaults() {
-  return request<AgentDefaults>('/agent/defaults');
+export function fetchAgentDefaults(profileId?: string) {
+  return request<AgentDefaults>(apiPathWithProfile('/agent/defaults', profileId));
 }
 
 export function fetchProviderUsage(profileId: string, refresh = false) {
@@ -773,8 +773,8 @@ export function updateAgentDefaults(updates: { provider?: string | null; model?:
   });
 }
 
-export function fetchTaskAgentSettings(taskId: string) {
-  return request<TaskAgentSettings>(`/tasks/${taskId}/agent-settings`);
+export function fetchTaskAgentSettings(taskId: string, profileId?: string) {
+  return request<TaskAgentSettings>(apiPathWithProfile(`/tasks/${taskId}/agent-settings`, profileId));
 }
 
 export function compactTask(taskId: string, focusTopic?: string | null) {

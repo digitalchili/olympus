@@ -1,5 +1,8 @@
-export interface SourceSnapshot {
-  head: string; fingerprint: string; changedFiles: string[]; diff: string;
+export interface SourceIdentity {
+  head: string; fingerprint: string;
+}
+export interface SourceSnapshot extends SourceIdentity {
+  changedFiles: string[]; diff: string;
 }
 export interface CodingCheck {
   command: string[]; exitCode: number | null; output: string; durationMs: number; timedOut: boolean;
@@ -10,7 +13,7 @@ export interface RunningCodingCheck {
 export interface CodingEvidence {
   taskId: string; runId: string; workdir: string; status: 'pending' | 'running' | 'passed' | 'failed' | 'stale' | 'unconfigured' | 'skipped';
   taskWorkdir?: string;
-  baseline: SourceSnapshot; source: SourceSnapshot | null; checks: CodingCheck[];
+  baseline: SourceIdentity; source: SourceSnapshot | null; checks: CodingCheck[];
   currentCheck?: RunningCodingCheck | null;
   reason: string | null; updatedAt: number;
 }

@@ -54,6 +54,7 @@ export type WorkerRequest =
   | {
       id: string;
       type: 'chat';
+      timingTraceId?: string;
       bot?: AgentRunOptions['bot'];
       projectGitHub?: boolean;
       recoveryContinuation?: boolean;

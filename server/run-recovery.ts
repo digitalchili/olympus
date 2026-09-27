@@ -4,7 +4,7 @@ import { getTask } from './db/queries.js';
 import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
 import { getRunStatus } from './live-chat.js';
 import type { AgentAdapter } from './adapters/types.js';
-import { failedCodingEvidence, sourceSnapshot } from './coding-verification.js';
+import { failedCodingEvidence, sourceIdentity } from './coding-verification.js';
 import { getQueuedTaskMessage } from './db/task-message-queue.js';
 import { hasUnansweredInteractions } from './db/interactions.js';
 import { hasActiveTaskRun, hasTaskOperation } from './task-run-lifecycle.js';
@@ -56,7 +56,7 @@ export async function verificationRepairPrompt(taskId: string, runId: string): P
   if (!recovery || recovery.run_id !== runId || recovery.reason !== 'verification_failed' || !['pending','waiting','dispatching'].includes(recovery.state)
     || task?.status !== 'in_progress' || latest?.runId !== runId || latest.status !== 'done' || !evidence
     || getQueuedTaskMessage(taskId) || hasUnansweredInteractions(taskId, runId)) return null;
-  const source = await sourceSnapshot(evidence.workdir);
+  const source = await sourceIdentity(evidence.workdir);
   const current = getRecovery(taskId);
   if (!current || current.run_id !== runId || current.reason !== 'verification_failed' || !['pending','waiting','dispatching'].includes(current.state)
     || getTask(taskId)?.status !== 'in_progress' || getLatestTaskAgentRun(taskId)?.runId !== runId

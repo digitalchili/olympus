@@ -1,4 +1,5 @@
 import { isVerifying } from '../coding-verification.js';
+import { requestPerformanceTrace, performanceSpan } from '../performance-timing.js';
 import { claimTaskOperation, hasActiveTaskRun, hasTaskOperation, hasActiveWorkspaceRun } from '../task-run-lifecycle.js';
 import { getRecovery, cancelRecovery, verificationRepairPrompt } from '../run-recovery.js';
 import { getLatestTaskAgentRun } from '../db/task-agent-runs.js';
@@ -78,6 +79,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
     res.json({ recovery: row ? { state: row.state, kind: row.repair_fingerprint ? 'verification' : 'native', attempts: row.attempts, deadlineAt: row.deadline_at, reason: row.reason, waitReason: latest?.runId === row.run_id ? latest.recoveryWaitReason ?? null : null, checkpoint: row.checkpoint_json ? JSON.parse(row.checkpoint_json) : null } : null });
   });
   router.post('/:id/messages', requireTaskForProfile(getTask), async (req, res, next) => {
+    const performanceTrace = requestPerformanceTrace(res);
     const task = res.locals.task as Task;
     if (typeof req.body?.content !== 'string' || !req.body.content.trim()) return next();
     const live = getRunStatus(task.id);
@@ -92,10 +94,10 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
     res.once('close', () => { if (!res.locals.preparingProjectTask) release(); });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const inventory = await Promise.race([
+      const inventory = await performanceSpan(performanceTrace, 'inventory', () => Promise.race([
         adapter.getBackgroundWork?.(task.id) ?? Promise.resolve({ available: false, work: [], continuation: undefined }),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('background check timeout')), 5_000); }),
-      ]);
+      ]));
       if (res.destroyed) return;
       if (!inventory.available || !Array.isArray(inventory.work)) {
         return res.status(503).json({ code: 'BACKGROUND_WORK_UNAVAILABLE', error: 'Could not verify whether this task still has background work. Nothing new was started. Retry the check before continuing.' });

@@ -483,6 +483,7 @@ interface ModelPickerGroup {
 }
 
 export interface ModelPickerProps {
+  isLoadingModels?: boolean;
   openRequest?: number;
   value: string;
   provider?: string | null;
@@ -558,6 +559,7 @@ function findInitialModelGroupId(groups: ModelPickerGroup[], value: string, prov
 }
 
 export function ModelPicker({
+  isLoadingModels = false,
   openRequest = 0,
   value,
   provider = null,
@@ -906,9 +908,10 @@ export function ModelPicker({
                 aria-activedescendant={visibleModels.length > 0 ? `${menuId}-model-${activeModelIndex}` : undefined}
                 className="min-h-0 flex-1 overflow-y-auto py-1.5"
               >
+                {isLoadingModels && <p role="status" className="px-3 py-2 text-xs text-zinc-500">Loading models…</p>}
                 {visibleModels.length === 0 ? (
                   <div className="px-3 py-8 text-center text-xs text-zinc-400 dark:text-zinc-500">
-                    No matches
+                    {isLoadingModels ? 'Model choices will appear here.' : 'No matches'}
                   </div>
                 ) : (
                   visibleModels.map((model, index) => {
@@ -962,6 +965,7 @@ export function ModelPicker({
 }
 
 interface InputToolbarProps {
+  isLoadingModels?: boolean;
   modelPickerRequest?: number;
   model: string | null;
   provider?: string | null;
@@ -1056,6 +1060,7 @@ const REASONING_OPTIONS: ToolbarSelectOption[] = REASONING_EFFORTS.map((effort) 
 }));
 
 export function InputToolbar({
+  isLoadingModels,
   modelPickerRequest,
   model,
   provider = null,
@@ -1085,6 +1090,7 @@ export function InputToolbar({
   return (
     <div className={`flex min-w-0 items-center gap-2 ${compactMobile ? 'flex-nowrap' : 'flex-wrap'}`}>
       <ModelPicker
+        isLoadingModels={isLoadingModels}
         openRequest={modelPickerRequest}
         value={model ?? ''}
         provider={provider}

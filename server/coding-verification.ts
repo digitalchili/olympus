@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import db from './db/index.js';
 import { getTask } from './db/queries.js';
 import type { Task } from '../shared/types.js';
-import type { CodingEvidence, CodingCheck, RunningCodingCheck, SourceSnapshot } from '../shared/coding-evidence.js';
+import type { CodingEvidence, CodingCheck, RunningCodingCheck, SourceIdentity, SourceSnapshot } from '../shared/coding-evidence.js';
 
 const exec = promisify(execFile);
 const active = new Map<string, { controller: AbortController; done: Promise<void> }>();
@@ -33,7 +33,7 @@ function redact(text: string): string {
   return text.replace(/\bbearer\s+[a-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
     .replace(/(api[_-]?key|authorization|token|password|secret)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
 }
-export async function sourceSnapshot(cwd: string, startingHead?: string, signal?: AbortSignal): Promise<SourceSnapshot> {
+export async function sourceIdentity(cwd: string, signal?: AbortSignal): Promise<SourceIdentity> {
   const head = (await git(cwd, ['rev-parse', 'HEAD'], signal)).trim();
   const files = [...new Set((await git(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], signal)).split('\0').filter(Boolean))].sort();
   const hash = createHash('sha256').update(head);
@@ -51,11 +51,16 @@ export async function sourceSnapshot(cwd: string, startingHead?: string, signal?
       else throw error;
     }
   }
-  const comparedHead = startingHead ?? head;
+  signal?.throwIfAborted();
+  return { head, fingerprint: hash.digest('hex') };
+}
+export async function sourceSnapshot(cwd: string, startingHead?: string, signal?: AbortSignal): Promise<SourceSnapshot> {
+  const identity = await sourceIdentity(cwd, signal);
+  const comparedHead = startingHead ?? identity.head;
   const untracked = (await git(cwd, ['status', '--porcelain', '--untracked-files=all'], signal)).split('\n').filter(line => line.startsWith('?? '));
   const changedFiles = [...(await git(cwd, ['diff', '--name-status', comparedHead, '--'], signal)).trim().split('\n').filter(Boolean), ...untracked];
   const diff = redact(await git(cwd, ['diff', comparedHead, '--'], signal)).slice(0, 256_000);
-  return { head, fingerprint: hash.digest('hex'), changedFiles, diff };
+  return { ...identity, changedFiles, diff };
 }
 function save(evidence: CodingEvidence): void {
   db.prepare(`INSERT INTO coding_evidence VALUES (?, ?, ?, ?) ON CONFLICT(task_id, run_id)
@@ -81,7 +86,7 @@ export async function captureCodingBaseline(task: Task, runId: string, signal?: 
   let workdir: string;
   try { workdir = await realpath((await git(task.workdir, ['rev-parse', '--show-toplevel'], signal)).trim()); }
   catch (error) { signal?.throwIfAborted(); return; }
-  const baseline = await sourceSnapshot(workdir, undefined, signal);
+  const baseline = await sourceIdentity(workdir, signal);
   save({ taskId: task.id, runId, workdir, taskWorkdir: task.workdir, status: 'pending', baseline, source: null, checks: [], reason: null, updatedAt: Date.now() });
 }
 async function commands(cwd: string): Promise<string[][]> {
@@ -172,7 +177,7 @@ export async function verifyCodingRun(task: Task, runId: string, options: { skip
       if (result.exitCode !== 0 || result.timedOut) { evidence.status = 'failed'; evidence.reason = 'A required verification command failed'; return false; }
     }
     if (getTask(task.id)?.workdir !== task.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; return false; }
-    if ((await sourceSnapshot(workdir, undefined, signal)).fingerprint !== evidence.source.fingerprint) { evidence.status = 'stale'; evidence.reason = 'Source changed during verification. Run checks again.'; return false; }
+    if ((await sourceIdentity(workdir, signal)).fingerprint !== evidence.source.fingerprint) { evidence.status = 'stale'; evidence.reason = 'Source changed during verification. Run checks again.'; return false; }
     evidence.status = 'passed'; return true;
   } catch (error) {
     if (!evidence) throw error;
@@ -190,7 +195,7 @@ export async function readCodingEvidence(task: Task): Promise<CodingEvidence | n
       const currentTask = getTask(task.id);
       const workdir = currentTask?.workdir ? await realpath((await git(currentTask.workdir, ['rev-parse', '--show-toplevel'])).trim()) : null;
       if (!workdir || workdir !== evidence.workdir) { evidence.status = 'stale'; evidence.reason = WORKSPACE_CHANGED; }
-      else if (evidence.source && ['passed', 'skipped'].includes(evidence.status) && (await sourceSnapshot(workdir)).fingerprint !== evidence.source.fingerprint) {
+      else if (evidence.source && ['passed', 'skipped'].includes(evidence.status) && (await sourceIdentity(workdir)).fingerprint !== evidence.source.fingerprint) {
         evidence.status = 'stale'; evidence.reason = 'Source changed or is unavailable. Run checks again.';
       }
     } catch { evidence.status = 'stale'; evidence.reason = 'The task workspace is unavailable. Restore it or send a new message before running checks.'; }

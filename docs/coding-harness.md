@@ -28,6 +28,18 @@ Automatic repairs use the existing durable recovery queue, so reloads and restar
 
 Evidence does not establish functional completeness or replace human review. Ignored files are excluded from the fingerprint; submodules require separate verification. Output and tracked diffs are size limited and common secret assignments are redacted, but the panel remains local project data. Olympus does not publish or push a Git change through this feature.
 
+## Response timing diagnostics
+
+Optional local diagnostics are enabled only with `OLYMPUS_PERF_DIAGNOSTICS=1` in the Olympus server environment. They write bounded `[olympus-perf]` JSON records to server/worker stderr. Remove that variable (or set it to `0`) and restart the selected installation to disable collection. Apply the installation's normal approval/drain procedure for any live configuration change; remove previously collected records using its normal log-retention controls.
+
+Each Send has a generated trace ID; accepted runs also have a run ID, and adapter dispatch links the worker request ID. No prompt, answer, thinking text, credential, file path, model response or raw error is recorded. Diagnostics use monotonic clocks, one record per fixed stage, and one terminal outcome. They do not create a telemetry endpoint, change task limits, or send data elsewhere. Logging failures cannot fail a task.
+
+Node stages distinguish background inventory (including lazy worker startup), workspace preparation, admission, the pre-agent source baseline, dispatch, first meaningful activity, first answer text, native completion, verification, artifact publication and settlement. Worker stages distinguish slot acquisition, history/setup, runtime resolution, agent construction and the native call. Worker `nativeFirstOutputMs` includes native preparation, retries and provider waiting; it is not an isolated upstream request measurement. Node and worker elapsed values have separate clock origins: compare durations within each source, using the trace ID to correlate them.
+
+The first answer is distinct from the first thinking/tool event and from reaching review. Missing stages remain absent, including a thinking-only turn's first-answer stage. Repeated goal turns record the first occurrence of each stage; contributor exchanges are included in the chair's total waiting time rather than traced independently. Use the disposable fixtures and limits documented in [response performance evidence](../qa/response-performance-2026-09-26.md) before attributing a delay to Olympus or its provider.
+
+Saved settings now load independently of the optional model catalog. A catalog failure cannot block an otherwise ready composer; a required-settings failure keeps the draft editable and requires **Retry settings** before sending. Source identity still freshly hashes the same files and modes, but baseline/freshness reads omit unused status/diff diagnostics. Evidence polling permits only one verification/recovery pair per task generation, pauses while hidden, and refreshes on return or explicit actions.
+
 ## Independent Project tasks and GitHub sync
 
 Use **Sync latest from GitHub** on a connected Project. The Project keeps the last successful sync time, checked commit and **Updated** or **Up to date** result across reloads. Failed attempts leave that evidence unchanged; it describes the last verified sync, not a promise that GitHub has not changed since then.
