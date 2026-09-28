@@ -12,6 +12,8 @@ The update path is:
 
 This is intentionally separate from `scripts/docker/update.sh`, which is only for the bundled blue/green topology.
 
+Settings also supports a separately configured **Hermes agent** update with a full state backup, tested runtime target and durable progress. See [Hermes updates](hermes-updates.md). The two buttons share the runner's update lock.
+
 ## Prerequisites and credentials
 
 The host needs Python 3 and Docker Engine with Compose v2. Olympus source, releases and `ghcr.io/digitalchili/olympus` images are public; no GitHub or registry token is required for normal installation or updates.

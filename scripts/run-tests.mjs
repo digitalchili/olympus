@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const pythonTests = [
+  'test_hermes_runtime.py',
+  'test_hermes_update_runner.py',
+  'test_hermes_native_update.py',
+  'test_hermes_macos_restart.py',
+  'test_hermes_docker_update.py',
   'test_worker_performance.py',
   'test_worker_openai_auth.py',
   'test_worker_openai_guard.py',

@@ -1,3 +1,4 @@
+import type { HermesRuntimeInfo } from '../../shared/hermes-updates.js';
 import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import type {
@@ -21,6 +22,7 @@ import type { AgentRunOptions, ProjectRunRequest, ProjectRunRespondRequest, Proj
 export type WorkerRequest =
   | ({ id: string; type: 'auth.openai' } & OpenAIAuthWorkerRequest)
   | { id: string; type: 'health' }
+  | { id: string; type: 'hermes.runtime.get'; verify?: boolean }
   | { id: string; type: 'settings.get' }
   | { id: string; type: 'settings.set'; provider?: string | null; model?: string | null; reasoningEffort?: string | null }
   | { id: string; type: 'models.list' }
@@ -90,6 +92,7 @@ export interface WorkerErrorPayload {
 }
 
 export type WorkerResult =
+  | HermesRuntimeInfo
   | OpenAIAuthResponse | OpenAIAuthGuard
   | ScheduledTaskDrainStatus
   | TaskBackgroundWork

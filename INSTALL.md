@@ -60,6 +60,10 @@ Select the image from [published releases](https://github.com/digitalchili/olymp
 
 The listener defaults to `127.0.0.1:6969`. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately if remote access is required.
 
+## Updating Hermes from Settings
+
+**Settings → Updates → Hermes agent** shows the installed runtime and its tested compatible release. Native Mac installations can use a local service helper; Docker/Dokploy installations replace the paired Olympus image. Both require one-time, installation-specific updater setup and a reviewed dry-run. See [Hermes update setup and recovery](docs/hermes-updates.md).
+
 ## Storage Configuration
 
 By default, Olympus stores all repositories, agent sessions, and state locally on the VPS host or local Mac/Linux filesystem.

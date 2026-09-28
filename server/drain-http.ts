@@ -13,6 +13,7 @@ export function createDrainRouter(
   controller: DrainController,
   token = process.env.OLYMPUS_MAINTENANCE_TOKEN,
   onIdle?: () => void,
+  hermes?: { check: () => Promise<unknown>; fenced: () => boolean },
 ): Router {
   const router = Router();
   let drainGeneration = 0;
@@ -24,6 +25,10 @@ export function createDrainRouter(
     next();
   });
   router.get('/status', async (_req, res) => res.json(await controller.refreshStatus()));
+  if (hermes) router.get('/hermes/check', async (_req, res) => {
+    try { res.json(await hermes.check()); }
+    catch { res.status(503).json({ ready: false, blockers: ['Hermes verification is unavailable.'] }); }
+  });
   router.post('/drain', async (_req, res) => {
     const changed = controller.begin();
     if (changed && onIdle) {
@@ -35,6 +40,7 @@ export function createDrainRouter(
     res.json({ changed, ...await controller.refreshStatus() });
   });
   router.post('/cancel', async (_req, res) => {
+    if (hermes?.fenced()) return res.status(409).json({ error: 'The Hermes update must be verified or recovered before work resumes.' });
     const changed = controller.cancel();
     if (changed) drainGeneration += 1;
     res.json({ changed, ...await controller.refreshStatus() });

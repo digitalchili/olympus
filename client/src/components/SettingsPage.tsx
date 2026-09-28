@@ -11,6 +11,7 @@ import { ProfilesSettings } from './ProfilesSettings';
 import { ChannelSettings } from './ChannelSettings';
 import { StorageSettings } from './StorageSettings';
 import { UpdateSettings } from './UpdateSettings';
+import { HermesUpdateSettings } from './HermesUpdateSettings';
 import { GitHubSettings } from './GitHubSettings';
 import { ProvidersSettings } from './ProvidersSettings';
 import { UsageSettings } from './UsageSettings';
@@ -309,7 +310,7 @@ export function SettingsPage() {
         )}
 
         {activeTab === 'updates' && (
-          <UpdateSettings />
+          <div className="space-y-4"><UpdateSettings /><HermesUpdateSettings /></div>
         )}
       </div>
     </div>

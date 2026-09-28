@@ -12,6 +12,9 @@ import { searchRouter } from './routes/search.js';
 import { createInstallationRouter } from './routes/installation.js';
 import { createStorageRouter } from './routes/storage.js';
 import { createUpdatesRouter } from './routes/updates.js';
+import { createHermesUpdatesRouter } from './routes/hermes-updates.js';
+import { createHermesUpdateService } from './hermes-updates.js';
+import { checkHermesMaintenance, hermesUpdateFenced } from './hermes-maintenance.js';
 import { createProfilesRouter } from './routes/profiles.js';
 import { createChannelsRouter } from './routes/channels.js';
 import { createChannelHistoryRouter } from './routes/channel-history.js';
@@ -30,7 +33,7 @@ import { resolveOlympusDataDir } from './paths.js';
 import { resolve } from 'node:path';
 import { createGitHubAppGateway } from './studio/github-app.js';
 import { createGitHubCredentialStore } from './studio/github-credentials.js';
-import { getTask } from './db/queries.js';
+import { getTask, getAllTasks } from './db/queries.js';
 import { listDelegationRunsForProfile, markProfileDelegationsUnknown, recordDelegationEvent } from './db/delegations.js';
 import { normalizeDelegationEvent } from './delegation-events.js';
 import { HermesWorkerAdapter } from './adapters/hermes-worker.js';
@@ -76,6 +79,7 @@ const drainController = new DrainController(() => getActiveTaskRunCount() + getA
   setDraining: (draining) => adapter.setScheduledTasksDraining(draining),
   activeRuns: async () => (await adapter.getScheduledTaskDrainStatus()).activeRuns,
 });
+if (hermesUpdateFenced()) drainController.begin();
 const workerLiveness = createRuntimeLiveness({
   checkWorker: () => adapter.healthCheck(),
   onFailure: (status) => {
@@ -104,7 +108,7 @@ app.get('/api/ready', async (_req, res) => {
 app.use('/api/maintenance', createDrainRouter(drainController, undefined, () => {
   closeClientsForRestart();
   closeSubscribersForRestart();
-}));
+}, { check: () => checkHermesMaintenance(drainController, adapter, getAllTasks(undefined, true).map(task => task.id)), fenced: hermesUpdateFenced }));
 
 app.use(activeRequests.middleware);
 app.use(maintenanceGuard(drainController));
@@ -160,6 +164,7 @@ app.use('/api/agent', createAgentRouter(adapter));
 app.use('/api/installation', createInstallationRouter());
 app.use('/api/storage', createStorageRouter(() => drainController.status().ready));
 app.use('/api/updates', createUpdatesRouter());
+app.use('/api/updates/hermes', createHermesUpdatesRouter(createHermesUpdateService({ runtime: () => adapter.getHermesRuntime() })));
 app.use('/api/projects', createProjectGitHubAccessRouter(studioGitHubGateway));
 app.use('/api/projects', createProjectSecretsRouter());
 app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp, adapter }));

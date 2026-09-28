@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 from typing import Any, Callable
 from hermes_performance import PerformanceTrace
+from hermes_runtime import get_runtime
 
 # Alias so submodules importing `hermes_worker` see this module even when run as `__main__`.
 sys.modules.setdefault("hermes_worker", sys.modules[__name__])
@@ -2779,6 +2780,20 @@ def _handle_openai_auth_request(request_id: str, request: dict[str, Any]) -> Non
         _send_error(request_id, WorkerError('OpenAI sign-in is unavailable right now.', code=safe_code(getattr(error, 'code', None))))
 
 
+def _handle_runtime_request(request_id: str, verify: bool = False) -> None:
+    try:
+        source = _discover_agent_dir()
+    except (WorkerError, OSError):
+        source = None
+    runtime = get_runtime(source)
+    if verify and runtime['available']:
+        try:
+            _ensure_imports()
+        except Exception:
+            runtime['available'] = False
+    _result(request_id, runtime)
+
+
 def _handle_request(request: dict[str, Any]) -> None:
     request_id = str(request.get("id") or "")
     if not request_id:
@@ -2794,6 +2809,8 @@ def _handle_request(request: dict[str, Any]) -> None:
                 "agentDir": str(_AGENT_DIR) if _AGENT_DIR else None,
                 "python": sys.executable,
             })
+        elif request_type == "hermes.runtime.get":
+            threading.Thread(target=_handle_runtime_request, args=(request_id, request.get("verify") is True), daemon=True).start()
         elif request_type == "settings.get":
             _result(request_id, _defaults_from_config())
         elif request_type == "settings.set":

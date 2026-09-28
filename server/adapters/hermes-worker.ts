@@ -1,3 +1,4 @@
+import type { HermesRuntimeInfo } from '../../shared/hermes-updates.js';
 import { safeProviderErrorMessage } from '../../shared/run-errors.js';
 import { logWorkerDispatch } from '../performance-timing.js';
 import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
@@ -750,6 +751,10 @@ export class HermesWorkerAdapter implements AgentAdapter {
       sessionId,
     });
     return result.session;
+  }
+
+  async getHermesRuntime(verify = false): Promise<HermesRuntimeInfo> {
+    return this.client.request<HermesRuntimeInfo>({ type: 'hermes.runtime.get', verify });
   }
 
   async getDefaults(): Promise<AgentDefaults> {

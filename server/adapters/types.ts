@@ -1,3 +1,4 @@
+import type { HermesRuntimeInfo } from '../../shared/hermes-updates.js';
 import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type {
   AgentRunSettings,
@@ -117,6 +118,7 @@ export interface InteractionRespondRequest {
 
 
 export interface AgentAdapter {
+  getHermesRuntime?(verify?: boolean): Promise<HermesRuntimeInfo>;
   manageOpenAIAuthWorker?(input: OpenAIAuthWorkerRequest): Promise<OpenAIAuthResponse | OpenAIAuthGuard>;
   chat(
     sessionId: string,

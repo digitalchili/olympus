@@ -1,3 +1,4 @@
+import type { HermesRuntimeInfo } from '../../shared/hermes-updates.js';
 import type { OpenAIAuthRequest, OpenAIAuthResponse, OpenAIAuthScope, OpenAIAuthGuard, OpenAIAuthWorkerRequest } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
 import { getTask } from '../db/queries.js';
@@ -236,6 +237,11 @@ export class ProfileAgentAdapter implements AgentAdapter {
     const worker = await this.adapterForTaskId(request.taskId);
     if (!worker.respondInteraction) throw Object.assign(new Error('This agent adapter does not support interactive questions'), { code: 'interaction_unavailable' });
     return await worker.respondInteraction(request);
+  }
+
+  async getHermesRuntime(verify = false): Promise<HermesRuntimeInfo> {
+    if (!this.defaultAdapter.getHermesRuntime) throw new Error('Hermes runtime inspection is unavailable.');
+    return this.defaultAdapter.getHermesRuntime(verify);
   }
 
   async healthCheck(): Promise<boolean> {

@@ -1,3 +1,4 @@
+import type { HermesUpdateStatus } from '@shared/hermes-updates';
 import type { ProjectSecretEntry, ProjectSecretMetadata } from '@shared/project-secrets';
 import type {
   AgentDefaults,
@@ -270,6 +271,16 @@ export function fetchAppVersion() {
 
 export function fetchUpdateStatus(refresh = false) {
   return request<UpdateStatus>(refresh ? '/updates?refresh=true' : '/updates', undefined, false);
+}
+
+export function fetchHermesUpdateStatus(refresh = false) {
+  return request<HermesUpdateStatus>(refresh ? '/updates/hermes?refresh=true' : '/updates/hermes', undefined, false);
+}
+
+export function applyHermesUpdate(target: { targetRevision: string; targetOlympusVersion: string }) {
+  return request<{ accepted: true; operationId: string }>('/updates/hermes/apply', {
+    method: 'POST', headers: { 'X-Olympus-Update': '1' }, body: JSON.stringify(target),
+  }, false);
 }
 
 export function fetchStorageStatus() {

@@ -29,4 +29,5 @@ const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (invokedPath === fileURLToPath(import.meta.url)) {
   const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   await copyBuildAssets(join(repositoryRoot, 'server'), join(repositoryRoot, 'dist', 'server', 'server'));
+  await cp(join(repositoryRoot, 'hermes-runtime.json'), join(repositoryRoot, 'dist', 'server', 'server', 'hermes-runtime.json'));
 }

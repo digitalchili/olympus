@@ -40,6 +40,7 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     HERMES_AGENT_DIR=/opt/hermes \
     HERMES_PYTHON=/opt/hermes/.venv/bin/python \
+    OLYMPUS_INSTALL_KIND=docker \
     PYTHONDONTWRITEBYTECODE=1
 COPY --from=production-dependencies --chown=10000:10000 /app/node_modules ./node_modules
 COPY --from=build --chown=10000:10000 /app/dist ./dist

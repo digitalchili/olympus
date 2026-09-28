@@ -54,6 +54,10 @@ Use a version from [GitHub Releases](https://github.com/digitalchili/olympus/rel
 
 Open `http://127.0.0.1:6969` by default. Set `OLYMPUS_DISPATCH_BIND_ADDRESS` deliberately for remote access.
 
+## Updating Hermes
+
+Use **Settings → Updates → Hermes agent** to check the running and tested compatible versions. An installation-local helper enables updates with progress, backups and recovery; Docker/Dokploy updates replace the Olympus image containing Hermes. See [setup and recovery](docs/hermes-updates.md).
+
 ## Local Hermes profiles
 
 Olympus discovers the default profile and valid named profiles from the Hermes installation on the same machine. `GET /api/profiles` never reads profile endpoints or configuration belonging to another installation.
