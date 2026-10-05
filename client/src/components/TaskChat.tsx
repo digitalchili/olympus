@@ -179,7 +179,7 @@ function QueuedMessageBar({
   onRetry: () => void;
   retryLabel?: string;
 }) {
-  const statusLabel = isSending ? 'Sending...' : error ?? waitingLabel;
+  const statusLabel = isSending ? 'Sending...' : isSteering ? 'Sending update…' : error ?? waitingLabel;
   const showRetry = canRetry && (Boolean(error) || retryLabel !== 'Retry');
   const { text, filePaths } = splitAttachmentMessage(queuedMessage.content);
   const messagePreview = text || (filePaths.length === 1 ? '1 attachment' : `${filePaths.length} attachments`);
@@ -192,7 +192,7 @@ function QueuedMessageBar({
             <span className="shrink-0 rounded-md bg-zinc-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
               Queued
             </span>
-            <span role={error ? 'alert' : undefined} className={`min-w-0 text-xs ${error ? 'whitespace-pre-wrap break-words text-red-500' : 'truncate text-zinc-500 dark:text-zinc-400'}`}>
+            <span role={error ? 'alert' : 'status'} className={`min-w-0 whitespace-pre-wrap break-words text-xs ${error ? 'text-red-500' : 'text-zinc-500 dark:text-zinc-400'}`}>
               {statusLabel}
             </span>
           </div>
@@ -326,6 +326,7 @@ export function TaskChat({
   const [queuedSendError, setQueuedSendError] = useState<string | null>(null);
   const [autoSendingQueuedId, setAutoSendingQueuedId] = useState<string | null>(null);
   const [steeringQueuedId, setSteeringQueuedId] = useState<string | null>(null);
+  const [queuedSteerNoticeId, setQueuedSteerNoticeId] = useState<string | null>(null);
   const [outgoingRevealActive, setOutgoingRevealActive] = useState(false);
   const [interruptInFlight, setInterruptInFlight] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
@@ -471,6 +472,7 @@ export function TaskChat({
     setHighlightedProfileIndex(0);
     setQueuedSendError(null);
     setAutoSendingQueuedId(null);
+    setQueuedSteerNoticeId(null);
     setRunMode(isBot ? 'task' : startupRef.current.initialSettings?.mode ?? 'task');
     setOutgoingRevealActive(false);
     setInterruptInFlight(false);
@@ -852,6 +854,7 @@ export function TaskChat({
 
     setSteeringQueuedId(queuedMessage.id);
     setQueuedSendError(null);
+    setQueuedSteerNoticeId(null);
     try {
       const outcome = await deliverQueuedSteer(
         () => steerTask(taskId, queuedMessage.content),
@@ -860,9 +863,10 @@ export function TaskChat({
       if (outcome === 'steered') {
         await deleteQueuedTaskMessage(taskId, queuedMessage.id);
         setQueuedMessage((current) => current?.id === queuedMessage.id ? null : current);
+      } else if (outcome === 'queued') {
+        setQueuedSteerNoticeId(queuedMessage.id);
       }
-      // When Hermes is between turns or the message has an attachment, it stays
-      // queued and the normal post-run send path delivers it without losing data.
+      // Between Hermes turns the normal post-run send path keeps the update safe.
     } catch (error) {
       setQueuedSendError(toErrorMessage(error, 'Failed to steer Hermes'));
     } finally {
@@ -1303,7 +1307,9 @@ export function TaskChat({
               error={queuedSendError}
               isSending={queuedIsSending}
               canRetry={queuedCanManualSend}
-              waitingLabel={queuedMessageWaitingLabel({ pausedByRunFailure, compactionBlocker })}
+              waitingLabel={queuedSteerNoticeId === queuedMessage.id && !pausedByRunFailure && !compactionBlocker
+                ? 'Hermes cannot take this update yet. Saved to send after this response.'
+                : queuedMessageWaitingLabel({ pausedByRunFailure, compactionBlocker })}
               retryLabel={queuedSendError ? 'Retry sending message' : 'Send queued message'}
               canSteer={queuedMessage.invitedProfileIds.length === 0}
               isSteering={steeringQueuedId === queuedMessage.id}

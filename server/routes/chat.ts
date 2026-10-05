@@ -1246,13 +1246,9 @@ chatRouter.post('/:id/steer', async (req, res) => {
   if (!isInterruptibleRun(getRunStatus(task.id))) {
     return res.status(409).json({ error: 'This task has no active message to steer' });
   }
-  // Hermes intentionally queues steers containing files: it cannot safely inject
-  // binary attachments into the middle of a running tool turn.
-  if (/\n\n\[Attached files:\n[\s\S]*\]$/.test(content)) {
-    return res.json({ steered: false, queued: true });
-  }
-
   try {
+    // Attachments are already uploaded. Their footer contains file paths, so
+    // preserve it as text for Hermes to read at its next safe tool boundary.
     const steered = await adapter.steerChat(task.id, content);
     if (steered) {
       appendSteeredUserMessage(task.id, content);
