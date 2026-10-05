@@ -75,6 +75,7 @@ export function TaskInteractionPanel({ taskId, isStreaming, className = '' }: { 
   const busyRef = useRef(false);
   const generation = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  const [, refreshVisibility] = useState(0);
   const refresh = useCallback(async () => {
     const request = ++generation.current;
     try {
@@ -90,7 +91,17 @@ export function TaskInteractionPanel({ taskId, isStreaming, className = '' }: { 
     return () => { generation.current++; window.clearInterval(timer); };
   }, [isStreaming, refresh]);
   const item = interactions.find((i) => i.status === 'waiting' || i.status === 'claimed') ?? interactions[0];
+  const confirmationExpiresAt = item?.status === 'answered' && item.settledAt != null
+    ? item.settledAt + 60_000 : null;
+  useEffect(() => {
+    if (confirmationExpiresAt === null) return;
+    const remaining = confirmationExpiresAt - Date.now();
+    if (remaining <= 0) return;
+    const timer = window.setTimeout(() => refreshVisibility((value) => value + 1), remaining);
+    return () => window.clearTimeout(timer);
+  }, [confirmationExpiresAt]);
   if (!item && !error) return null;
+  if (!error && confirmationExpiresAt !== null && Date.now() >= confirmationExpiresAt) return null;
   const submit = async (response: InteractionResponse) => {
     if (!item || busyRef.current || item.status !== 'waiting') return;
     busyRef.current = true; setBusy(true); setError(null);
