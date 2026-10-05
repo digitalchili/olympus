@@ -24,7 +24,6 @@ type ControlledTextInput = {
   value: string;
   setValue: (value: string, cursor?: number | null) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
-  onSecretInput?: (text: string) => boolean;
 };
 
 // Backstop so a stalled connection eventually fails (surfacing a retry) instead
@@ -111,7 +110,7 @@ export function useFileAttachments(uploadBucketId: string, controlledInput?: Con
 
   const addFiles = useCallback((files: FileList | File[]) => {
     if (Array.from(files).some(file => /^\.env(?:\.|$)/i.test(file.name))) {
-      setUploadError('To save secrets, paste the contents of your .env file into chat or use Add secret. Files were not uploaded.');
+      setUploadError('To save secrets from an .env file, choose Add secret and paste its contents into that form. Files were not uploaded.');
       return;
     }
     const next: PendingFile[] = Array.from(files).map((file) => ({
@@ -222,19 +221,6 @@ export function useFileAttachments(uploadBucketId: string, controlledInput?: Con
 
   const handlePaste = useCallback((e: ClipboardEvent) => {
     const pastedText = e.clipboardData.getData('text/plain');
-    const controlled = controlledInputRef.current;
-    if (pastedText && controlled?.onSecretInput) {
-      const target = e.currentTarget as HTMLTextAreaElement;
-      const start = target.selectionStart ?? controlled.value.length;
-      const end = target.selectionEnd ?? start;
-      const next = `${controlled.value.slice(0, start)}${pastedText}${controlled.value.slice(end)}`;
-      if (controlled.onSecretInput(next)) { e.preventDefault(); return; }
-      if (next !== pastedText && controlled.onSecretInput(pastedText)) {
-        controlled.setValue(`${controlled.value.slice(0, start)}${controlled.value.slice(end)}`, start);
-        e.preventDefault();
-        return;
-      }
-    }
     const files = Array.from(e.clipboardData.items)
       .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())

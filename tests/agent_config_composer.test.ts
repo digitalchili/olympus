@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { isProjectSecretInput } from '../shared/project-secrets.js';
 
 // Exercise both production composers. Unrelated child panels are not rendered;
 // settings and task submission are controlled at their hook/API boundaries.
@@ -11,7 +10,6 @@ function composer(name: 'TaskChat' | 'NewTaskPage') {
   const file = new URL(`../client/src/components/${name}.tsx`, import.meta.url);
   const dependency = createRequire(file), slots: any[] = [], sent: any[] = [];
   let cursor = 0, retries = 0;
-  const secretEntries: string[] = [];
   const config: any = { defaults: { model: 'default-model', provider: 'default-provider', reasoningEffort: 'medium' },
     modelGroups: [], model: 'saved-model', provider: 'saved-provider', reasoningEffort: 'high', isLoading: false,
     isLoadingModels: true, settingsError: 'Could not load saved settings.', retrySettings: () => retries++,
@@ -21,21 +19,25 @@ function composer(name: 'TaskChat' | 'NewTaskPage') {
     useRef(initial: any) { const at = cursor++; return slots[at] ??= { current: initial }; },
     useCallback: (value: any) => value, useMemo: (fn: any) => fn(), useEffect() {}, useLayoutEffect() {} };
   const api = { createTask: async (...args: any[]) => { sent.push(args); return { task: { id: 'created', handling_profile_id: 'named' } }; } };
-  const exported: any = {};
+  const load = (file: URL): any => {
+  const dependency = createRequire(file), exported: any = {};
   runInNewContext(ts.transpileModule(readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
-    exports: exported, console, URLSearchParams, requestAnimationFrame() {},
+    exports: exported, console, URLSearchParams, URL, File, TextEncoder, AbortController, DOMException, setTimeout, clearTimeout, requestAnimationFrame() {},
     require: (id: string) => id === 'react' ? hooks : id === 'react-router' ? { useNavigate: () => () => {}, useLocation: () => ({ state: null, search: '', key: 'fixture' }) }
-      : id === '../hooks/useProjectSecretEntry' ? { useProjectSecretEntry: () => ({ intercept: (text: string) => { if (!isProjectSecretInput(text)) return false; secretEntries.push(text); return true; }, open() {}, notice: null, dialog: null }) }
+      : id === '../hooks/useProjectSecretEntry' ? load(new URL('../client/src/hooks/useProjectSecretEntry.tsx', import.meta.url))
       : id === '../hooks/useAgentConfig' ? { useAgentConfig: () => config }
         : id === '../contexts/ProfileContext' ? { useProfile: () => ({ activeProfileId: 'named', profiles: [] }) }
           : id === '../hooks/useChat' ? { useChat: () => ({ messages: [], activeTools: [], sendMessage: async (...args: any[]) => { sent.push(args); return { ok: true }; } }) }
-            : id === '../hooks/useFileAttachments' ? { useFileAttachments: () => ({ pendingFiles: [], submitWithAttachments: (value: string) => value, clearFiles() {}, setUploadError() {} }) }
+            : id === '../hooks/useFileAttachments' ? load(new URL('../client/src/hooks/useFileAttachments.ts', import.meta.url))
               : id === '../lib/store' ? { useStore: (selector: any) => selector({ taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) }
                 : id === '../lib/api' ? api : id.startsWith('./') ? new Proxy({}, { get: () => () => null }) : dependency(id),
   });
+  return exported;
+  };
+  const exported = load(file);
   const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
-  const render = () => { cursor = 0; return nodes(exported[name]({ taskId: 'fixture', conversationKind: 'bot' })); };
-  return { config, sent, secretEntries, render, retries: () => retries };
+  const render = () => { cursor = 0; return nodes(exported[name]({ taskId: 'fixture', conversationKind: 'task' })); };
+  return { config, sent, render, retries: () => retries };
 }
 
 for (const name of ['TaskChat', 'NewTaskPage'] as const) {
@@ -57,12 +59,30 @@ for (const name of ['TaskChat', 'NewTaskPage'] as const) {
   assert.deepEqual({ model: selected.model, provider: selected.provider, reasoningEffort: selected.reasoningEffort },
     { model: 'saved-model', provider: 'saved-provider', reasoningEffort: 'high' });
   const secretComposer = composer(name);
-  secretComposer.render().find(node => node.type === 'textarea').props.onChange({ target: { value: 'API_KEY=synthetic-value', selectionStart: 23 } });
-  const secretSend = secretComposer.render().find(node => node.type === 'button' && node.props['aria-label'] === 'Send message');
-  assert.ok(!secretSend.props.disabled, `${name}: saving secrets does not depend on model settings`);
+  const pasted = 'API_KEY=example-from-documentation';
+  let prevented = false;
+  secretComposer.render().find(node => node.type === 'textarea').props.onPaste({
+    clipboardData: { items: [], getData: () => pasted }, currentTarget: { selectionStart: 0, selectionEnd: 0 },
+    preventDefault() { prevented = true; },
+  });
+  assert.equal(prevented, false, `${name}: pasted assignments must remain ordinary text`);
+  assert.ok(!secretComposer.render().some(node => node.props.draft), `${name}: paste must not open secret entry`);
+  secretComposer.render().find(node => node.type === 'textarea').props.onChange({ target: { value: pasted, selectionStart: pasted.length } });
+  let secretSend = secretComposer.render().find(node => node.type === 'button' && node.props['aria-label'] === 'Send message');
+  assert.ok(secretSend.props.disabled, `${name}: every ordinary message uses normal settings readiness`);
+  // Secret entry is independent of the model, but must be explicitly selected.
+  secretComposer.render().find(node => node.type === 'button' && node.props.children === 'Add secret').props.onClick();
+  let dialog = secretComposer.render().find(node => node.props.draft);
+  assert.ok(dialog, `${name}: Add secret opens the explicit form`);
+  assert.equal(Object.keys(dialog.props.draft).length, 0, 'the form does not infer or copy values from the chat draft');
+  assert.equal(secretComposer.render().find(node => node.type === 'textarea').props.value, pasted);
+  dialog.props.onClose();
+  secretComposer.config.settingsError = null;
+  secretSend = secretComposer.render().find(node => node.type === 'button' && node.props['aria-label'] === 'Send message');
+  assert.ok(!secretSend.props.disabled);
   await secretSend.props.onClick();
-  assert.deepEqual(secretComposer.secretEntries, ['API_KEY=synthetic-value']);
-  assert.equal(secretComposer.sent.length, 0, `${name}: secrets cannot create a task or start a model run`);
-  assert.equal(secretComposer.render().find(node => node.type === 'textarea').props.value, '', `${name}: intercepted values leave the normal composer`);
+  assert.equal(secretComposer.sent.length, 1, `${name}: Send delivers the pasted text normally`);
+  assert.equal(name === 'TaskChat' ? secretComposer.sent[0][1] : secretComposer.sent[0][3].initialMessage.content, pasted);
+  assert.ok(!secretComposer.render().some(node => node.props.draft), `${name}: Send must not reopen secret entry`);
 }
-console.log('Configuration composer safety tests passed');
+console.log('Configuration composer and explicit-only secret entry tests passed');

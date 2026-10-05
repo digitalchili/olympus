@@ -27,7 +27,7 @@ export function validateProjectSecretEntries(input: unknown): ProjectSecretEntry
   });
 }
 
-/** No model call, environment expansion or shell evaluation is used to recognize secrets. */
+/** Parse only the explicitly opened secret form; never inspect ordinary task text. */
 export function parseProjectSecretInput(input: string): ProjectSecretInput {
   let text = input.trim();
   const explicit = setup.test(text);
@@ -89,5 +89,3 @@ export function parseProjectSecretInput(input: string): ProjectSecretInput {
   try { return { kind: 'secrets', entries: validateProjectSecretEntries(entries) }; }
   catch (error) { return { kind: 'invalid', error: (error as Error).message }; }
 }
-
-export function isProjectSecretInput(text: string): boolean { return parseProjectSecretInput(text).kind !== 'none'; }

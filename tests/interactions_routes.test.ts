@@ -98,25 +98,9 @@ try {
   const invalidProto = await fetch(`${base}/api/tasks/${task.id}/interactions/clarify-1/respond?profile=default`, json('POST', '{"workerRunId":"worker-1","response":{"answers":{"q1":"A","q2":["red"],"__proto__":"pollute"}}}'));
   assert.equal(invalidProto.status, 400, 'unsafe prototype-like answer keys are rejected');
 
-  for (const answers of [
-    { q1: 'API_KEY=synthetic-interaction-secret', q2: ['red'] },
-    { q1: 'A', q2: ['red', 'DATABASE_URL=postgres://test:synthetic@localhost/test'] },
-  ]) {
-    const rejected = await fetch(`${base}/api/tasks/${task.id}/interactions/clarify-1/respond?profile=default`, json('POST', {
-      workerRunId: 'worker-1', response: { answers },
-    }));
-    const body = await rejected.text();
-    assert.equal(rejected.status, 400, 'secret answers must be rejected before the interaction is claimed');
-    assert.match(body, /PROJECT_SECRET_INPUT_REQUIRED/);
-    assert.ok(!body.includes('synthetic'), 'error responses never echo candidate values');
-    assert.equal(delivered.length, 0, 'secret answers never reach Hermes');
-    assert.equal(interactionDb.getInteraction('clarify-1')?.status, 'waiting');
-    assert.equal(interactionDb.getInteraction('clarify-1')?.response, null, 'rejected answers are not saved');
-  }
-
   const valid = await fetch(`${base}/api/tasks/${task.id}/interactions/clarify-1/respond?profile=default`, json('POST', {
     workerRunId: 'worker-1',
-    response: { answers: { q1: 'Other bounded text', q2: ['red', 'custom free text'] } },
+    response: { answers: { q1: 'API_KEY=example-only', q2: ['red', 'DATABASE_URL=postgres://example:example@localhost/test'] } },
   }));
   const validBody = await valid.json().catch(() => ({}));
   assert.equal(valid.status, 200, JSON.stringify(validBody));
@@ -126,7 +110,7 @@ try {
     taskId: task.id,
     interactionId: 'clarify-1',
     workerRunId: 'worker-1',
-    response: { answers: { q1: 'Other bounded text', q2: ['red', 'custom free text'] } },
+    response: { answers: { q1: 'API_KEY=example-only', q2: ['red', 'DATABASE_URL=postgres://example:example@localhost/test'] } },
   });
   assert.equal(interactionDb.getInteraction('clarify-1')?.status, 'answered');
   assert.deepEqual(interactionDb.getInteraction('clarify-1')?.response, delivered[0]?.response, 'early native settlement cannot lose the submitted answers');

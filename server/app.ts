@@ -2,8 +2,8 @@ import { taskRunSnapshot } from './task-run-snapshot.js';
 import { createCodingVerificationRouter } from './routes/coding-verification.js';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
-import { tasksRouter, taskSecretInputGuard } from './routes/tasks.js';
-import { chatRouter, projectSecretChatInputGuard } from './routes/chat.js';
+import { tasksRouter } from './routes/tasks.js';
+import { chatRouter } from './routes/chat.js';
 import { createAgentRouter, createTaskAgentSettingsRouter } from './routes/agent.js';
 import { createScheduledTasksRouter } from './routes/scheduled-tasks.js';
 import { skillsRouter } from './routes/skills.js';
@@ -150,7 +150,6 @@ const projectGitHub = createProjectGitHubService({
   workspaceForTask: task => localProfileRegistry.require(task.profile_name ?? 'default').workspaceDir,
 });
 const projectCp = createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts') });
-app.use('/api/tasks', taskSecretInputGuard, projectSecretChatInputGuard);
 app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));

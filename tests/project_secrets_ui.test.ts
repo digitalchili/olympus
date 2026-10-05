@@ -4,7 +4,6 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { parseProjectSecretInput } from '../shared/project-secrets.js';
 
 function loadHooks(file: URL, overrides: Record<string, unknown> = {}, environment: Record<string, unknown> = {}) {
   const dependency = createRequire(file), slots: any[] = [];
@@ -23,44 +22,26 @@ function loadHooks(file: URL, overrides: Record<string, unknown> = {}, environme
     require: (name: string) => name === 'react' ? testHooks : overrides[name] ?? dependency(name) });
   return { exports, render(fn: () => any, beforeEffects?: (tree: any) => void) { cursor = 0; const result = fn(); beforeEffects?.(result); for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); } return result; }, unmount() { for (const cleanup of cleanups.splice(0)) cleanup(); } };
 }
-const raw = `OPENAI_API_KEY=synthetic-${'x'.repeat(5000)}`;
-let captured = '', uploads = 0, prevented = false;
+let uploads = 0;
 const attachments = loadHooks(new URL('../client/src/hooks/useFileAttachments.ts', import.meta.url), {
   '../lib/api': { uploadChatAttachment: async () => { uploads++; return 'uploaded'; } },
 });
-const files = attachments.render(() => attachments.exports.useFileAttachments('task-test', {
-  value: '', setValue() {}, onSecretInput(text: string) { captured = text; return true; },
-}));
-files.handlePaste({ clipboardData: { items: [], getData: () => raw }, currentTarget: { selectionStart: 0, selectionEnd: 0 }, preventDefault() { prevented = true; } });
-assert.equal(captured, raw, 'secret paste is intercepted before long-paste attachment upload');
-assert.equal(uploads, 0, 'secret values must never enter an attachment upload');
-assert.ok(prevented);
+const files = attachments.render(() => attachments.exports.useFileAttachments('task-test', { value: 'Keep this draft: ', setValue() {} }));
+for (const text of ['API_KEY=example', 'Explain PASSWORD=example', '/secrets\nLOCAL_VALUE=example']) {
+  let prevented = false;
+  files.handlePaste({ clipboardData: { items: [], getData: () => text }, currentTarget: { selectionStart: 17, selectionEnd: 17 }, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false, 'ordinary pasted text uses native textarea insertion');
+}
+const longText = `API_KEY=example-${'x'.repeat(5000)}`;
+let attached = false;
+files.handlePaste({ clipboardData: { items: [], getData: () => longText }, currentTarget: { selectionStart: 17, selectionEnd: 17 }, preventDefault() { attached = true; } });
+assert.equal(attached, true, 'large pastes keep the usual text attachment behavior');
+assert.equal(uploads, 1);
 files.addFiles([new File(['synthetic'], '.env.local')]);
-assert.equal(uploads, 0, 'dotenv files must be blocked before chat attachment upload');
+assert.equal(uploads, 1, 'dotenv file attachment policy remains separate from text paste');
 const updatedFiles = attachments.render(() => attachments.exports.useFileAttachments('task-test', { value: '', setValue() {} }));
-assert.match(updatedFiles.uploadError, /paste.*contents/i);
-let existingDraft = 'Use the local settings: ';
-let standaloneCapture = '';
-const fallbackPaste = attachments.render(() => attachments.exports.useFileAttachments('task-test', {
-  value: existingDraft,
-  setValue(next: string) { existingDraft = next; },
-  onSecretInput(text: string) { const parsed = parseProjectSecretInput(text); if (parsed.kind === 'none') return false; standaloneCapture = text; existingDraft = ''; return true; },
-}));
-const pastedBlock = `LOCAL_VALUE=synthetic-${'x'.repeat(5000)}`;
-fallbackPaste.handlePaste({ clipboardData: { items: [], getData: () => pastedBlock }, currentTarget: { selectionStart: existingDraft.length, selectionEnd: existingDraft.length }, preventDefault() {} });
-assert.ok(standaloneCapture === pastedBlock, 'standalone dotenv paste remains protected when ordinary prose is already in the composer');
-assert.equal(existingDraft, 'Use the local settings: ', 'staging only the pasted block preserves existing nonsensitive draft text');
-assert.equal(uploads, 0);
-
-let combinedCapture = '';
-const prefixPaste = attachments.render(() => attachments.exports.useFileAttachments('task-test', {
-  value: 'LOCAL_VALUE=', setValue() {},
-  onSecretInput(text: string) { const parsed = parseProjectSecretInput(text); if (parsed.kind === 'none') return false; combinedCapture = text; return true; },
-}));
-prefixPaste.handlePaste({ clipboardData: { items: [], getData: () => 'synthetic' }, currentTarget: { selectionStart: 12, selectionEnd: 12 }, preventDefault() {} });
-assert.equal(combinedCapture, 'LOCAL_VALUE=synthetic', 'pasting a value after an existing key still classifies the combined draft first');
-
-
+assert.match(updatedFiles.uploadError, /choose Add secret/);
+attachments.unmount();
 
 const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -106,11 +87,11 @@ try {
   const hook = loadHooks(new URL('../client/src/hooks/useProjectSecretEntry.tsx', import.meta.url));
   const context = { projectId: 'one', taskId: 'task-one' };
   let entry = hook.render(() => hook.exports.useProjectSecretEntry(context));
-  assert.equal(entry.intercept('Please fix this task'), false);
-  assert.equal(entry.intercept('API_KEY=synthetic'), true);
+  assert.equal(entry.dialog, null, 'secret entry starts closed');
+  entry.open();
   entry = hook.render(() => hook.exports.useProjectSecretEntry(context));
   const oldDialog = entry.dialog;
-  assert.deepEqual(JSON.parse(JSON.stringify(oldDialog.props.draft.entries)), [{ name: 'API_KEY', value: 'synthetic' }]);
+  assert.equal(Object.keys(oldDialog.props.draft).length, 0, 'explicit entry starts blank');
   context.projectId = 'two';
   entry = hook.render(() => hook.exports.useProjectSecretEntry(context));
   assert.equal(entry.dialog, null, 'switching projects drops the staged secret UI');
@@ -124,13 +105,13 @@ const questionProps = { item: { id: 'question-test', kind: 'clarification', ques
   onSubmit: (response: unknown) => deliveredAnswers.push(response) };
 const renderQuestion = () => question.render(() => question.exports.TaskQuestionForm(questionProps));
 nodes(renderQuestion()).find(node => node.type === 'textarea').props.onChange({ target: { value: 'API_KEY=synthetic-value' } });
-assert.match(renderToStaticMarkup(renderQuestion()), /Use Add secret/);
-assert.ok(nodes(renderQuestion()).find(node => node.type === 'button' && node.props.type === 'submit').props.disabled);
+assert.ok(!renderToStaticMarkup(renderQuestion()).includes('Use Add secret'));
+assert.ok(!nodes(renderQuestion()).find(node => node.type === 'button' && node.props.type === 'submit').props.disabled);
 nodes(renderQuestion()).find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-assert.equal(deliveredAnswers.length, 0, 'question forms must not submit secret candidate answers');
+assert.deepEqual(JSON.parse(JSON.stringify(deliveredAnswers)), [{ answers: { 'free-text': 'API_KEY=synthetic-value' } }], 'question answers are not classified as secrets');
 nodes(renderQuestion()).find(node => node.type === 'textarea').props.onChange({ target: { value: 'Use the local test connection' } });
 nodes(renderQuestion()).find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-assert.equal(deliveredAnswers.length, 1, 'normal answers remain usable after removing a secret value');
+assert.equal(deliveredAnswers.length, 2, 'normal answers remain usable');
 // A minimal DOM boundary verifies focus movement without mocking the dialog logic.
 const listeners = new Map<string, Set<(event: any) => void>>();
 const documentFixture: any = {
@@ -155,7 +136,7 @@ const renderFocus = () => focusDialog.render(() => focusDialog.exports.SecretEnt
   if (form.props.ref) form.props.ref.current = formElement;
 });
 renderFocus();
-assert.equal(documentFixture.activeElement, saveButton, 'intercepted paste must move focus from chat into the secret confirmation');
+assert.equal(documentFixture.activeElement, saveButton, 'explicit secret entry must focus the secret confirmation');
 const tab = (shiftKey = false) => { let prevented = false; for (const listener of listeners.get('keydown') ?? []) listener({ key: 'Tab', shiftKey, preventDefault() { prevented = true; }, stopPropagation() {} }); return prevented; };
 assert.ok(tab()); assert.equal(documentFixture.activeElement, different, 'Tab wraps from last to first dialog control');
 assert.ok(tab(true)); assert.equal(documentFixture.activeElement, saveButton, 'Shift+Tab wraps backwards within the dialog');

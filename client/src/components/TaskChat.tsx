@@ -1,4 +1,3 @@
-import { isProjectSecretInput } from '@shared/project-secrets';
 import { useProjectSecretEntry } from '../hooks/useProjectSecretEntry';
 import { pauseTaskRecovery } from '../lib/api';
 import { CodingEvidencePanel } from './CodingEvidencePanel';
@@ -337,12 +336,7 @@ export function TaskChat({
     setActiveMention(null);
     inputRef.current?.focus();
   }, []);
-  const secretEntry = useProjectSecretEntry({ projectId, taskId, profileId: activeProfileId, disabled: isBot });
-  const interceptSecretInput = useCallback((text: string) => {
-    if (!secretEntry.intercept(text)) return false;
-    setInput(''); setActiveMention(null);
-    return true;
-  }, [secretEntry.intercept, setInput]);
+  const secretEntry = useProjectSecretEntry({ projectId, taskId, profileId: activeProfileId });
   const {
     pendingFiles,
     dragOver,
@@ -359,7 +353,7 @@ export function TaskChat({
     submitWithAttachments,
     dragHandlers,
     handlePaste,
-  } = useFileAttachments(taskId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef, onSecretInput: interceptSecretInput });
+  } = useFileAttachments(taskId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
   const startupRef = useRef({ taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds });
   if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) {
     startupRef.current = { taskId, profileId: activeProfileId, initialMessage, initialSettings, initialInvitedProfileIds };
@@ -500,7 +494,7 @@ export function TaskChat({
           const invitedProfileIds = isBot ? [] : startupRef.current.initialInvitedProfileIds ?? [];
           startupRef.current.initialMessage = undefined;
           startupRef.current.initialInvitedProfileIds = undefined;
-          if (loadedMessages.length === 0 && !interceptSecretInput(firstMessage)) {
+          if (loadedMessages.length === 0) {
             pendingRevealRef.current = true;
             setOutgoingRevealActive(true);
             void sendMessage(taskId, firstMessage, isBot ? { ...startupRef.current.initialSettings, mode: 'task' } : startupRef.current.initialSettings, { invitedProfileIds }).then(result => {
@@ -742,7 +736,6 @@ export function TaskChat({
 
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
-    if (interceptSecretInput(text)) return;
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasFiles) || configPending || uploadBlocksSend) return;
     if (queuedMessage) return;
@@ -817,7 +810,7 @@ export function TaskChat({
         setConfirmPersistentCollaboration(confirmationAtSend);
       }
     }
-  }, [activeProfileId, interceptSecretInput, isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
+  }, [activeProfileId, isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;
@@ -979,7 +972,7 @@ export function TaskChat({
       }
     : {
         onClick: handleSubmit,
-        disabled: !isProjectSecretInput(input) && ((!input.trim() && pendingFiles.length === 0) || configPending || queuedMessage !== null || uploadBlocksSend),
+        disabled: (!input.trim() && pendingFiles.length === 0) || configPending || queuedMessage !== null || uploadBlocksSend,
         label: sendBlockedLabel ?? 'Send message',
         icon: hasUploadingFiles ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} />,
       };

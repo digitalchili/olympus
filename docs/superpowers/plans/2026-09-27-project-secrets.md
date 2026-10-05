@@ -1,5 +1,7 @@
 # Project Secrets Implementation Plan
 
+> Updated 2026-10-05: automatic chat/paste detection and ingress rejection are superseded. Secret entry must only open through an explicit Add secret or Project Settings action. See `docs/project-secrets.md`.
+
 > **For agentic workers:** Use the shared contracts below when implementing independent components. Keep secret values out of ordinary chat and worker messages.
 
 **Goal:** Save named credentials directly from Olympus task chat into Project Settings and let project tasks use them for local testing.

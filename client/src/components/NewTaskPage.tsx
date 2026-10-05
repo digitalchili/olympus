@@ -1,4 +1,3 @@
-import { isProjectSecretInput } from '@shared/project-secrets';
 import { useProjectSecretEntry } from '../hooks/useProjectSecretEntry';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -61,11 +60,6 @@ export function NewTaskPage() {
   if (uploadBucketRef.current === null) uploadBucketRef.current = `draft-${createUuid()}`;
   const uploadBucketId = uploadBucketRef.current;
   const secretEntry = useProjectSecretEntry({ projectId: selectedProjectId || null, profileId: activeProfileId });
-  const interceptSecretInput = useCallback((text: string) => {
-    if (!secretEntry.intercept(text)) return false;
-    setInput(''); setActiveMention(null);
-    return true;
-  }, [secretEntry.intercept]);
   const {
     pendingFiles,
     dragOver,
@@ -81,7 +75,7 @@ export function NewTaskPage() {
     clearFiles,
     dragHandlers,
     handlePaste,
-  } = useFileAttachments(uploadBucketId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef, onSecretInput: interceptSecretInput });
+  } = useFileAttachments(uploadBucketId, { value: input, setValue: (value) => { setInput(value); setActiveMention(null); }, inputRef });
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -140,7 +134,6 @@ export function NewTaskPage() {
 
   const handleSubmit = useCallback(async () => {
     const text = input.trim();
-    if (interceptSecretInput(text)) return;
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasFiles) || isCreating || configPending || uploadBlocksSend || projectSelectionPending) return;
     if (runMode === 'goal' && selectedProfiles.length > 0) {
@@ -170,7 +163,7 @@ export function NewTaskPage() {
       setUploadError(toErrorMessage(err, 'Failed to create task'));
       setIsCreating(false);
     }
-  }, [configPending, interceptSecretInput, handlerProfileId, uploadBlocksSend, input, isCreating, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
+  }, [configPending, handlerProfileId, uploadBlocksSend, input, isCreating, model, navigate, pendingFiles, projectSelectionPending, provider, reasoningEffort, runMode, selectedProfiles, selectedProject, clearFiles, setUploadError]);
 
   const selectMentionProfile = useCallback((profile: HermesProfile) => {
     if (!activeMention) return;
@@ -343,7 +336,7 @@ export function NewTaskPage() {
             </div>
             <button
               onClick={handleSubmit}
-              disabled={isCreating || (!isProjectSecretInput(input) && ((!input.trim() && pendingFiles.length === 0) || configPending || uploadBlocksSend || projectSelectionPending))}
+              disabled={isCreating || (!input.trim() && pendingFiles.length === 0) || configPending || uploadBlocksSend || projectSelectionPending}
               title={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               aria-label={projectSelectionPending ? 'Waiting for Project' : sendBlockedLabel ?? 'Send message'}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-colors hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"

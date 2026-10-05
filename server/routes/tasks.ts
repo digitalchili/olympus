@@ -3,8 +3,7 @@ import db from '../db/index.js';
 import { putQueuedTaskMessage } from '../db/task-message-queue.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { parseTaskStart } from '../task-start.js';
-import { Router, type ErrorRequestHandler, type RequestHandler } from 'express';
-import { isProjectSecretInput } from '../../shared/project-secrets.js';
+import { Router, type ErrorRequestHandler } from 'express';
 import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed, assertTaskFieldsAllowed, PermanentBotTaskError } from '../db/queries.js';
 import { getProject } from '../db/projects.js';
 import { broadcast } from '../events.js';
@@ -21,17 +20,6 @@ import { ProjectAccessError, requireProfileProjectAccess } from '../project-acce
 import { getActiveProjectEditorForTask } from '../db/project-cp.js';
 
 export const tasksRouter = Router();
-export const taskSecretInputGuard: RequestHandler = (req, res, next) => {
-  if ((req.method === 'POST' && req.path === '/') || (req.method === 'PATCH' && /^\/[^/]+\/?$/.test(req.path))) {
-    const fields = [req.body?.title, req.body?.description, req.body?.initialMessage?.content];
-    if (fields.some(value => typeof value === 'string' && isProjectSecretInput(value))) {
-      res.status(400).json({ error: 'Save credentials using the secure secret entry in Olympus chat or Project Settings.', code: 'PROJECT_SECRET_INPUT_REQUIRED' });
-      return;
-    }
-  }
-  next();
-};
-tasksRouter.use(taskSecretInputGuard);
 const requireTask = requireTaskForProfile(getTask);
 
 const LOW_INFORMATION_TITLES = new Set(['?', 'hi', 'hello', 'hey', 'yo']);

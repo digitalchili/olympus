@@ -18,7 +18,6 @@ import {
   updateCollaborationRun,
 } from '../db/collaboration.js';
 import { adapter, projectGitHub } from '../app.js';
-import { isProjectSecretInput } from '../../shared/project-secrets.js';
 import { projectSecretNamesForTask, projectSecretsRuntime } from '../project-secrets-runtime.js';
 import { getProjectGitHubInstallationIds } from '../db/project-github-access.js';
 import { broadcast, initSSE } from '../events.js';
@@ -74,21 +73,6 @@ import { beginBotRun, botDeliveryContent, finishBotRun, getBotRun, requireQueued
 import { scheduleBotMessageDispatch } from '../bot-message-dispatcher.js';
 import type { StreamEvent } from '../adapters/types.js';
 import { CHAT_RUN_MODES, DEFAULT_PROFILE_NAME, TASK_MESSAGE_PAGE_MAX_SIZE, TASK_MESSAGE_PAGE_SIZE, type ChatRunMode, type CollaborationContributionPhase, type CollaborationInvitationScope, type CollaborationRun, type CompactResult, type ContextUsage, type QueuedTaskMessage, type Task } from '../../shared/types.js';
-
-function rejectSecretInput(res: Response) {
-  return res.status(400).json({ error: 'Save secrets using the secure secret form in Olympus task chat or Project Settings.', code: 'PROJECT_SECRET_INPUT_REQUIRED' });
-}
-
-/** Reject before workspace preparation, queue claims or worker admission. */
-export function projectSecretChatInputGuard(req: Request, res: Response, next: () => void): void {
-  const inputRoute = req.method === 'POST' && /^\/[^/]+\/(?:messages|steer)\/?$/i.test(req.path)
-    || req.method === 'PUT' && /^\/[^/]+\/queued-message\/?$/i.test(req.path);
-  if (inputRoute && typeof req.body?.content === 'string' && isProjectSecretInput(req.body.content)) {
-    rejectSecretInput(res);
-    return;
-  }
-  next();
-}
 
 export const chatRouter = Router();
 chatRouter.use('/:id', requireTaskForProfile(getTask));
@@ -838,7 +822,6 @@ chatRouter.put('/:id/queued-message', (req, res) => {
   const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
   const rawInvites = req.body?.invitedProfileIds;
   if (!id || !content) return res.status(400).json({ error: 'id and content are required' });
-  if (isProjectSecretInput(content)) return rejectSecretInput(res);
   if (!Array.isArray(rawInvites)) {
     return res.status(400).json({ error: 'invitedProfileIds must contain at most 9 profile IDs' });
   }
@@ -923,7 +906,6 @@ chatRouter.post('/:id/messages', async (req, res) => {
   if (!requestContent || typeof requestContent !== 'string') {
     return res.status(400).json({ error: 'content is required' });
   }
-  if (isProjectSecretInput(requestContent)) return rejectSecretInput(res);
   let content = requestContent;
   let botDelivery: BotDelivery | undefined;
   if (requestBody.botDeliveryId !== undefined) {
@@ -1261,7 +1243,6 @@ chatRouter.post('/:id/steer', async (req, res) => {
 
   const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
   if (!content) return res.status(400).json({ error: 'content is required' });
-  if (isProjectSecretInput(content)) return rejectSecretInput(res);
   if (!isInterruptibleRun(getRunStatus(task.id))) {
     return res.status(409).json({ error: 'This task has no active message to steer' });
   }

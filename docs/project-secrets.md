@@ -4,18 +4,17 @@ Project secrets let Olympus run local tests against databases and AI services wi
 
 ## Save from task chat
 
-Paste named credentials or a dotenv block into an Olympus task composer. For example, using a fake value:
+Click **Add secret** beside the composer, or open **Project Settings → Secrets → Add secrets**. In that explicit form, enter named credentials or a dotenv block. For example, using a fake value:
 
 ```text
-Save these as project secrets:
 API_KEY=example-only-not-a-real-key
 ```
 
-Olympus opens a secure entry form before sending a message. Review the variable names and choose **Save secrets**. Values are masked. A task in a Project uses that Project; an Inbox task asks you to select one and remains in the Inbox. This also works from New Task without creating a task or calling a model.
+Review the variable names and choose **Save secrets**. Values are masked. A task in a Project uses that Project; a standalone task asks you to select one and stays in its current location. This also works from New Task without creating a task or calling a model.
 
-You can also click **Add secret** beside the composer, or open **Project Settings → Secrets → Add secrets**. The explicit form is the safest choice for an unfamiliar credential format. Detection handles named assignments, dotenv blocks and common credential patterns; it cannot recognize every password embedded in prose. Do not send credentials as ordinary conversation text.
+Ordinary task text is never classified as secret entry. Pasting, typing, sending, queueing, steering and answering a task question do not open the form or save secrets, even when the text contains assignments, credential-like examples or `/secrets`. Long pasted text follows the normal text-attachment behavior. Use the explicit form when you want encrypted secret storage.
 
-The save confirmation contains names only and is not written to the agent's conversation. Values stay out of chat history, queued messages and title generation. Secret entry works without a running model. `.env` and `.env.*` chat attachments are rejected; paste their contents into secure entry instead. Other attachments are not scanned for credentials.
+The save confirmation contains names only and is not written to the agent's conversation. Values entered through the form stay out of chat history, queued messages and title generation. Secret entry works without a running model. `.env` and `.env.*` chat file attachments remain rejected; choose **Add secret** to paste their contents into the form. Other attachments are not scanned for credentials.
 
 Use this feature inside Olympus. There is no secret-saving tool for the model, Bots or Telegram. Pasting a credential into Telegram still sends it to Telegram and its connected service.
 
