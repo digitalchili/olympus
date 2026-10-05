@@ -43,17 +43,19 @@ export const MarkdownContent = memo(function MarkdownContent({
   content,
   isStreaming = false,
   taskId,
+  profileId,
 }: {
   content: string;
   isStreaming?: boolean;
   taskId?: string;
+  profileId?: string;
 }) {
   const rehypePlugins = useMemo<StreamdownProps['rehypePlugins']>(() => [
     defaultRehypePlugins.raw,
-    [rewriteArtifactLinks, { taskId }],
+    [rewriteArtifactLinks, { taskId, profileId }],
     defaultRehypePlugins.sanitize,
     defaultRehypePlugins.harden,
-  ], [taskId]);
+  ], [taskId, profileId]);
   return (
     <Streamdown
       animated={isStreaming}

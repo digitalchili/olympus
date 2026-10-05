@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Header, HeaderProvider } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { Board } from './components/Board';
+import { InboxPage } from './components/InboxPage';
+import { InboxProvider } from './contexts/InboxContext';
 import { NewTaskPage } from './components/NewTaskPage';
 import { TaskDetailPage } from './components/TaskDetailPage';
 import { BotsPage } from './components/BotsPage';
@@ -33,6 +35,7 @@ function AppShell() {
           <Header />
           <Routes>
             <Route path="/" element={<Board />} />
+            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/bots" element={<BotsPage />} />
             <Route path="/tasks/new" element={<NewTaskPage />} />
             <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
@@ -81,7 +84,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <ProfileProvider>
-        <ProfileAppShell />
+        <InboxProvider>
+          <ProfileAppShell />
+        </InboxProvider>
       </ProfileProvider>
     </BrowserRouter>
   );

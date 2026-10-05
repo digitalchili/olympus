@@ -55,6 +55,11 @@ try {
     value: { location: { origin: 'https://olympus.example:8443', search: '?profile=somboon' } },
   });
   try {
+    const otherProfile = renderToStaticMarkup(createElement(MarkdownContent, {
+      content: '[Download](./result.zip)', taskId: 'writer-task', profileId: 'writer',
+    }));
+    assert.match(otherProfile, /profile=writer/, 'Inbox downloads use the task profile, not the selected sidebar profile');
+    assert.doesNotMatch(otherProfile, /profile=somboon/);
     const path = '/opt/data/olympus-dispatch/workspace/outputs/billing-note-august26/Billing-Note-August26-Bangkok-pages.zip';
     for (const href of [path, `https://olympus.example:8443${path}`]) {
       const markup = render(href);

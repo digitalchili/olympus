@@ -4,6 +4,10 @@
 
 Olympus never discovers, synchronizes with, or falls back to another host or Hermes installation.
 
+## Inbox
+
+Open **Inbox** to see questions, approvals, results ready for review, and tasks needing help across your local profiles and Projects. Preview an item, then open its task to respond. Reading the Inbox never approves, retries or completes work. See [Inbox](docs/inbox.md) for details.
+
 ## v0.7.0 Bots
 
 Open **Bots** for one persistent conversation per local Hermes profile. Bots can ask teammates for help with Hermes's native `message_agent` tool; Olympus owns the durable queue, attributed replies, Stop, and deployment drain. Bot conversations stay separate from Kanban tasks. See [Bot conversations and messaging](docs/bots.md) for usage and limits.

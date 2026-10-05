@@ -50,6 +50,7 @@ import { createRuntimeLiveness } from './runtime-liveness.js';
 import { operationalLog } from './observability.js';
 import { createTaskRecoveryRouter } from './routes/task-recovery.js';
 import { createBotsRouter } from './routes/bots.js';
+import { createInboxRouter } from './routes/inbox.js';
 
 const app = express();
 
@@ -173,6 +174,7 @@ app.use('/api/studio', createStudioRouter({
   publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,
 }));
 app.use('/api/profiles', createProfilesRouter(adapter));
+app.use('/api/inbox', createInboxRouter(adapter));
 app.use('/api/channels', createChannelsRouter());
 app.use('/api/channels', createChannelHistoryRouter());
 app.use('/api/scheduled-tasks', createScheduledTasksRouter(adapter));

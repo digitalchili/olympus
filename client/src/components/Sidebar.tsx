@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { Bot, SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, FolderKanban, Search, MessageCircle } from 'lucide-react';
+import { Bot, Inbox, SquarePen, Columns3, Settings, PanelLeftClose, PanelLeft, Repeat, Sparkles, Folder, FolderKanban, Search, MessageCircle } from 'lucide-react';
 import type { HermesChannel, ProfileTaskAttention } from '@shared/types';
 import { useStore } from '../lib/store';
 import { isEditableTarget } from '../lib/keyboard';
@@ -8,11 +8,13 @@ import { fetchHermesChannels, fetchInstallationSettings, fetchProfileAttention }
 import { channelInboxPath, enabledChannelInboxes, selectedChannelInbox } from '../lib/channelInbox';
 import { ProfileLink, useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { ProfilePicker } from './ProfilePicker';
+import { useInbox } from '../contexts/InboxContext';
 
 const isMac = /Mac/.test(navigator.userAgent);
 
 export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
   const location = useLocation();
+  const inbox = useInbox();
   const rawNavigate = useNavigate();
   const navigate = useProfileNavigate();
   const { profiles, activeProfileId, isLoading: profilesLoading, setActiveProfileId } = useProfile();
@@ -109,7 +111,7 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
       if (chordKey === 'g') {
         chordKey = null;
         if (chordTimeout) clearTimeout(chordTimeout);
-        const routes: Record<string, string> = { t: '/', f: '/files' };
+        const routes: Record<string, string> = { i: '/inbox', t: '/', f: '/files' };
         if (routes[key]) {
           e.preventDefault();
           navigate(routes[key]);
@@ -194,6 +196,15 @@ export function Sidebar({ onOpenSearch }: { onOpenSearch: () => void }) {
             active={isActive('/tasks/new')}
             collapsed={desktopCollapsed}
             shortcut={isMac ? '⇧⌘O' : 'Ctrl+⇧+O'}
+          />
+          <SidebarLink
+            icon={<Inbox size={18} />}
+            label="Inbox"
+            to="/inbox"
+            active={isActive('/inbox')}
+            collapsed={desktopCollapsed}
+            badge={inbox.error ? '!' : inbox.loading ? undefined : inbox.items.length || undefined}
+            shortcut={['G', 'I']}
           />
           <SidebarLink
             icon={<Columns3 size={18} />}
@@ -365,6 +376,7 @@ function SidebarLink({
   shortcut,
   className,
   subdued = false,
+  badge,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -375,10 +387,12 @@ function SidebarLink({
   shortcut?: string | string[];
   className?: string;
   subdued?: boolean;
+  badge?: number | '!';
 }) {
   return (
     <ProfileLink
       to={to}
+      aria-label={badge !== undefined ? `${label}, ${badge === '!' ? 'refresh unavailable' : `${badge} items need attention`}` : label}
       title={shortcut ? `${label} (${Array.isArray(shortcut) ? shortcut.join(' then ') : shortcut})` : label}
       className={`group flex min-w-12 shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[10px] font-medium leading-none transition-colors sm:min-w-0 sm:w-full sm:flex-row sm:px-3 sm:py-2 sm:text-sm sm:leading-normal ${
         collapsed ? 'sm:justify-center' : 'sm:justify-start sm:gap-3'
@@ -390,12 +404,14 @@ function SidebarLink({
             : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 sm:text-zinc-700 sm:dark:text-zinc-300 sm:hover:bg-surface'
       } ${className ?? ''}`}
     >
-      <span className={active ? 'text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'}>
+      <span className={`relative ${active ? 'text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'}`}>
         {icon}
+        {badge !== undefined && <span aria-hidden="true" className={`absolute -right-2 -top-1 rounded-full bg-violet-600 px-1 text-[9px] font-semibold leading-3 text-white ${collapsed ? '' : 'sm:hidden'}`}>{typeof badge === 'number' && badge > 99 ? '99+' : badge}</span>}
       </span>
       <span className="block max-w-full whitespace-normal text-center leading-tight sm:hidden">{mobileLabel ?? label}</span>
       {!collapsed && <span className="hidden truncate sm:block">{label}</span>}
-      {!collapsed && shortcut && (
+      {!collapsed && badge !== undefined && <span aria-hidden="true" className="ml-auto hidden rounded-md bg-zinc-200/70 px-1.5 text-xs tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 sm:block">{badge}</span>}
+      {!collapsed && shortcut && badge === undefined && (
         Array.isArray(shortcut) ? (
           <span className="ml-auto hidden items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 sm:flex">
             <Kbd>{shortcut[0]}</Kbd>

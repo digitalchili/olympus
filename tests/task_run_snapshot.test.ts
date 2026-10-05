@@ -6,6 +6,8 @@ import { beginRecovery, recoveryOutcome, cancelRecovery } from '../server/run-re
 import { taskRunSnapshot } from '../server/task-run-snapshot.js';
 import { startRun, getRunStatus, discardRun } from '../server/live-chat.js';
 const task = insertTask({ title: 'Persisted execution state', status: 'in_progress' });
+const realNow = Date.now;
+Date.now = () => 1_800_000_000_000;
 try {
   startRun(task.id, task.id, 'Test');
   const run = getRunStatus(task.id)!;
@@ -20,4 +22,9 @@ try {
   assert.equal(taskRunSnapshot().find(r => r.taskId === task.id)?.recoveryState, 'blocked');
   startRun(task.id, task.id, 'Continue');
   assert.equal(taskRunSnapshot().find(r => r.taskId === task.id)?.status, 'streaming', 'new live run beats old terminal');
-} finally { discardRun(task.id); db.close(); }
+  const newRun = getRunStatus(task.id)!;
+  createTaskAgentRun({ ...newRun, status: 'streaming' });
+  createTaskAgentRun({ ...newRun, runId: 'later-persisted-run', status: 'streaming' });
+  finishTaskAgentRun('later-persisted-run', 'error');
+  assert.equal(taskRunSnapshot().find(r => r.taskId === task.id)?.runId, 'later-persisted-run', 'stale live run cannot override a newer persisted run with the same timestamp');
+} finally { Date.now = realNow; discardRun(task.id); db.close(); }

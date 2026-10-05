@@ -65,6 +65,7 @@ import type {
   UpdateStatus,
 } from '@shared/types';
 import type { InteractionResponse, TaskInteraction } from '@shared/interactions';
+import type { InboxPreview, InboxSnapshot } from '@shared/inbox';
 import { TASK_MESSAGE_PAGE_SIZE } from '@shared/types';
 import { apiPathWithProfile } from './profileQuery';
 
@@ -73,6 +74,11 @@ export type { HermesProfile, SkillMeta, SkillInstallResult };
 export type { AgentRunSettings };
 
 export const BASE = '/api';
+
+// The Inbox is installation-wide, independent of the sidebar profile.
+export const fetchInbox = (signal?: AbortSignal) => request<InboxSnapshot>('/inbox', { signal }, false);
+export const fetchInboxPreview = (taskId: string, key: string, signal?: AbortSignal) =>
+  request<InboxPreview>(`/inbox/${encodeURIComponent(taskId)}?key=${encodeURIComponent(key)}`, { signal }, false);
 
 export class ApiError extends Error {
   constructor(

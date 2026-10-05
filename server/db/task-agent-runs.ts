@@ -97,6 +97,10 @@ export function createTaskAgentRun(input: {
   insertRun.run(input);
 }
 
+export function hasRecordedTaskAgentRun(runId: string): boolean {
+  return !!db.prepare('SELECT 1 FROM task_agent_runs WHERE run_id = ?').get(runId);
+}
+
 export function updateTaskAgentRunResolution(runId: string, resolution: AgentModelResolution, updatedAt = Date.now()): void {
   updateResolution.run({
     runId,

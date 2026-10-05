@@ -116,6 +116,14 @@ export function listTaskInteractions(taskId: string, profileName: string, now = 
   return (selectTaskInteractions.all(taskId, profileName) as InteractionRow[]).map(parseInteraction);
 }
 
+/** Read-only attention projection; expiry reconciliation belongs to the interaction lifecycle. */
+export function listOpenInteractions(now = Date.now()): TaskInteraction[] {
+  return (db.prepare(`SELECT * FROM task_interactions
+    WHERE status = 'delivery_unknown'
+       OR (status = 'waiting' AND (expires_at = 0 OR expires_at > ?))
+    ORDER BY requested_at, id`).all(now) as InteractionRow[]).map(parseInteraction);
+}
+
 export function getInteraction(id: string): TaskInteraction | null {
   const row = selectInteraction.get(id) as InteractionRow | undefined;
   return row ? parseInteraction(row) : null;

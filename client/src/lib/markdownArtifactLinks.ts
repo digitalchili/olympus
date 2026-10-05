@@ -22,7 +22,7 @@ function artifactPath(href: string): string | null {
   // Keep web URLs, app/API routes and anchors as ordinary links.
   if (!path || path.startsWith('//') || path.startsWith('#') || path.startsWith('?')
     || /^\/(?:[?#]|$)/.test(path)
-    || /^\/(?:api|tasks|bots|files|projects|settings|skills|scheduled-tasks|channels|studio|cron)(?:[/?#]|$)/.test(path)) return null;
+    || /^\/(?:api|inbox|tasks|bots|files|projects|settings|skills|scheduled-tasks|channels|studio|cron)(?:[/?#]|$)/.test(path)) return null;
   if (!path.startsWith('/') && !path.startsWith('~/') && !path.startsWith('./')
     && !path.startsWith('../') && !/\.[a-z\d]{1,12}$/i.test(path)) return null;
   try {
@@ -34,7 +34,7 @@ function artifactPath(href: string): string | null {
 
 /** Convert local links before Markdown sanitization removes file/sandbox schemes.
  * The task endpoint remains responsible for filesystem and profile authorization. */
-export function rewriteArtifactLinks({ taskId }: { taskId?: string }) {
+export function rewriteArtifactLinks({ taskId, profileId }: { taskId?: string; profileId?: string }) {
   return (tree: Root) => {
     if (!taskId) return;
     const endpoint = `/tasks/${encodeURIComponent(taskId)}/artifacts/download`;
@@ -42,7 +42,7 @@ export function rewriteArtifactLinks({ taskId }: { taskId?: string }) {
       if (node.type === 'element' && node.tagName === 'a' && typeof node.properties.href === 'string') {
         const path = artifactPath(node.properties.href);
         if (path !== null) {
-          node.properties.href = `${BASE}${apiPathWithProfile(`${endpoint}?path=${encodeURIComponent(path)}`)}`;
+          node.properties.href = `${BASE}${apiPathWithProfile(`${endpoint}?path=${encodeURIComponent(path)}`, profileId)}`;
         }
       }
       if ('children' in node) node.children.forEach(visit);
