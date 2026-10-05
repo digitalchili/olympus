@@ -75,7 +75,7 @@ export function TaskInteractionPanel({ taskId, isStreaming, className = '' }: { 
   const busyRef = useRef(false);
   const generation = useRef(0);
   const [error, setError] = useState<string | null>(null);
-  const [, refreshVisibility] = useState(0);
+  const [dismissedConfirmation, setDismissedConfirmation] = useState<number | null>(null);
   const refresh = useCallback(async () => {
     const request = ++generation.current;
     try {
@@ -95,13 +95,15 @@ export function TaskInteractionPanel({ taskId, isStreaming, className = '' }: { 
     ? item.settledAt + 60_000 : null;
   useEffect(() => {
     if (confirmationExpiresAt === null) return;
-    const remaining = confirmationExpiresAt - Date.now();
-    if (remaining <= 0) return;
-    const timer = window.setTimeout(() => refreshVisibility((value) => value + 1), remaining);
+    // Record dismissal directly: a timer can fire just before Date.now reaches
+    // the deadline, so a render-only clock check can leave the notice stuck.
+    const timer = window.setTimeout(() => setDismissedConfirmation(confirmationExpiresAt),
+      Math.max(0, confirmationExpiresAt - Date.now()));
     return () => window.clearTimeout(timer);
   }, [confirmationExpiresAt]);
   if (!item && !error) return null;
-  if (!error && confirmationExpiresAt !== null && Date.now() >= confirmationExpiresAt) return null;
+  if (!error && confirmationExpiresAt !== null
+      && (dismissedConfirmation === confirmationExpiresAt || Date.now() >= confirmationExpiresAt)) return null;
   const submit = async (response: InteractionResponse) => {
     if (!item || busyRef.current || item.status !== 'waiting') return;
     busyRef.current = true; setBusy(true); setError(null);
