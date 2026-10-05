@@ -2,6 +2,7 @@ import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodi
 import { requestPerformanceTrace, performanceSpan, type PerformanceTrace } from '../performance-timing.js';
 import { requestsCodingVerification } from '../verification-request.js';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { beginRecovery, recoveryOutcome, getRecovery, cancelRecovery, saveRecoveryCheckpoint, queueVerificationRepair, broadcastRecovery } from '../run-recovery.js';
 import { Router, type Request, type Response } from 'express';
 import { contextFromTask, getTask, updateTask, touchTask, recordAgentResponse } from '../db/queries.js';
@@ -483,6 +484,7 @@ async function streamChatTurn(
       }
       if (event.type === 'error') {
         hadError = true;
+        if (event.pendingSteer?.trim()) pendingSteer = event.pendingSteer.trim();
       }
       if (event.modelResolution) {
         const activeRunId = getRun(runTask.id)?.runId;
@@ -507,6 +509,7 @@ async function streamChatTurn(
     closeRunInteractions(runTask.id, interactionRunId);
   }
   const finalRun = getRunStatus(runTask.id);
+  if (finalRun?.status === 'stopped') interrupted = true;
   if (!sawDone && !hadError && finalRun?.status === 'streaming') {
     hadError = true;
     const event: StreamEvent = { type: 'error', code: 'stream_incomplete', error: 'Hermes chat stream ended before completion' };
@@ -514,6 +517,24 @@ async function streamChatTurn(
     broadcastLive(runTask.id, event);
   }
 
+  if (pendingSteer && hadError) {
+    // Keep undelivered steering visible and durable without restarting failed
+    // work or overwriting a newer queued request. A new ID protects against
+    // a late browser deletion of either previously accepted queue item.
+    const queued = getQueuedTaskMessage(runTask.id);
+    const now = Date.now();
+    putQueuedTaskMessage({
+      taskId: runTask.id,
+      settings: { ...taskRunSettings(runTask), mode: 'task' },
+      invitedProfileIds: [], collaborationScope: 'discussion', confirmPersistentCollaboration: false,
+      createdAt: now,
+      ...queued,
+      id: randomUUID(),
+      content: queued && queued.content !== pendingSteer ? `${pendingSteer}\n\n${queued.content}` : pendingSteer,
+      updatedAt: now,
+    });
+    cancelRecovery(runTask.id, 'An undelivered message is saved in the queue. Review it before continuing.');
+  }
   return { responseText, sawDone, context: doneContext, hadError, interrupted, pendingSteer };
 }
 
@@ -638,17 +659,22 @@ async function consumeCollaborationRun(
         error: contribution.error,
       })));
 
-    const chair = await streamChatTurn(runTask, runTask.id, content, {
-      completeOnDone: true,
-      supplementalSystemMessage: supplemental,
-      hideInternalEvents: true,
-      performanceTrace,
-    });
-    if (chair.context !== undefined) finalContext = chair.context;
-    if (active.cancelled || chair.interrupted || getRunStatus(runTask.id)?.status === 'stopped') {
-      cancelCollaborationRun(collaborationRunId);
-      return;
-    }
+    let chair: StreamChatTurnResult;
+    let turnContent = content;
+    do {
+      chair = await streamChatTurn(runTask, runTask.id, turnContent, {
+        completeOnDone: true,
+        supplementalSystemMessage: supplemental,
+        hideInternalEvents: true,
+        performanceTrace,
+      });
+      if (chair.context !== undefined) finalContext = chair.context;
+      if (active.cancelled || chair.interrupted || getRunStatus(runTask.id)?.status === 'stopped') {
+        cancelCollaborationRun(collaborationRunId);
+        return;
+      }
+      turnContent = chair.pendingSteer ?? '';
+    } while (turnContent && !chair.hadError);
     const persisted = getCollaborationRun(collaborationRunId);
     const contributorErrors = persisted?.contributions.some((result) => result.status === 'error') ?? false;
     updateCollaborationRun(

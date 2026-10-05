@@ -90,8 +90,9 @@ class PerformanceTests(unittest.TestCase):
 
     def test_worker_queue_and_cleanup_timing_use_the_request_trace(self):
         import hermes_worker as worker
-        def run(_rid, _request, performance_trace=None):
+        def run(_rid, _request, performance_trace=None, pending_steers=None):
             self.assertIsNotNone(performance_trace)
+            self.assertEqual(pending_steers, [])
             performance_trace.mark('history_ready')
             return [{'id': 'request', 'type': 'done', 'interrupted': True}]
         with patch.dict(os.environ, {'OLYMPUS_PERF_DIAGNOSTICS': '1'}), \

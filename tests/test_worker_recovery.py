@@ -50,7 +50,7 @@ class RecoveryTests(unittest.TestCase):
             raise AssertionError('Missing notification never reconciled native state')
         return None
 
-    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, saved_history=None, on_turn=None, **request_extra):
+    def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, saved_history=None, on_turn=None, initial_result=None, **request_extra):
         outer = self
         class Agent:
             session_id = 'task-1'
@@ -63,7 +63,7 @@ class RecoveryTests(unittest.TestCase):
                 if len(outer.messages) == 1 and dispatch:
                     self.tool_progress_callback('tool.completed', 'delegate_task', None, None,
                         result='{"status":"dispatched","delegation_id":"deleg-1"}')
-                    return {'final_response': 'Working'}
+                    return initial_result or {'final_response': 'Working'}
                 if len(outer.messages) > 4:
                     raise AssertionError('Previous user message replayed or unbounded synthesis')
                 return synthesis or {'final_response': 'Synthesized', 'completed': True}
@@ -91,6 +91,51 @@ class RecoveryTests(unittest.TestCase):
                 terminal = worker._run_chat('request-1', request)
                 if terminal:
                     self.sent.extend(terminal)
+
+    def test_native_finalizer_returns_late_attachment_for_follow_up(self):
+        content = "Here\n\n[Attached files:\n- /workspace/uploads/new-screenshot.jpg]"
+        # Hermes already drained its queue into pending_steer before returning.
+        self.run_chat(dispatch=False, synthesis={
+            'final_response': 'Previous answer', 'completed': True,
+            'pending_steer': content,
+        })
+        done = next(event for event in self.sent if event['type'] == 'done')
+        self.assertEqual(done.get('pendingSteer'), content)
+        self.assertEqual(len(self.messages), 1, 'The server owns normal follow-up admission')
+
+    def test_native_pending_steer_and_later_acceptance_are_both_preserved(self):
+        first = "Here\n\n[Attached files:\n- /workspace/uploads/first.png]"
+        second = "Also compare this\n\n[Attached files:\n- /workspace/uploads/second.png]"
+        self.run_chat(dispatch=False, synthesis={
+            'final_response': 'Previous answer', 'completed': True,
+            'pending_steer': first,
+        }, on_turn=lambda agent, _: setattr(agent, '_drain_pending_steer', lambda: second))
+        done = next(event for event in self.sent if event['type'] == 'done')
+        self.assertEqual(done.get('pendingSteer'), first + '\n\n' + second)
+
+    def test_pending_attachment_survives_background_child_continuation(self):
+        content = "Here\n\n[Attached files:\n- /workspace/uploads/preview.png]"
+        self.run_chat(initial_result={'final_response': 'Working', 'pending_steer': content})
+        self.assertEqual(len(self.messages), 2, 'The saved child result was synthesized')
+        done = next(event for event in self.sent if event['type'] == 'done')
+        self.assertEqual(done.get('pendingSteer'), content, 'A later native result cannot overwrite an earlier pending steer')
+
+    def test_user_stop_does_not_resume_native_pending_steer(self):
+        self.run_chat(dispatch=False, synthesis={
+            'final_response': '', 'interrupted': True, 'pending_steer': 'Do not restart after Stop',
+        })
+        done = next(event for event in self.sent if event['type'] == 'done')
+        self.assertTrue(done['interrupted'])
+        self.assertNotIn('pendingSteer', done)
+
+    def test_failed_child_returns_pending_attachment_on_terminal_error(self):
+        content = "Here\n\n[Attached files:\n- /workspace/uploads/preview.png]"
+        self.run_chat(threaded=True,
+            initial_result={'final_response': 'Working', 'pending_steer': content},
+            synthesis={'failed': True, 'error': 'Synthesis failed'})
+        error = next(event for event in self.sent if event['type'] == 'error')
+        self.assertEqual(error.get('pendingSteer'), content)
+        self.assertEqual(len(self.messages), 2, 'Failure does not restart agent work')
 
     def test_project_github_survives_rotated_session_before_child_synthesis(self):
         import json

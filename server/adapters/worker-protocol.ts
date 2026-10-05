@@ -151,4 +151,4 @@ export type WorkerEvent =
       pendingSteer?: string;
       modelResolution?: AgentModelResolution;
     }
-  | { id: string; type: 'error'; error: string | WorkerErrorPayload };
+  | { id: string; type: 'error'; error: string | WorkerErrorPayload; pendingSteer?: string };

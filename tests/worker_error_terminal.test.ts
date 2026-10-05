@@ -14,7 +14,7 @@ assert.equal(ended, 1, 'trailing done cannot resettle an error');
 
 const adapter = new HermesWorkerAdapter({ hermesHome: '/unused-hermes-home' });
 const adapterInternal = adapter as unknown as {
-  client: { stream(): AsyncIterable<{ type: 'error'; error: { code: string; message: string } }> };
+  client: { stream(): AsyncIterable<{ type: 'error'; error: { code: string; message: string }; pendingSteer?: string }> };
 };
 adapterInternal.client.stream = async function* () {
   yield { type: 'error', error: { code: 'deadline_finalized', message: 'Checkpoint preserved' } };
@@ -22,6 +22,14 @@ adapterInternal.client.stream = async function* () {
 const mapped = [];
 for await (const event of adapter.chatStream('session', 'message')) mapped.push(event);
 assert.deepEqual(mapped, [{ type: 'error', error: '[deadline_finalized] Checkpoint preserved', code: 'deadline_finalized' }]);
+const pendingSteer = 'Here\n\n[Attached files:\n- /workspace/uploads/preview.png]';
+adapterInternal.client.stream = async function* () {
+  yield { type: 'error', error: { code: 'agent_failed', message: 'Child synthesis failed' }, pendingSteer };
+};
+for await (const event of adapter.chatStream('session', 'message')) {
+  assert.equal(event.type, 'error');
+  assert.equal(event.pendingSteer, pendingSteer, 'The attachment survives the terminal worker error boundary');
+}
 for (const code of ['openai_auth_required', 'openai_auth_unavailable', 'auth_error', 'rate_limit', 'quota_exhausted', 'model_error', 'provider_error']) {
   adapterInternal.client.stream = async function* () { yield { type: 'error', error: { code, message: 'secret-sentinel' } }; };
   for await (const event of adapter.chatStream('session', 'message')) {

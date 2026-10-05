@@ -482,8 +482,11 @@ def _error_payload(exc: BaseException) -> dict[str, str]:
     return {'message': message, 'code': code, 'hint': hint}
 
 
-def _send_error(request_id: str, exc: BaseException) -> None:
-    _send({"id": request_id, "type": "error", "error": _error_payload(exc)})
+def _send_error(request_id: str, exc: BaseException, pending_steer: str | None = None) -> None:
+    event = {"id": request_id, "type": "error", "error": _error_payload(exc)}
+    if pending_steer:
+        event["pendingSteer"] = pending_steer
+    _send(event)
 
 
 def _resolve_agent_dir_from_hermes_cli() -> Path | None:
@@ -992,38 +995,9 @@ def _steer_active_chat(request: dict[str, Any]) -> dict[str, bool]:
         return {"steered": bool(agent.steer(message))}
 
 
-def _install_steer_delivery_recorder(agent: Any, session_db: Any, session_id: str) -> None:
-    """Persist only genuinely applied steers as trusted display-only rows."""
-    raw_drain = getattr(agent, "_drain_pending_steer", None)
-    if not callable(raw_drain):
-        return
-    setattr(agent, "_olympus_raw_drain_pending_steer", raw_drain)
-
-    def drain_and_record() -> Any:
-        message = raw_drain()
-        text = string_or_none(message)
-        if text:
-            try:
-                session_db.append_message(
-                    session_id,
-                    "user",
-                    text,
-                    display_kind="olympus_steer",
-                    display_metadata={"source": "olympus_steer"},
-                )
-            except Exception:
-                # Display persistence must never break model delivery.
-                pass
-        return message
-
-    setattr(agent, "_drain_pending_steer", drain_and_record)
-
-
 def _drain_unapplied_steer(agent: Any) -> str | None:
     """Return a steer that was accepted after the final usable tool batch."""
-    drain = getattr(agent, "_olympus_raw_drain_pending_steer", None)
-    if not callable(drain):
-        drain = getattr(agent, "_drain_pending_steer", None)
+    drain = getattr(agent, "_drain_pending_steer", None)
     if not callable(drain):
         return None
     try:
@@ -1959,7 +1933,8 @@ def _goal_evaluate(request: dict[str, Any]) -> dict[str, Any]:
     return _project_goal_decision(decision, mgr.state)
 
 
-def _run_chat(request_id: str, request: dict[str, Any], performance_trace: PerformanceTrace | None = None) -> list[dict[str, Any]]:
+def _run_chat(request_id: str, request: dict[str, Any], performance_trace: PerformanceTrace | None = None,
+              pending_steers: list[str] | None = None) -> list[dict[str, Any]]:
     settings = request.get("settings") if isinstance(request.get("settings"), dict) else {}
     requested_model = string_or_none(settings.get("model"))
     requested_provider = string_or_none(settings.get("provider"))
@@ -2185,7 +2160,6 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
         )
     )
     emit_model_resolution()
-    _install_steer_delivery_recorder(agent, session_db, session_id)
     _register_active_agent(_task_key_for(request), request_id, agent)
     _sync_session_identity(agent, session_id)
     task_id = string_or_none(request.get("taskId")) or session_id
@@ -2207,6 +2181,8 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
     delivery_event = None
     delivery_claim = None
     next_message = message
+    if pending_steers is None:
+        pending_steers = []
     completed_turn = False
 
     def save_interrupt():
@@ -2268,6 +2244,12 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
                     conversation_history=history,
                     task_id=session_id,
                 )
+
+            # Hermes finalization drains late steers into the result. Reading
+            # only the now-empty agent queue would silently lose those messages.
+            returned_steer = _strip_internal_deadline_steers(string_or_none(result.get("pending_steer")))
+            if returned_steer:
+                pending_steers.append(returned_steer)
 
             if result.get("interrupted"):
                 save_interrupt()
@@ -2414,6 +2396,9 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
         # No model/tool work can consume another steer after the continuation
         # loop exits (including return/error paths), so retire the agent here.
         _unregister_active_agent(_task_key_for(request), request_id)
+        pending_steer = _strip_internal_deadline_steers(_drain_unapplied_steer(agent))
+        if pending_steer:
+            pending_steers.append(pending_steer)
 
     terminal_events = []
 
@@ -2435,9 +2420,8 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
             agent, requested_resolution, fallback_reason=fallback_reason,
         ),
     }
-    pending_steer = _strip_internal_deadline_steers(_drain_unapplied_steer(agent))
-    if pending_steer:
-        done_event["pendingSteer"] = pending_steer
+    if pending_steers:
+        done_event["pendingSteer"] = "\n\n".join(pending_steers)
     terminal_events.append(done_event)
     return terminal_events
 
@@ -2446,13 +2430,14 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
     performance_trace = PerformanceTrace(request.get('timingTraceId'))
     performance_trace.mark('dispatched')
     terminal_events = []
+    pending_steers: list[str] = []
     failure = None
     acquired = False
     try:
         AGENT_SEMAPHORE.acquire()
         acquired = True
         performance_trace.mark('slot_acquired')
-        terminal_events = _run_chat(request_id, request, performance_trace=performance_trace) or []
+        terminal_events = _run_chat(request_id, request, performance_trace=performance_trace, pending_steers=pending_steers) or []
     except Exception as exc:
         failure = exc
     finally:
@@ -2468,7 +2453,8 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
     # A terminal event can trigger an immediate evaluator or follow-up. All
     # old-run writes and cleanup must finish before the client observes it.
     if failure is not None:
-        _send_error(request_id, failure)
+        # Error closes the Node stream; its follow-up done event is not read.
+        _send_error(request_id, failure, "\n\n".join(pending_steers) or None)
         terminal_events = [{
             "id": request_id,
             "type": "done",

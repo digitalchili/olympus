@@ -644,7 +644,8 @@ export class HermesWorkerAdapter implements AgentAdapter {
           yield { type: 'interaction_settled', interactionId: event.interactionId, interactionStatus: event.status };
           break;
         case 'error':
-          yield { type: 'error', error: formatWorkerError(event.error), code: workerErrorCode(event.error) };
+          yield { type: 'error', error: formatWorkerError(event.error), code: workerErrorCode(event.error),
+            ...(event.pendingSteer ? { pendingSteer: event.pendingSteer } : {}) };
           break;
         case 'done':
           yield {

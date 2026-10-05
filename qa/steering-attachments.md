@@ -15,3 +15,19 @@ Verification:
 Ignored local browser screenshots: `.tmp-native-qa-steering/accepted.jpg` and `.tmp-native-qa-steering/declined.jpg`.
 
 Read-only inspection found the reported live installation running 0.7.24. The screenshot's queued message had already cleared, so its exact payload could not be confirmed. No live task was steered and no installation was updated or restarted.
+
+## Late delivery at native finalization — 2026-10-05
+
+A separate failure remained when a steer arrived during the final model response. The pinned Hermes runtime drains it into `run_conversation()`'s `pending_steer` result. Olympus read only the agent's already-empty queue, so no follow-up ran. Its drain wrapper also persisted a display-only receipt even for that undelivered message; replay correctly excluded the receipt, leaving the agent with the older attachment.
+
+The worker now forwards native pending messages, plus any later accepted steer, through the existing `pendingSteer` continuation contract. Pending messages survive intermediate child-result continuations. Collaboration continues only the chair, without repeating contributor work. A failed continuation returns the pending message on its terminal error and saves it in the existing durable queue, preserving newer queued content and requiring explicit retry. Explicit Stop still ends work. Native Hermes owns the persisted applied-steer row; Olympus no longer treats a queue drain as evidence of delivery. Display projection unwraps the native marker while preserving the attachment footer, and model replay keeps its native steering provenance.
+
+Regression coverage includes the native finalizer result with an image footer (failed before the fix), a second late acceptance, successful/failed child-result continuation, explicit Stop, and real Task/Goal/collaboration routes continuing exactly once before review. Worker error transport and durable queue restoration cover failed delivery, including a newer queued request. An optional native test exercises the pinned Hermes steering helper, SQLite persistence, full/paged display, and model replay without invoking a model:
+
+```sh
+OLYMPUS_NATIVE_HERMES_SOURCE=/path/to/hermes-agent /path/to/hermes-python tests/test_steering_native.py
+```
+
+The reported live conversation was inspected read-only. Its steered image receipt appeared immediately after the completed answer, and the next reply referred to the earlier screenshot. A later ordinary resend produced a response about the new Preview Config screenshot. No live task, transcript, or installation was changed.
+
+Final validation: `npm test`, `npm run typecheck`, `npm run build`, `git diff --check`, and the explicit native test against pinned Hermes 0.21.5 passed. The regular suite retains optional environment-dependent skips; the native steering test was run separately with the installed Hermes venv. Independent review found no remaining actionable issues after the collaboration, failed-continuation, and duplicate-queue regressions were fixed. Model interpretation of image pixels was not exercised.

@@ -39,9 +39,8 @@ def _sanitize_agent_history(history: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         if item.get("display_kind") == "olympus_steer":
-            # This trusted display-only row makes an applied steer visible in
-            # Olympus. Hermes already receives the same text in the tool-result
-            # marker, so replaying the row would duplicate the instruction.
+            # Legacy Olympus display receipts are not delivery evidence. Native
+            # Hermes owns the actual steered user row and its replay context.
             continue
         role = item.get("role")
         if role not in {"user", "assistant", "system", "tool"}:
@@ -55,6 +54,10 @@ def _sanitize_agent_history(history: Any) -> list[dict[str, Any]]:
         if not safe_item.get("content") and not safe_item.get("tool_calls") and not safe_item.get("tool_call_id"):
             continue
         safe_item["role"] = role
+        if item.get("display_kind") == "steer":
+            # Native alternation repair must keep the steer separate from the
+            # user's next message instead of merging both into its marker.
+            safe_item["display_kind"] = "steer"
         safe.append(safe_item)
     return safe
 
@@ -188,8 +191,15 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 
-def _strip_olympus_user_scaffold(content: str) -> str:
+def _strip_olympus_user_scaffold(content: str, display_kind: Any = None) -> str:
     stripped = content.lstrip()
+    if display_kind == "steer":
+        header, _, body = stripped.partition("\n")
+        closing = "\n[/OUT-OF-BAND USER MESSAGE]"
+        if header.startswith("[OUT-OF-BAND USER MESSAGE") and header.endswith("]") and body.endswith(closing):
+            # Unwrap only native typed rows, retaining the exact attachment
+            # footer for cards. The model still receives the native marker.
+            return body[:-len(closing)]
     if stripped.startswith("[TASK AGENT]"):
         marker = "[TASK DESCRIPTION]"
         marker_index = stripped.find(marker)
@@ -272,7 +282,7 @@ def project_session_messages(session_id: Any, task_id: Any = None) -> dict[str, 
 
             content = _content_to_text(row.get("content"))
             if role == "user":
-                content = _strip_olympus_user_scaffold(content)
+                content = _strip_olympus_user_scaffold(content, row.get("display_kind"))
                 if _is_compaction_reference(content):
                     projected.append({
                         "id": f"hermes:{lineage_session_id}:compaction:{row.get('id')}",
@@ -413,7 +423,7 @@ def _child_projection_boundary(session_db: Any, session_id: str, count: int) -> 
             row = dict(row)
         if row.get("role") != "user":
             continue
-        content = _strip_olympus_user_scaffold(_content_to_text(row.get("content")))
+        content = _strip_olympus_user_scaffold(_content_to_text(row.get("content")), row.get("display_kind"))
         row_id = int(row.get("id") or 0)
         if marker_id is None:
             if _is_compaction_reference(content):
@@ -440,7 +450,7 @@ def _project_message_page_row(
     row_id = int(row.get("id") or 0)
     content = _content_to_text(row.get("content"))
     if role == "user":
-        content = _strip_olympus_user_scaffold(content)
+        content = _strip_olympus_user_scaffold(content, row.get("display_kind"))
         if _is_compaction_reference(content):
             return {
                 "id": f"hermes:{lineage_session_id}:compaction:{row.get('id')}",

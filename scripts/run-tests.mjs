@@ -14,6 +14,7 @@ const pythonTests = [
   'test_worker_openai_guard.py',
   'test_worker_model_responsiveness.py',
   'test_hermes_worker_resolve.py',
+  'test_steering_native.py',
   'test_hermes_sessions_pagination.py',
   'test_delegation_event_projection.py',
   'test_worker_environment_overrides.py',

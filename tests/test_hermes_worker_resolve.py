@@ -341,33 +341,17 @@ class ResolveModelProviderTest(unittest.TestCase):
             "Follow-up that missed the final tool call",
         )
 
-    def test_applied_steer_is_persisted_as_trusted_display_only_row(self):
-        class FakeAgent:
-            pending = ["Applied steer", "Late steer"]
-
-            def _drain_pending_steer(self):
-                return self.pending.pop(0)
-
-        class FakeSessionDB:
-            appended = []
-
-            def append_message(self, *args, **kwargs):
-                self.appended.append((args, kwargs))
-
-        agent = FakeAgent()
-        session_db = FakeSessionDB()
-        hermes_worker._install_steer_delivery_recorder(agent, session_db, "session-1")
-
-        self.assertEqual(agent._drain_pending_steer(), "Applied steer")
-        self.assertEqual(
-            session_db.appended,
-            [(('session-1', 'user', 'Applied steer'), {
-                'display_kind': 'olympus_steer',
-                'display_metadata': {'source': 'olympus_steer'},
-            })],
-        )
-        self.assertEqual(hermes_worker._drain_unapplied_steer(agent), "Late steer")
-        self.assertEqual(len(session_db.appended), 1)
+    def test_native_steer_preserves_attachment_in_replay_and_display(self):
+        content = "Here\n\n[Attached files:\n- /workspace/uploads/new-screenshot.jpg]"
+        native = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\n" + content + "\n[/OUT-OF-BAND USER MESSAGE]"
+        row = {"id": 1, "role": "user", "content": native, "display_kind": "steer", "timestamp": 1}
+        self.assertEqual(hermes_sessions._sanitize_agent_history([row]), [
+            {"role": "user", "content": native, "display_kind": "steer"},
+        ])
+        projected = hermes_sessions._project_message_page_row(row, "session-1", "task-1", None)
+        self.assertEqual(projected["content"], content)
+        self.assertEqual(hermes_sessions._strip_olympus_user_scaffold(native), native,
+                         "User-typed marker lookalikes are not native delivery receipts")
 
     def test_display_only_steer_is_not_replayed_to_model(self):
         history = [
