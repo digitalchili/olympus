@@ -40,7 +40,7 @@ export function Column({ status, tasks, taskRuns, isLast = false, onRequestDelet
   }, []);
 
   return (
-    <div className={`group/column flex flex-col min-w-[272px] max-w-[360px] flex-1 ${
+    <div className={`group/column flex flex-col min-w-[272px] flex-1 ${
       isLast ? 'pr-0' : 'border-r border-zinc-200 pr-6 dark:border-zinc-800'
     }`}>
       <div className="flex items-center gap-2 mb-3 pl-1">
