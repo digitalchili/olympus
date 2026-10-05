@@ -16,6 +16,7 @@ const {default: app, adapter} = await import('../server/app.js');
 const {default: db} = await import('../server/db/index.js');
 const {getQueuedTaskMessage} = await import('../server/db/task-message-queue.js');
 const {getTask} = await import('../server/db/queries.js');
+const {createProject} = await import('../server/db/projects.js');
 const {getLatestTaskAgentRun} = await import('../server/db/task-agent-runs.js');
 const {configureQueuedMessageDispatcher,createQueuedMessageDispatcher,assertQueuedMessageDeliveryResponse} = await import('../server/queued-message-dispatcher.js');
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');
@@ -23,9 +24,16 @@ const base=`http://127.0.0.1:${(server.address() as {port:number}).port}/api/tas
 const deferred: Array<()=>void>=[];
 let starts=0;
 adapter.getBackgroundWork=async()=>({available:true,work:[]});
+adapter.getDefaults=async()=>({model:'profile-default',provider:'default-provider',reasoningEffort:'high',showReasoning:true,baseUrl:null,apiMode:null});
 adapter.setGoal=async()=>({goal:'Replacement',status:'active',turnsUsed:0,maxTurns:20});
 adapter.evaluateGoal=async()=>({status:'done',shouldContinue:false,verdict:'done',reason:'finished',message:''});
-adapter.chatStream=async function*(sessionId, content){starts++;assert.equal(content,'Replacement for AU0080\n\n[file](/saved/wines.csv)');yield {type:'text_delta',content:'Found replacement.'};yield {type:'done',sessionId};};
+adapter.chatStream=async function*(sessionId, content, options){
+ starts++;
+ assert.equal(content,'Replacement for AU0080\n\n[file](/saved/wines.csv)');
+ assert.deepEqual(options?.settings,{model:'native-model',provider:'openai-codex',reasoningEffort:'low'},'queued startup forwards the selected settings to Hermes');
+ assert.equal(getTask(sessionId)?.profile_name,'som');
+ yield {type:'text_delta',content:'Found replacement.'};yield {type:'done',sessionId};
+};
 const deliveryErrors: unknown[]=[];
 const dispatcher=createQueuedMessageDispatcher({load:getQueuedTaskMessage,isActive:()=>false,defer:work=>deferred.push(work),onError:(_id,error)=>deliveryErrors.push(error),deliver:async(id,message)=>{
  const response=await fetch(`${base}/${id}/messages?profile=${getTask(id)!.profile_name}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...message,queuedMessageId:message.id})});
@@ -47,6 +55,25 @@ try {
  assert.equal(getLatestTaskAgentRun(task.id)?.status,'done',JSON.stringify(deliveryErrors));
  assert.equal(starts,1);assert.equal(getQueuedTaskMessage(task.id),undefined);
  dispatcher.schedule(task.id);deferred.shift()!();await new Promise(r=>setTimeout(r,20));assert.equal(starts,1);
+ const project=createProject({name:'Project model selection',purpose:'Test selected startup settings',managerProfileId:'som',changedBy:'test'});
+ for(const mode of ['task','goal']) {
+  const selected={mode,model:'native-model',provider:'openai-codex',reasoningEffort:'low'};
+  const created=await fetch(`${base}?profile=som`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+   title:'Project selected model',description:'Use the selected model',projectId:project.id,
+   initialMessage:{content:saved.content,settings:selected},
+  })});
+  assert.equal(created.status,201);
+  const {task:projectTask}=await created.json();
+  assert.deepEqual(getQueuedTaskMessage(projectTask.id)?.settings,selected,'Project settings survive durable task creation');
+  const previousStarts=starts;
+  deferred.splice(0).forEach(dispatch=>dispatch());
+  for(let i=0;i<100 && getLatestTaskAgentRun(projectTask.id)?.status!=='done';i++) await new Promise(r=>setTimeout(r,10));
+  assert.equal(getLatestTaskAgentRun(projectTask.id)?.status,'done',JSON.stringify(deliveryErrors));
+  assert.equal(starts,previousStarts+1);
+  const settingsResponse=await fetch(`${base}/${projectTask.id}/agent-settings?profile=som`);
+  assert.equal(settingsResponse.status,200);
+  assert.deepEqual((await settingsResponse.json()).task,{model:selected.model,provider:selected.provider,reasoningEffort:selected.reasoningEffort},'reopening the task keeps its selected settings');
+ }
  const count=()=> (db.prepare('SELECT count(*) AS n FROM tasks').get() as {n:number}).n;
  const before=count();assert.equal((await post({content:'',settings:{mode:'goal'}})).status,400);assert.equal(count(),before);
  assert.equal((await post({content:'x',settings:{mode:'bad'}})).status,400);assert.equal(count(),before);

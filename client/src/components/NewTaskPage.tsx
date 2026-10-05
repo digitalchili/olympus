@@ -151,7 +151,7 @@ export function NewTaskPage() {
         handlingProfileId: selectedProject ? null : handlerProfileId,
         routingProfileId: handlerProfileId,
         initialMessage: { content: initialMessage,
-          settings: selectedProject ? { mode: runMode } : { model, provider, reasoningEffort, mode: runMode },
+          settings: { model, provider, reasoningEffort, mode: runMode },
           invitedProfileIds: selectedProfiles.map(profile => profile.id) },
       });
       clearFiles();
