@@ -11,6 +11,11 @@ export type ChatSendFailure = {
 export type SendMessageResult = { ok: true; runId?: string } | ChatSendFailure;
 export type ProjectChatBlocker = ChatSendFailure;
 
+export type PublicationIssueCode = 'PUBLICATION_PENDING' | 'PUBLICATION_UNCONFIRMED' | 'PUBLICATION_CONFLICT';
+export function isPublicationIssue(code: string | undefined): code is PublicationIssueCode {
+  return code === 'PUBLICATION_PENDING' || code === 'PUBLICATION_UNCONFIRMED' || code === 'PUBLICATION_CONFLICT';
+}
+
 export function chatSendFailure(status: number, body: unknown): ChatSendFailure {
   const details = body && typeof body === 'object' ? body as Record<string, unknown> : {};
   const failure: ChatSendFailure = { ok: false, conflict: status === 409, error: typeof details.error === 'string' && details.error ? details.error : `HTTP ${status}` };
@@ -18,6 +23,11 @@ export function chatSendFailure(status: number, body: unknown): ChatSendFailure 
     if (typeof details[key] === 'string') failure[key] = details[key];
   }
   if (details.reason === 'changes' || details.reason === 'editor') failure.reason = details.reason;
+  if (isPublicationIssue(failure.code)) {
+    failure.error = failure.code === 'PUBLICATION_CONFLICT'
+      ? 'Your saved push needs attention. Open Review publication to continue.'
+      : 'Your push is saved but not yet confirmed on GitHub. Use Resume publication; no need to submit it again.';
+  }
   return failure;
 }
 

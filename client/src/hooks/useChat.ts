@@ -18,7 +18,7 @@ import { createUuid } from '../lib/uuid';
 import type { AgentRunSettings } from '../lib/api';
 import { shouldAppendRunErrorToReply } from '@shared/run-errors';
 import { currentLiveRun, runFailureNoticeForState, type RunFailureNotice } from '../lib/runFailurePresentation';
-import { chatSendFailure, settleProjectChatBlocker, type ProjectChatBlocker, type SendMessageResult } from '../lib/chatSendRecovery';
+import { chatSendFailure, isPublicationIssue, settleProjectChatBlocker, type ProjectChatBlocker, type PublicationIssueCode, type SendMessageResult } from '../lib/chatSendRecovery';
 
 export type { ContextUsage, ToolProgressEvent };
 
@@ -336,7 +336,10 @@ export function prependOlderMessages(current: ChatMessage[], older: ChatMessage[
   return [...uniqueOlder, ...current];
 }
 
-export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
+export function useChat(onRunStatus?: (run: TaskRunState | null) => void, onPublicationIssue?: (code: PublicationIssueCode) => void) {
+  // A parent metadata refresh must not replace sendMessage and reset TaskChat's draft.
+  const publicationIssueListener = useRef(onPublicationIssue);
+  publicationIssueListener.current = onPublicationIssue;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [stopped, setStopped] = useState(false);
@@ -746,13 +749,16 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void) {
         const failure = chatSendFailure(res.status, await res.json().catch(() => ({})));
         if (abort.signal.aborted) return { ok: false, error: 'Message send was cancelled.' };
         setProjectBlocker(previous => settleProjectChatBlocker(previous, taskIdRef.current, taskId, failure));
+        const notifyPublicationIssue = publicationIssueListener.current;
+        const showPublicationNotice = isPublicationIssue(failure.code) && Boolean(notifyPublicationIssue);
+        if (isPublicationIssue(failure.code) && taskIdRef.current === taskId) notifyPublicationIssue?.(failure.code);
         finishOptimisticSendError(
           taskId,
           optimisticRun?.runId,
           content,
           failure.error,
           shouldShowChatSendError(res.status, failure.code) && options?.appendLocalError !== false,
-          failure.code === 'PROJECT_REPOSITORY_BUSY',
+          failure.code === 'PROJECT_REPOSITORY_BUSY' || showPublicationNotice,
         );
         return failure;
       }

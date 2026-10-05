@@ -31,7 +31,8 @@ class FakeEventSource {
   close() { this.readyState = FakeEventSource.CLOSED; }
 }
 
-function harness() {
+function harness(onPublicationIssue?: (code: string) => void) {
+  let publicationListener = onPublicationIssue;
   useStore.getState().setTaskRuns([]);
   const slots: unknown[] = [];
   let cursor = 0;
@@ -56,7 +57,13 @@ function harness() {
         if (!(index in slots)) slots[index] = { current: initial };
         return slots[index];
       },
-      useCallback: (callback: unknown) => callback,
+      useCallback: (callback: unknown, deps: unknown[]) => {
+        const index = cursor++;
+        const previous = slots[index] as { callback: unknown; deps: unknown[] } | undefined;
+        if (previous && deps.every((dep, i) => dep === previous.deps[i])) return previous.callback;
+        slots[index] = { callback, deps };
+        return callback;
+      },
       useEffect: () => {},
     } : requireHookDependency(name),
     EventSource: class extends FakeEventSource {
@@ -71,13 +78,15 @@ function harness() {
     console,
   });
   const mountedUseChat = (exports as { useChat: typeof useChat }).useChat;
+  const onRunStatus = (run: TaskRunState | null) => { fetchedRuns.push(run); reconcilePersistedTaskRun(run); };
   const render = () => {
     cursor = 0;
-    return mountedUseChat((run) => { fetchedRuns.push(run); reconcilePersistedTaskRun(run); });
+    return mountedUseChat(onRunStatus, publicationListener);
   };
   const respond = (index: number, body: TaskMessagesPage) => requests[index].resolve(Response.json(body));
   return {
     render, sources, requests, respond, timers, fetchedRuns,
+    setPublicationListener(listener: (code: string) => void) { publicationListener = listener; },
     async load(page = history()) {
       const loaded = render().loadMessages('task-1');
       respond(requests.length - 1, page);
@@ -115,6 +124,44 @@ function history(run?: LiveChatRun): TaskMessagesPage {
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const originalFetch = globalThis.fetch;
 try {
+  {
+    const h = harness();
+    await h.load();
+    const sendMessage = h.render().sendMessage;
+    const notices: string[] = [];
+    h.setPublicationListener(code => notices.push(code));
+    assert.equal(h.render().sendMessage, sendMessage, 'loading Project metadata must not change sendMessage and reset the chat draft');
+    const sending = sendMessage('task-1', 'commit and push');
+    h.setPublicationListener(code => notices.push(`current:${code}`));
+    h.render();
+    h.requests.at(-1)!.resolve(Response.json({ code: 'PUBLICATION_PENDING', error: 'Saved push' }, { status: 409 }));
+    await sending;
+    assert.deepEqual(notices, ['current:PUBLICATION_PENDING'], 'stable sendMessage still notifies the current listener');
+  }
+  for (const code of ['PUBLICATION_PENDING', 'PUBLICATION_UNCONFIRMED', 'PUBLICATION_CONFLICT']) {
+    const notices: string[] = [];
+    const h = harness(value => notices.push(value));
+    await h.load();
+    const sending = h.render().sendMessage('task-1', 'commit and push');
+    h.requests.at(-1)!.resolve(Response.json({ code, error: 'A saved publication is pending.' }, { status: 409 }));
+    assert.equal((await sending).ok, false, 'a saved publication is not a successful push');
+    assert.deepEqual(notices, [code], 'publication blockers must reach the compact status UI');
+    assert.equal(h.render().isStreaming, false, 'a saved receipt must not look like active work');
+    assert.ok(h.render().messages.every(message => !message.content.includes('[Error:')), 'handled publication status is not an assistant error');
+  }
+  {
+    const notices: string[] = [];
+    const h = harness(value => notices.push(value));
+    await h.load();
+    const sending = h.render().sendMessage('task-1', 'commit and push');
+    const request = h.requests.at(-1)!;
+    const switched = h.render().loadMessages('task-2');
+    h.respond(h.requests.length - 1, history());
+    await switched;
+    request.resolve(Response.json({ code: 'PUBLICATION_PENDING', error: 'Saved push' }, { status: 409 }));
+    await sending;
+    assert.deepEqual(notices, [], 'a late publication failure cannot show on another task');
+  }
   {
     const h = harness();
     const source = await h.load();

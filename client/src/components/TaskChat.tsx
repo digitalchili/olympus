@@ -3,6 +3,7 @@ import { pauseTaskRecovery } from '../lib/api';
 import { CodingEvidencePanel } from './CodingEvidencePanel';
 import { BackgroundWorkNotice } from './BackgroundWorkNotice';
 import { ProjectChatBlockedNotice } from './ProjectChatBlockedNotice';
+import { TaskPublicationNotice } from './TaskPublicationNotice';
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo, Fragment } from 'react';
 import { ArrowUp, Loader2, ChevronDown, ChevronRight, Check, Terminal, FileText, FilePenLine, Globe, Code, Wrench, X, Target, Square } from 'lucide-react';
 import { InputToolbar, ContextRing } from './InputToolbar';
@@ -41,7 +42,7 @@ import { RunModelResolution } from './RunModelResolution';
 import { RunFailureBanner } from './RunFailureBanner';
 import { OpenAIAuthSettings } from './OpenAIAuthSettings';
 import { canManuallySendQueuedMessage, queuedMessageWaitingLabel, shouldAutoSendQueuedMessage, isOpenAIAuthAction } from '../lib/runFailurePresentation';
-import { restoreRejectedChatDraft } from '../lib/chatSendRecovery';
+import { restoreRejectedChatDraft, type PublicationIssueCode } from '../lib/chatSendRecovery';
 
 interface TaskChatProps {
   taskId: string;
@@ -52,6 +53,9 @@ interface TaskChatProps {
   initialSettings?: AgentRunSettings;
   initialInvitedProfileIds?: string[];
   collaborationRuns?: CollaborationRun[];
+  publicationIssue?: PublicationIssueCode | null;
+  onPublicationIssue?: (code: PublicationIssueCode) => void;
+  onReviewPublication?: () => void;
 }
 
 type QueuedMessage = QueuedTaskMessage;
@@ -273,6 +277,9 @@ export function TaskChat({
   initialSettings,
   initialInvitedProfileIds,
   collaborationRuns = [],
+  publicationIssue = null,
+  onPublicationIssue,
+  onReviewPublication,
 }: TaskChatProps) {
   const isBot = conversationKind === 'bot';
   const { activeProfileId, activeProfile } = useProfile();
@@ -294,7 +301,7 @@ export function TaskChat({
     historyRefreshError,
     loadMessages,
     loadOlderMessages,
-  } = useChat(reconcilePersistedTaskRun);
+  } = useChat(reconcilePersistedTaskRun, onPublicationIssue);
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const taskOutcome = useStore(s => s.taskOutcomes.get(taskId));
   const [continuing, setContinuing] = useState(false);
@@ -1217,6 +1224,7 @@ export function TaskChat({
             onReady={() => setOpenAIAuth(current => current?.key === authRunKey ? { ...current, ready: true } : current)} />
         </div>}
         {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
+        {!isBot && projectId && loadedTaskId === taskId && onReviewPublication && <TaskPublicationNotice issue={publicationIssue} onReview={onReviewPublication} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>

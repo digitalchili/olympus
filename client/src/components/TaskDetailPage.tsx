@@ -34,6 +34,7 @@ import type { CollaborationRun, ProjectSummary, TaskStatus } from '@shared/types
 import { useProfile, useProfileNavigate } from '../contexts/ProfileContext';
 import { usePageHeader } from './Header';
 import { TaskCommitPushModal } from './TaskCommitPushModal';
+import type { PublicationIssueCode } from '../lib/chatSendRecovery';
 
 export function TaskDetailPage() {
   const { taskId, projectId } = useParams<{ taskId: string; projectId?: string }>();
@@ -63,6 +64,8 @@ export function TaskDetailPage() {
   const [collaborationRuns, setCollaborationRuns] = useState<CollaborationRun[]>([]);
   const [projectSummary, setProjectSummary] = useState<ProjectSummary | null>(null);
   const [taskGitStatus, setTaskGitStatus] = useState<ProjectGitStatus | null>(null);
+  const [publicationIssue, setPublicationIssue] = useState<PublicationIssueCode | null>(null);
+  const gitStatusGeneration = useRef(0);
   const [showCommitPushModal, setShowCommitPushModal] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const markViewedInFlightRef = useRef<string | null>(null);
@@ -72,7 +75,7 @@ export function TaskDetailPage() {
   const projectName = projectSummary?.name ?? null;
   const repositoryLink = projectSummary?.repositoryLink ?? null;
   const canCommitPush = Boolean(effectiveProjectId && repositoryLink && repositoryLink.mode === 'branch_pr');
-  const publicationLabel = taskGitStatus?.pendingPublication ? 'Resume publication' : 'Commit & Push';
+  const publicationLabel = taskGitStatus?.pendingPublication || publicationIssue ? 'Resume publication' : 'Commit & Push';
 
   const parentPath = effectiveProjectId ? `/projects/${encodeURIComponent(effectiveProjectId)}` : '/';
   const pageHeader = useMemo(() => ({
@@ -89,23 +92,40 @@ export function TaskDetailPage() {
   }), [effectiveProjectId, parentPath, projectName, task?.title]);
   usePageHeader(pageHeader);
 
+  useEffect(() => {
+    setTaskGitStatus(null);
+    setPublicationIssue(null);
+    return () => { gitStatusGeneration.current++; };
+  }, [activeProfileId, effectiveProjectId, taskId]);
+
   const refreshTaskGitStatus = useCallback(async () => {
+    const request = ++gitStatusGeneration.current;
     if (!effectiveProjectId || !task) {
       setTaskGitStatus(null);
       return;
     }
     try {
       const editorRes = await fetchProjectEditor(effectiveProjectId, task.id);
+      if (request !== gitStatusGeneration.current) return;
       if (editorRes.editor?.taskId === task.id) {
         const statusRes = await fetchProjectEditorStatus(effectiveProjectId, task.id);
+        if (request !== gitStatusGeneration.current) return;
         setTaskGitStatus(statusRes.status);
+        if (!statusRes.status.pendingPublication) setPublicationIssue(null);
       } else {
         setTaskGitStatus(null);
+        setPublicationIssue(null);
       }
     } catch {
+      if (request !== gitStatusGeneration.current) return;
       setTaskGitStatus(null);
     }
   }, [effectiveProjectId, task]);
+
+  const handlePublicationIssue = useCallback((code: PublicationIssueCode) => {
+    setPublicationIssue(code);
+    void refreshTaskGitStatus();
+  }, [refreshTaskGitStatus]);
 
   useEffect(() => {
     if (!projectId || !task || task.project_id !== projectId) {
@@ -510,6 +530,9 @@ export function TaskDetailPage() {
             initialSettings={initialSettings}
             initialInvitedProfileIds={initialInvitedProfileIds}
             collaborationRuns={collaborationRuns}
+            publicationIssue={publicationIssue ?? (taskGitStatus?.pendingPublication ? 'PUBLICATION_PENDING' : null)}
+            onPublicationIssue={canCommitPush ? handlePublicationIssue : undefined}
+            onReviewPublication={canCommitPush ? () => setShowCommitPushModal(true) : undefined}
           />
         </div>
         <div className={`absolute inset-0 flex min-h-0 flex-col ${activeTab === 'collaboration' ? '' : 'invisible pointer-events-none'}`}>

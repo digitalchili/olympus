@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import * as recovery from '../client/src/lib/chatSendRecovery.js';
 import { ProjectChatBlockedNotice } from '../client/src/components/ProjectChatBlockedNotice.js';
+import { TaskPublicationNotice } from '../client/src/components/TaskPublicationNotice.js';
 
 const body = {
   error: 'Earlier design has saved changes. Finish that task before starting another.',
@@ -45,4 +46,19 @@ const legacyHtml = renderToStaticMarkup(createElement(MemoryRouter, null, create
 })));
 assert.match(legacyHtml, /href="\/projects\/project\/tasks\/prior%2Ftask\?profile=som"/, 'older servers still link within the active profile');
 assert.equal(renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ProjectChatBlockedNotice, { projectId: 'project', profileId: 'default', blocker: null }))), '');
+for (const code of ['PUBLICATION_PENDING', 'PUBLICATION_UNCONFIRMED', 'PUBLICATION_CONFLICT'] as const) {
+  const failure = recovery.chatSendFailure(409, { code, error: 'Raw server publication error' });
+  assert.doesNotMatch(failure.error, /Raw server/);
+  let opened = false;
+  const notice = TaskPublicationNotice({ issue: code, onReview: () => { opened = true; } });
+  const markup = renderToStaticMarkup(notice);
+  assert.match(markup, /role="status"/);
+  assert.match(markup, /bg-amber-50/);
+  assert.match(markup, /Your work is saved/);
+  assert.match(markup, code === 'PUBLICATION_CONFLICT' ? /Review publication/ : /Resume publication/);
+  assert.doesNotMatch(markup, /\[Error:|already working|animate-spin|Publishing now/i, 'a saved receipt must not claim active publishing');
+  notice!.props.children.at(-1).props.onClick();
+  assert.equal(opened, true, 'the notice opens recovery without publishing or retrying by itself');
+}
+assert.equal(TaskPublicationNotice({ issue: null, onReview() {} }), null, 'resolved publication leaves no notice');
 console.log('Project chat recovery tests passed');
