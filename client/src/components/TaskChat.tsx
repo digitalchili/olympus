@@ -358,6 +358,7 @@ export function TaskChat({
     retryFile,
     restoreTextFile,
     clearFiles,
+    restoreFiles,
     submitWithAttachments,
     dragHandlers,
     handlePaste,
@@ -757,6 +758,7 @@ export function TaskChat({
       return;
     }
 
+    const filesAtSend = pendingFiles;
     const messageText = submitWithAttachments(text);
     const invitedProfileIds = isBot ? [] : selectedProfiles.map((profile) => profile.id);
     const selectedAtSend = selectedProfiles;
@@ -764,6 +766,7 @@ export function TaskChat({
     const confirmationAtSend = !isBot && confirmPersistentCollaboration;
     const settings = { model, provider, reasoningEffort, mode: isBot || isGoalStreaming ? 'task' as const : runMode };
     if (taskBusyForQueue) {
+      const draftRevisionAtSend = draftRevisionRef.current;
       try {
         const { queuedMessage: persisted } = await putQueuedTaskMessage(taskId, {
           id: createUuid(),
@@ -773,15 +776,19 @@ export function TaskChat({
           collaborationScope: scopeAtSend,
           confirmPersistentCollaboration: confirmationAtSend,
         });
+        if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) return;
         setQueuedMessage(persisted);
         setQueuedSendError(null);
-        setInput('');
-        setSelectedProfiles([]);
-        setCollaborationScope('discussion');
-        setConfirmPersistentCollaboration(false);
-        setActiveMention(null);
+        if (draftRevisionRef.current === draftRevisionAtSend) {
+          setInput('');
+          setSelectedProfiles([]);
+          setCollaborationScope('discussion');
+          setConfirmPersistentCollaboration(false);
+          setActiveMention(null);
+        }
       } catch (error) {
-        setInput(messageText);
+        if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) return;
+        restoreFiles(filesAtSend);
         setUploadError(toErrorMessage(error, 'Could not queue the message'));
       }
       return;
@@ -805,13 +812,11 @@ export function TaskChat({
     if (!result.ok) {
       pendingRevealRef.current = false;
       setOutgoingRevealActive(false);
-      // submitWithAttachments already cleared the tray, so restore the full
-      // message (incl. attachment paths) rather than just the typed text —
-      // otherwise attachments are silently dropped when admission fails.
+      restoreFiles(filesAtSend);
       setInputValue(currentDraft => restoreRejectedChatDraft({
         currentTaskId: startupRef.current.taskId, responseTaskId: taskId,
         revisionAtSend: draftRevisionAtSend, currentRevision: draftRevisionRef.current,
-        currentDraft, sentContent: messageText,
+        currentDraft, sentContent: text,
       }));
       if (draftRevisionRef.current === draftRevisionAtSend) {
         setSelectedProfiles(selectedAtSend);
@@ -819,7 +824,7 @@ export function TaskChat({
         setConfirmPersistentCollaboration(confirmationAtSend);
       }
     }
-  }, [activeProfileId, isBot, submitWithAttachments, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
+  }, [activeProfileId, isBot, submitWithAttachments, restoreFiles, configPending, uploadBlocksSend, input, pendingFiles, queuedMessage, model, provider, reasoningEffort, runMode, isGoalStreaming, taskBusyForQueue, sendMessage, taskId, selectedProfiles, collaborationScope, confirmPersistentCollaboration, refreshPersistentGrants, setUploadError]);
 
   const handleCompact = useCallback(async () => {
     if (compactionBlocker || isStreaming) return;

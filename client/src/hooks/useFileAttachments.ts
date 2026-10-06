@@ -180,6 +180,16 @@ export function useFileAttachments(uploadBucketId: string, controlledInput?: Con
 
   useEffect(() => clearFiles, [clearFiles]);
 
+  // A rejected send still owns its uploads. Restore the cards with fresh
+  // previews because submission revoked the old URLs, keeping any newer files.
+  const restoreFiles = useCallback((files: PendingFile[]) => {
+    const restored = files.map((file) => ({
+      ...file,
+      previewUrl: file.previewUrl ? createObjectUrl(file.file) : null,
+    }));
+    setPendingFiles((prev) => [...restored, ...prev]);
+  }, []);
+
   // Uploads finish (or fail) before Send is enabled, so this just gathers the
   // already-uploaded paths. Callers gate Send on uploadBlocksSend, so every
   // remaining file here has an uploadedPath.
@@ -274,6 +284,7 @@ export function useFileAttachments(uploadBucketId: string, controlledInput?: Con
     retryFile,
     restoreTextFile,
     clearFiles,
+    restoreFiles,
     submitWithAttachments,
     dragHandlers: { onDragOver, onDragLeave, onDrop },
     handlePaste,
