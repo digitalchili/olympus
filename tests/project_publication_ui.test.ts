@@ -84,6 +84,28 @@ function harness() {
 const oldFetch = globalThis.fetch;
 const oldWindow = (globalThis as any).window;
 try {
+  const waiting = harness(); waiting.render();
+  const activeMessage = 'Wait for this task and its checks to finish, then try again.';
+  const notice = await waiting.respond(0, { error: activeMessage, code: 'PROJECT_OPERATION_ACTIVE' }, 409);
+  assert.match(notice, /role="status"/);
+  assert.match(notice, /Waiting for active work/);
+  assert.match(notice, /Wait for this task and its checks/);
+  assert.doesNotMatch(notice, /role="alert"|Unable to continue/);
+  assert.equal(waiting.requests.length, 1, 'showing a waiting notice must not publish or restart work');
+  waiting.click('Refresh status');
+  await waiting.respond(1, { editor });
+  const ready = await waiting.respond(2, { status: dirty });
+  assert.doesNotMatch(ready, /Waiting for active work/);
+  waiting.message('Publish once ready'); waiting.click('Commit &amp; Push');
+  assert.match(waiting.requests[3].url, /\/commit-push$/);
+
+  const failed = harness(); failed.render();
+  const failure = await failed.respond(0, { error: 'GitHub connection is unavailable', code: 'GITHUB_UNAVAILABLE' }, 503);
+  assert.match(failure, /role="alert"/);
+  assert.match(failure, /Unable to continue/);
+  assert.match(failure, /GitHub connection is unavailable/);
+  assert.doesNotMatch(failure, /Waiting for active work/);
+
   const h = harness(); h.render();
   await h.respond(0, { editor }); await h.respond(1, { status: dirty });
   assert.equal(h.inputs().find(node => node.props.type === 'checkbox')?.props.checked, false, 'a newly opened dialog must default to the task branch');

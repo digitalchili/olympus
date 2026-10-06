@@ -28,7 +28,12 @@ window.fetch = async (input, init) => {
   if (path.endsWith('/tasks')) return json({ tasks: [{ id: 'task-1', title: 'Publication fixture task', status: 'in_review', handling_profile_id: 'default' }] });
   if (path.endsWith('/editors')) return json({ editors: [editor] });
   if (path.endsWith('/versions')) return json({ versions: state.published ? [version] : [] });
-  if (path.endsWith('/editor/prepare')) return json({ editor });
+  if (path.endsWith('/editor/prepare')) {
+    if (state.outcome === 'busy') return json({ error: 'Wait for this task and its checks to finish, then try again.', code: 'PROJECT_OPERATION_ACTIVE' }, 409);
+    if (state.outcome === 'error') return json({ error: 'The GitHub connection is unavailable. Check the connection and try again.', code: 'GITHUB_UNAVAILABLE' }, 503);
+    return json({ editor });
+  }
+  if (path.endsWith('/generate-commit-message')) return json({ message: 'Update homepage design' });
   if (path.endsWith('/editor/status')) return json({ status: {
     clean: state.published || state.pending, changedFiles: state.published || state.pending ? [] : ['draft.txt'],
     summary: state.pending ? 'Saved commit; publication unconfirmed' : state.published ? 'Working tree is clean' : 'One changed file',
@@ -55,13 +60,14 @@ window.fetch = async (input, init) => {
 window.EventSource = class { close() {} } as unknown as typeof EventSource;
 
 function Fixture() {
-  const [modal, setModal] = useState(false);
+  const [modal, setModal] = useState(new URLSearchParams(location.search).has('modal'));
   const [outcome, setOutcome] = useState(state.outcome);
   return <>
     <div className="flex items-center gap-4 border-b bg-zinc-100 p-3 text-sm">
       <strong>Disposable publication fixture</strong>
-      <label>Gateway outcome <select aria-label="Gateway outcome" value={outcome} onChange={event => { state.outcome = event.target.value; save(); setOutcome(event.target.value); }}><option value="success">Success</option><option value="unconfirmed">Unconfirmed</option><option value="conflict">Conflict on resume</option></select></label>
+      <label>Gateway outcome <select aria-label="Gateway outcome" value={outcome} onChange={event => { state.outcome = event.target.value; save(); setOutcome(event.target.value); }}><option value="success">Success</option><option value="unconfirmed">Unconfirmed</option><option value="conflict">Conflict on resume</option><option value="busy">Task running</option><option value="error">Connection error</option></select></label>
       <button onClick={() => setModal(true)}>Open task publication</button>
+      <button onClick={() => document.documentElement.classList.toggle('dark')}>Toggle theme</button>
       <button onClick={() => { state = initial(); save(); location.reload(); }}>Reset fixture</button>
     </div>
     <MemoryRouter initialEntries={['/projects/project-1?tab=code&profile=default']}><ProfileProvider><Routes><Route path="/projects/:projectId" element={<ProjectDetailPage />} /></Routes></ProfileProvider></MemoryRouter>
