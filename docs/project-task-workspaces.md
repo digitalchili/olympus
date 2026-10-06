@@ -28,6 +28,8 @@ Commit & Push defaults to the task branch each time the dialog opens or the sele
 
 If GitHub publication cannot be confirmed, the task and Project Code views show the saved commit and all approved target branches, even when the working tree is clean. **Resume publication** uses the saved publication ID; it cannot replace the message, branch choice, or commit. A conflict remains visible and does not authorize a force push or another commit. Uncertain publication does not undo the saved commit or local files, and pending publication prevents workspace release or a new publication.
 
+A resume requested during an active chat is saved until that turn finishes successfully. It retains the original commit and destination. If Git reports that a target branch has advanced, Olympus keeps that reason visible: stop retrying the saved publication, merge the latest target branch into the task, run checks, then publish the reviewed result.
+
 **Stop retrying this publication** requires confirmation. It records abandonment without undoing anything GitHub may already have accepted. The saved commit and local files remain available.
 
 **Sync latest from GitHub** downloads the starting point for new tasks. Existing task branches, files, and their verification evidence stay unchanged. The displayed sync time and commit describe the last successful verification, not a guarantee of current connectivity.

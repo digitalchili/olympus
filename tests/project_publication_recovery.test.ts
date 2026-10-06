@@ -133,6 +133,30 @@ try {
     assert.equal((await resumed.retryPublication({ ...crash.input, publicationId: receipt.id })).id, saved.id, 'confirmed retry is read-only even after release');
   }
 
+  // main can advance via a merge while a task continues on its original branch.
+  // Git rejection is actionable, not an uncertain network outcome.
+  const diverged = await fixture();
+  const firstVersion = await diverged.service.commitPush({ ...diverged.input, message: 'Initial task' });
+  const other = join(root, 'main-merge');
+  await git(root, 'clone', diverged.remote, other);
+  await git(other, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'merge', '--no-ff', '-m', 'Merge task', firstVersion.commitSha);
+  await git(other, 'push', 'origin', 'main');
+  const mainBefore = await git(diverged.remote, 'rev-parse', 'main');
+  await writeFile(join(diverged.lease.workdir, 'app.txt'), 'Follow-up repair');
+  await assert.rejects(diverged.service.commitPush({ ...diverged.input, message: 'Repair', deployToDefaultBranch: true }), (error: any) => {
+    assert.equal(error.code, 'PUBLICATION_CONFLICT');
+    assert.match(error.message, /branch has advanced.*merge/i);
+    assert.doesNotMatch(error.message, /could not be confirmed/);
+    return true;
+  });
+  const conflict = (await diverged.service.status(diverged.input)).pendingPublication!;
+  assert.equal(conflict.failureReason, 'branch_advanced', 'the reason survives status refresh');
+  assert.match((await diverged.service.status(diverged.input)).summary, /branch has advanced/);
+  assert.equal(await git(diverged.remote, 'rev-parse', 'main'), mainBefore);
+  assert.equal(await git(diverged.remote, 'rev-parse', diverged.lease.branchName), firstVersion.commitSha, 'atomic rejection cannot partly publish');
+  assert.equal(await git(diverged.lease.workdir, 'rev-parse', 'HEAD'), conflict.commitSha);
+  await assert.rejects(diverged.service.retryPublication({ ...diverged.input, publicationId: conflict.id }), { code: 'PUBLICATION_CONFLICT' });
+
   const rejected = await fixture();
   const rejecting = createProjectCpService({ rootDir: rejected.rootDir, gitRunner: async (cwd, args, options) => {
     if (args[0] === 'push') throw new Error('definite pre-send rejection, unsafe detail');

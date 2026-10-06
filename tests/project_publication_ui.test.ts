@@ -139,6 +139,26 @@ try {
   const resumed = await uncertain.respond(4, { version, versions: [version] });
   assert.match(resumed, /Pushed aaaaaaa to main/);
 
+  const deferredResume = harness(); deferredResume.render();
+  await deferredResume.respond(0, { editor }); await deferredResume.respond(1, { status: { ...dirty, pendingPublication: pending } });
+  deferredResume.click('Resume publication');
+  const resuming = await deferredResume.respond(2, { action: 'publication_queued', queuedMessage: { id: 'resume-1' } }, 202);
+  assert.match(resuming, /Resume queued/);
+  assert.match(resuming, /aaaaaaa/, 'queued is not confirmation; retain the saved receipt');
+  assert.doesNotMatch(resuming, /Pushed aaaaaaa|Published to GitHub/);
+  deferredResume.click('Refresh status');
+  await deferredResume.respond(3, { editor });
+  const resumedConflict = await deferredResume.respond(4, { status: { ...dirty, pendingPublication: { ...pending, failureReason: 'branch_advanced' } } });
+  assert.match(resumedConflict, /branch has advanced/);
+  assert.doesNotMatch(resumedConflict, /Resume queued|No further action is needed/);
+
+  const conflict = harness(); conflict.render();
+  await conflict.respond(0, { editor });
+  const needsMerge = await conflict.respond(1, { status: { ...dirty, pendingPublication: { ...pending, failureReason: 'branch_advanced' } } });
+  assert.match(needsMerge, /branch has advanced/);
+  assert.match(needsMerge, /merge/i);
+  assert.doesNotMatch(needsMerge, /could not be confirmed/);
+
   const restored = harness(); restored.render();
   await restored.respond(0, { editor }); await restored.respond(1, { status: { ...dirty, clean: true, pendingPublication: pending } });
   assert.match(restored.render(), /Resume publication/, 'reload must recover a pending receipt despite a clean tree');

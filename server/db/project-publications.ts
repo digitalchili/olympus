@@ -11,6 +11,7 @@ export interface ProjectPublication {
   refs: Array<{ ref: string; source: string; createOnly: boolean }>;
   state: 'prepared' | 'pending' | 'confirmed' | 'abandoned';
   createdAt: number; completedAt: number | null;
+  failureReason?: 'branch_advanced';
 }
 
 function fromRow(row: any): ProjectPublication | null {
@@ -18,10 +19,15 @@ function fromRow(row: any): ProjectPublication | null {
     repository: JSON.parse(row.repository_json), action: row.action, revertedVersionId: row.reverted_version_id,
     parentSha: row.parent_sha, treeSha: row.tree_sha, commitSha: row.commit_sha, commitMessage: row.commit_message,
     changedFiles: JSON.parse(row.changed_files_json), targetBranch: row.target_branch, refs: JSON.parse(row.refs_json),
-    state: row.state, createdAt: row.created_at, completedAt: row.completed_at } : null;
+    state: row.state, createdAt: row.created_at, completedAt: row.completed_at,
+    ...(row.failure_reason === 'branch_advanced' ? { failureReason: 'branch_advanced' as const } : {}) } : null;
 }
 export function getProjectPublication(id: string): ProjectPublication | null {
   return fromRow(db.prepare('SELECT * FROM project_publications WHERE id = ?').get(id));
+}
+export function markProjectPublicationBranchAdvanced(id: string): ProjectPublication {
+  db.prepare("UPDATE project_publications SET failure_reason = 'branch_advanced' WHERE id = ? AND state = 'pending'").run(id);
+  return getProjectPublication(id)!;
 }
 export function getPendingProjectPublication(projectId: string, taskId: string): ProjectPublication | null {
   return fromRow(db.prepare("SELECT * FROM project_publications WHERE project_id = ? AND task_id = ? AND state IN ('prepared','pending')").get(projectId, taskId));

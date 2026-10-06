@@ -85,7 +85,7 @@ try {
 
     const remoteTaskBefore = await git(remote, 'rev-parse', `refs/heads/${lease.branchName}`);
     const remoteMainBefore = await git(remote, 'rev-parse', 'main');
-    await assert.rejects(service.commitPush({ projectId: project.id, taskId: first.id, repositoryLink: link, message: 'Publish conflicting source', deployToDefaultBranch: true }), /could not be confirmed/i);
+    await assert.rejects(service.commitPush({ projectId: project.id, taskId: first.id, repositoryLink: link, message: 'Publish conflicting source', deployToDefaultBranch: true }), { code: 'PUBLICATION_CONFLICT' });
     assert.equal(await git(remote, 'rev-parse', `refs/heads/${lease.branchName}`), remoteTaskBefore, 'atomic publish never advances only the task branch when default branch rejects');
     assert.equal(await git(remote, 'rev-parse', 'main'), remoteMainBefore, 'concurrent GitHub work is never force-pushed away');
     assert.equal(await readFile(join(lease.workdir, 'local-only.txt'), 'utf8'), 'unpublished work\n');

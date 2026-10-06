@@ -18,6 +18,8 @@ export interface QueuedTaskMessage {
   updatedAt: number;
   /** Server-owned action, never delivered or steered into Hermes as chat text. */
   publication?: {
+    /** Resume this immutable receipt instead of creating another commit. */
+    publicationId?: string;
     projectId: string;
     runId: string;
     repositoryIdentity: string;
@@ -463,6 +465,7 @@ export interface ProjectSyncState {
 }
 
 export interface PendingProjectPublication {
+  failureReason?: 'branch_advanced';
   id: string;
   action: ProjectVersionAction;
   commitSha: string | null;

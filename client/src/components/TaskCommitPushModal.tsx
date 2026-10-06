@@ -59,7 +59,7 @@ export function TaskCommitPushModal({
   const [commitMessage, setCommitMessage] = useState('');
   const [generatingMessage, setGeneratingMessage] = useState(false);
   const [deployToDefault, setDeployToDefault] = useState(false);
-  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'abandoning' | 'success'>('idle');
+  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'abandoning' | 'queued' | 'success'>('idle');
   const [lastPublication, setLastPublication] = useState<ProjectVersion | null>(null);
   const generation = useRef(0);
   const publicationBusy = pushStatus === 'pushing' || pushStatus === 'abandoning';
@@ -73,6 +73,7 @@ export function TaskCommitPushModal({
     const request = ++generation.current;
     setLoading(true);
     setError(null);
+    setPushStatus(current => current === 'queued' ? 'idle' : current);
     try {
       const prepRes = await prepareProjectEditor(projectId, taskId);
       if (request !== generation.current) return;
@@ -154,6 +155,10 @@ export function TaskCommitPushModal({
     try {
       const result = await retryProjectPublication(projectId, taskId, publication.id);
       if (request !== generation.current) return;
+      if (!('version' in result)) {
+        setPushStatus('queued');
+        return;
+      }
       setCodeStatus(current => current ? { ...current, pendingPublication: null } : null);
       setLastPublication(result.version); setPushStatus('success');
       onCommitted?.(result.version);
@@ -253,7 +258,7 @@ export function TaskCommitPushModal({
             </div>
           )}
 
-          {!loading && codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} disabled={publicationBusy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
+          {!loading && codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} queued={pushStatus === 'queued'} disabled={publicationBusy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
 
           {!loading && !error && codeStatus && codeStatus.clean && !codeStatus.pendingPublication && pushStatus !== 'success' && (
             <div className="flex flex-col items-center justify-center py-6 text-center">
@@ -388,7 +393,7 @@ export function TaskCommitPushModal({
           >
             {codeStatus?.clean || pushStatus === 'success' ? 'Close' : 'Cancel'}
           </button>
-          {error && (
+          {(error || pushStatus === 'queued') && (
             <button
               type="button"
               onClick={() => void loadStatus()}

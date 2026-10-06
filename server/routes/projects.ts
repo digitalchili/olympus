@@ -829,8 +829,10 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
             if (!startQueuedPublication(taskId, queued.id)) throw publicationQueueError('The queued publication was cancelled or already started.');
             notifyQueuedPublication(taskId);
             try {
-              const version = await projectCp.commitPush({ projectId, taskId, repositoryLink, message: action.message,
-                deployToDefaultBranch: action.deployToDefaultBranch, tokenProvider: tokenProvider(github) });
+              const version = action.publicationId
+                ? await projectCp.retryPublication({ projectId, taskId, repositoryLink, publicationId: action.publicationId, tokenProvider: tokenProvider(github) })
+                : await projectCp.commitPush({ projectId, taskId, repositoryLink, message: action.message,
+                  deployToDefaultBranch: action.deployToDefaultBranch, tokenProvider: tokenProvider(github) });
               consumeQueuedTaskMessage(taskId, queued.id);
               return version;
             } catch (error) {
@@ -840,7 +842,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
               throw error;
             }
           } catch (error) {
-            pauseQueuedPublication(taskId, queued.id, (error as { code?: string }).code === 'PUBLICATION_QUEUE_BLOCKED'
+            pauseQueuedPublication(taskId, queued.id, error instanceof ProjectPublicationError || (error as { code?: string }).code === 'PUBLICATION_QUEUE_BLOCKED'
               ? (error as Error).message : 'Publication needs attention. Open Commit & Push to review or resume it.');
             throw error;
           } finally { notifyQueuedPublication(taskId); }
@@ -884,6 +886,14 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         const repositoryLink = requireWriteRepository(projectId);
         const input = { projectId, taskId, publicationId: routeId(req.params.publicationId), repositoryLink, tokenProvider: tokenProvider(github) };
         const previousQueue = getQueuedTaskMessage(taskId);
+        const task = getTask(taskId)!;
+        const live = getRunStatus(taskId);
+        if (action === 'retry' && task.workdir && getLatestTaskAgentRun(taskId)?.runId === live?.runId
+          && live?.kind === 'chat' && (live.status === 'streaming' || live.status === 'compacting')) {
+          const queued = await queueProjectPublication(task, repositoryLink, '', false, input.publicationId);
+          return res.status(202).json({ action: 'publication_queued', queuedMessage: queued,
+            message: 'Resume is saved. Olympus will retry the existing publication after this turn finishes successfully. No new commit or additional click is needed.' });
+        }
         const version = await withTaskMutation(getTask(taskId)!, async () => {
           if (action === 'abandon') { await projectCp.abandonPublication(input); return null; }
           return projectCp.retryPublication(input);

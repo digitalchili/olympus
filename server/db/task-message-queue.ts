@@ -85,6 +85,13 @@ export function deleteQueuedTaskMessage(taskId: string, id: string): boolean {
   return deleteStmt.run(taskId, id).changes > 0;
 }
 
+/** Replace only the failed publication the caller inspected, never a human follow-up. */
+export function replaceFailedQueuedPublication(previousId: string, message: QueuedTaskMessage): boolean {
+  return db.prepare(`UPDATE task_message_queue SET id = ?, content = ?, publication_json = ?, updated_at = ?
+    WHERE task_id = ? AND id = ? AND json_extract(publication_json, '$.error') IS NOT NULL`)
+    .run(message.id, message.content, JSON.stringify(message.publication), message.updatedAt, message.taskId, previousId).changes > 0;
+}
+
 export function pauseQueuedPublication(taskId: string, id: string, error: string): void {
   const saved = getQueuedTaskMessage(taskId);
   if (saved?.id !== id || !saved.publication) return;

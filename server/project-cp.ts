@@ -13,7 +13,7 @@ import {
   releaseProjectEditor,
   reactivateProjectEditor,
 } from './db/project-cp.js';
-import { createProjectPublication, getProjectPublication, getPendingProjectPublication, setProjectPublicationCommit, confirmProjectPublication, abandonProjectPublication, type ProjectPublication } from './db/project-publications.js';
+import { createProjectPublication, getProjectPublication, getPendingProjectPublication, setProjectPublicationCommit, confirmProjectPublication, abandonProjectPublication, markProjectPublicationBranchAdvanced, type ProjectPublication } from './db/project-publications.js';
 import { buildProjectGitEnv, parseProjectGitConfig, validateProjectGitTransportConfig, ProjectGitError } from './project-git-auth.js';
 import { getTask, updateTask } from './db/queries.js';
 import { GitHubPermissionUpgradeError } from './studio/github-permissions.js';
@@ -29,7 +29,7 @@ export type InstallationTokenProvider = (installationId: number, scope: { reposi
 export type { ProjectGitStatus } from '../shared/types.js';
 
 function publicPublication(row: ProjectPublication): PendingProjectPublication {
-  return { id: row.id, action: row.action, commitSha: row.commitSha,
+  return { id: row.id, action: row.action, commitSha: row.commitSha, ...(row.failureReason ? { failureReason: row.failureReason } : {}),
     targetBranches: row.refs.map(ref => ref.ref.slice('refs/heads/'.length)), state: row.state === 'prepared' ? 'prepared' : 'pending' };
 }
 export class ProjectPublicationError extends Error {
@@ -37,7 +37,9 @@ export class ProjectPublicationError extends Error {
   readonly pendingPublication: PendingProjectPublication | null;
   constructor(public readonly code: 'PUBLICATION_PENDING' | 'PUBLICATION_UNCONFIRMED' | 'PUBLICATION_CONFLICT', row?: ProjectPublication) {
     super(code === 'PUBLICATION_PENDING' ? 'A saved publication is pending. Resume it or stop retrying before publishing another change.'
-      : code === 'PUBLICATION_CONFLICT' ? 'The saved publication conflicts with the current repository state. Your commit and files are preserved.'
+      : code === 'PUBLICATION_CONFLICT' ? (row?.failureReason === 'branch_advanced'
+        ? 'A GitHub branch has advanced. Stop retrying this saved publication, then merge the latest target branch into the task, run checks, and publish again. Your commit and files are preserved.'
+        : 'The saved publication conflicts with the current repository state. Your commit and files are preserved.')
       : 'GitHub publication could not be confirmed. Resume the saved publication; your commit and files are preserved.');
     this.statusCode = code === 'PUBLICATION_UNCONFIRMED' ? 503 : 409;
     this.pendingPublication = row ? publicPublication(row) : null;
@@ -207,6 +209,12 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     try { return await rawGit(cwd, args, { env: runOptions?.env ?? buildProjectGitEnv({ baseEnv: process.env, cloneUrl: '' }) }); }
     catch (error) {
       if (error instanceof Error && /refusing to allow a GitHub App to create or update workflow .*without [`']?workflows[`']? permission/i.test(error.message)) throw new GitHubPermissionUpgradeError();
+      // Classify Git's machine-readable rejection, but never retain raw output
+      // (which may contain credentials or remote-controlled text).
+      if (args[0] === 'push' && typeof (error as { stdout?: unknown })?.stdout === 'string'
+        && /^!\t[^\n]+\t\[rejected\] \((?:fetch first|non-fast-forward)\)\r?$/m.test((error as { stdout: string }).stdout)) {
+        throw new ProjectGitError('PROJECT_GIT_BRANCH_ADVANCED', 409);
+      }
       throw new ProjectGitError('PROJECT_GIT_UNAVAILABLE', 503, typeof (error as any)?.code === 'number' ? (error as any).code : undefined);
     }
   };
@@ -247,7 +255,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       pendingPublication: pending ? publicPublication(pending) : null,
       clean: !pending && changedFiles.length === 0 && !hasUnpublishedCommit,
       changedFiles,
-      summary: pending ? 'GitHub publication is not confirmed' : hasUnpublishedCommit
+      summary: pending ? (pending.failureReason === 'branch_advanced' ? 'A GitHub branch has advanced' : 'GitHub publication is not confirmed') : hasUnpublishedCommit
         ? 'A local checkpoint is waiting to be pushed'
         : changedFiles.length === 0
           ? 'No file changes'
@@ -334,7 +342,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     if (refs.some(ref => ref.createOnly && remote.has(ref.ref) && remote.get(ref.ref) !== ref.sha)) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row);
     // Git itself enforces fast-forward updates. Exact create leases preserve empty-repo intent.
     try {
-      await git(lease.workdir, ['push', ...(refs.length > 1 ? ['--atomic'] : []),
+      await git(lease.workdir, ['push', '--porcelain', ...(refs.length > 1 ? ['--atomic'] : []),
         ...refs.filter(ref => ref.createOnly).map(ref => `--force-with-lease=${ref.ref}:${remote.get(ref.ref) ?? ''}`),
         'origin', ...refs.map(ref => `${ref.sha}:${ref.ref}`)], await authOptions(input.repositoryLink, input.tokenProvider, false));
     } catch (error) {
@@ -344,6 +352,9 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         if (refs.some(ref => ref.createOnly && after.has(ref.ref) && after.get(ref.ref) !== ref.sha)) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row);
       } catch (observed) { if (observed instanceof ProjectPublicationError) throw observed; }
       if (error instanceof GitHubPermissionUpgradeError) throw error;
+      if (error instanceof ProjectGitError && error.code === 'PROJECT_GIT_BRANCH_ADVANCED') {
+        throw new ProjectPublicationError('PUBLICATION_CONFLICT', markProjectPublicationBranchAdvanced(row.id));
+      }
       throw new ProjectPublicationError('PUBLICATION_UNCONFIRMED', row);
     }
     return confirmProjectPublication(row.id, now());

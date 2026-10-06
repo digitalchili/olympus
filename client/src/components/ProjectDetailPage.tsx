@@ -500,6 +500,10 @@ export function ProjectDetailPage() {
     try {
       const result = await retryProjectPublication(projectId, editor.taskId, publication.id);
       if (request !== publicationGeneration.current) return;
+      if (!('version' in result)) {
+        setPushStatus('queued');
+        return;
+      }
       setVersions(result.versions); setLastPublication(result.version); setPushStatus('success');
       setDeployToDefault(false);
       await refreshPublicationStatus(editor.taskId, request);
@@ -627,7 +631,7 @@ export function ProjectDetailPage() {
                 {editor && <div className="mt-4 space-y-4">
                   <div className="rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-950/40"><p className="font-medium text-zinc-800 dark:text-zinc-200">{tasks.find((task) => task.id === editor.taskId)?.title ?? 'Assigned task'}</p><p className="mt-1 text-zinc-500">{codeStatus?.summary ?? 'Inspecting changes…'}</p></div>
                   {codeStatus && !codeStatus.clean && <><div><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Changed files</h3><ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded-lg border border-zinc-200 p-2 font-mono text-xs dark:border-zinc-700">{codeStatus.changedFiles.map((file) => <li key={file} className="truncate">{file}</li>)}</ul></div><details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700"><summary className="cursor-pointer text-xs font-medium">Review change preview</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">{codeStatus.diff || 'Binary or untracked files changed; review the file list above.'}</pre></details></>}
-                  {codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} disabled={busy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
+                  {codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} queued={pushStatus === 'queued'} disabled={busy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
                   {!codeStatus?.pendingPublication && <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-xs font-medium text-zinc-500">Checkpoint message</label>
@@ -664,7 +668,7 @@ export function ProjectDetailPage() {
                       </label>
                     )}
                   </div>}
-                  {pushStatus === 'queued' && <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Publication queued. Open the task to follow its progress or cancel.</p>}
+                  {pushStatus === 'queued' && !codeStatus?.pendingPublication && <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Publication queued. Open the task to follow its progress or cancel.</p>}
                   {pushStatus === 'pushing' && (
                     <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-950/30">
                       <div className="flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-300">
@@ -711,7 +715,7 @@ export function ProjectDetailPage() {
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => void refreshCode(editor.taskId)}
+                      onClick={() => { setPushStatus(current => current === 'queued' ? 'idle' : current); void refreshCode(editor.taskId); }}
                       className="h-9 rounded-lg border border-zinc-200 px-3 text-sm font-medium dark:border-zinc-700"
                     >
                       Refresh

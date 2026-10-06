@@ -530,7 +530,7 @@ export function TaskDetailPage() {
             initialSettings={initialSettings}
             initialInvitedProfileIds={initialInvitedProfileIds}
             collaborationRuns={collaborationRuns}
-            publicationIssue={publicationIssue ?? (taskGitStatus?.pendingPublication ? 'PUBLICATION_PENDING' : null)}
+            publicationIssue={taskGitStatus?.pendingPublication?.failureReason ? 'PUBLICATION_CONFLICT' : publicationIssue ?? (taskGitStatus?.pendingPublication ? 'PUBLICATION_PENDING' : null)}
             onPublicationIssue={canCommitPush ? handlePublicationIssue : undefined}
             onReviewPublication={canCommitPush ? () => setShowCommitPushModal(true) : undefined}
           />

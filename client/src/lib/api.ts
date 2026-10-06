@@ -535,7 +535,7 @@ export function commitPushProject(projectId: string, taskId: string, message: st
 }
 
 export function retryProjectPublication(projectId: string, taskId: string, publicationId: string) {
-  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/publications/${encodeURIComponent(publicationId)}/retry`, {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] } | { action: 'publication_queued'; message: string; queuedMessage: QueuedTaskMessage }>(`/projects/${encodeURIComponent(projectId)}/publications/${encodeURIComponent(publicationId)}/retry`, {
     method: 'POST', body: JSON.stringify({ taskId }),
   }, false);
 }

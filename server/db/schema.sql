@@ -407,6 +407,7 @@ CREATE TABLE IF NOT EXISTS project_publications (
   changed_files_json TEXT NOT NULL,
   target_branch TEXT NOT NULL,
   refs_json TEXT NOT NULL,
+  failure_reason TEXT,
   state TEXT NOT NULL CHECK(state IN ('prepared', 'pending', 'confirmed', 'abandoned')),
   created_at INTEGER NOT NULL,
   completed_at INTEGER
