@@ -70,6 +70,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       if (!consumedQueue) {
         return res.status(409).json({ error: 'Queued message changed or no longer exists' });
       }
+      if (consumedQueue.publication) return res.status(409).json({ error: 'This is a saved publication, not a chat message. Open Commit & Push to manage it.' });
       if (typeof content !== 'string' || consumedQueue.content !== content) {
         restoreConsumedQueue();
         return res.status(409).json({ error: 'Queued message changed or no longer exists' });

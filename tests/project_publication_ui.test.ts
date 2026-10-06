@@ -98,6 +98,9 @@ try {
   assert.doesNotMatch(ready, /Waiting for active work/);
   waiting.message('Publish once ready'); waiting.click('Commit &amp; Push');
   assert.match(waiting.requests[3].url, /\/commit-push$/);
+  const queued = await waiting.respond(3, { action: 'publication_queued', message: 'Saved', queuedMessage: { id: 'publication-1' } }, 202);
+  assert.match(queued, /Publication queued/);
+  assert.doesNotMatch(queued, /Published to GitHub|Commit &amp; Push complete/);
 
   const failed = harness(); failed.render();
   const failure = await failed.respond(0, { error: 'GitHub connection is unavailable', code: 'GITHUB_UNAVAILABLE' }, 503);

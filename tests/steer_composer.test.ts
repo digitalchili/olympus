@@ -36,7 +36,7 @@ function composer() {
         sendMessage: async () => { sent++; saved = null; return { ok: true }; },
       }) };
       if (id === '../hooks/useFileAttachments') return { useFileAttachments: () => ({ pendingFiles: [], submitWithAttachments: (text: string) => text }) };
-      if (id === '../lib/store') return { useStore: (select: any) => select({ taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) };
+      if (id === '../lib/store') return { useStore: (select: any) => select({ tasks: [], taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) };
       if (id === '../lib/api') return {
         ApiError,
         putQueuedTaskMessage: async (_taskId: string, message: any) => { saved = message; return { queuedMessage: message }; },
@@ -52,6 +52,11 @@ function composer() {
   const render = () => { cursor = 0; return nodes(exported.TaskChat({ taskId: 'fixture' })); };
   const queueBar = () => render().find(node => node.type?.name === 'QueuedMessageBar');
   return { render, queueBar, setSteer: (fn: typeof steer) => { steer = fn; },
+    publicationBar: (overrides: any = {}) => nodes(exported.QueuedMessageBar({
+      ...queueBar().props, queuedMessage: { ...saved, publication: { projectId: 'project', ...overrides } },
+      error: null,
+      onReviewPublication() {},
+    })),
     saved: () => saved, deleted: () => deleted, sent: () => sent,
     async queue(content: string) {
       render().find(node => node.type === 'textarea').props.onChange({ target: { value: content, selectionStart: content.length } });
@@ -97,4 +102,14 @@ h.queueBar().props.onSteer();
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(h.render().find(node => node.props.role === 'alert')?.props.children, 'Worker unavailable');
 assert.equal(h.saved().content, 'Keep this update if steering fails');
+let publicationNodes = h.publicationBar();
+assert.ok(publicationNodes.some(node => node.props.children === 'Publishes after this response and its checks finish.'));
+assert.ok(!publicationNodes.some(node => ['Steer now', 'Edit', 'Retry'].includes(node.props.children)), 'a saved publication is never steered or edited as chat text');
+assert.ok(publicationNodes.some(node => node.props['aria-label'] === 'Cancel queued publication' && !node.props.disabled));
+publicationNodes = h.publicationBar({ started: true });
+assert.ok(publicationNodes.some(node => node.props.children === 'Publishing to GitHub…'));
+assert.ok(publicationNodes.some(node => node.props['aria-label'] === 'Cancel queued publication' && node.props.disabled));
+publicationNodes = h.publicationBar({ error: 'Files changed. Review before publishing.' });
+assert.ok(publicationNodes.some(node => node.props.children === 'Review'));
+assert.ok(publicationNodes.some(node => node.props.children === 'Files changed. Review before publishing.'));
 console.log('Queued steering composer feedback tests passed');

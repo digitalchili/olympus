@@ -20,6 +20,7 @@ import { localProfileRegistry } from './local-profiles.js';
 import { botDeliveryContent, listPendingBotMessages, markBotMessageFailed, recoverBotMessages, requireQueuedBotMessage } from './db/bot-messages.js';
 import { configureBotMessageDispatcher, createBotMessageDispatcher } from './bot-message-dispatcher.js';
 import { retryPendingProjectDeletionCleanup } from './project-deletion-cleanup.js';
+import { handleQueuedPublicationResponse } from './queued-project-publication.js';
 
 const PORT = parseInt(process.env.PORT || '6969', 10);
 const PORT_FALLBACK_ATTEMPTS = process.env.OLYMPUS_STRICT_PORT === '1' ? 1 : 20;
@@ -96,6 +97,15 @@ async function main() {
       const task = getTask(taskId);
       if (!task) return;
       const profileId = task.profile_name ?? 'default';
+      if (message.publication) {
+        if (message.publication.error) return;
+        const response = await fetch(`http://${dispatchHost}:${boundPort}/api/projects/${encodeURIComponent(message.publication.projectId)}/commit-push?profile=${encodeURIComponent(profileId)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId, queuedMessageId: message.id }),
+        });
+        await handleQueuedPublicationResponse(message, response);
+        return;
+      }
       const settledRun = getRunStatus(taskId);
       const settings = settledRun?.kind === 'goal'
         && settledRun.goal?.status === 'done'

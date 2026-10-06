@@ -1,4 +1,4 @@
-import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying } from '../coding-verification.js';
+import { captureCodingBaseline, verifyCodingRun, codingReviewAllowed, cancelCodingVerification, isVerifying, hasPassingCodingEvidence } from '../coding-verification.js';
 import { requestPerformanceTrace, performanceSpan, type PerformanceTrace } from '../performance-timing.js';
 import { requestsCodingVerification } from '../verification-request.js';
 import { join } from 'node:path';
@@ -61,13 +61,14 @@ import { acquireProfileWork } from '../profile-deletion.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 import { untilStopped } from '../run-cancellation.js';
-import { activeCollaborations, hasActiveTaskRun, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
+import { activeCollaborations, hasActiveTaskRun, hasTaskOperation, trackTaskRun, type ActiveCollaboration } from '../task-run-lifecycle.js';
 import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-settlement.js';
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTaskAgentRunResolution } from '../db/task-agent-runs.js';
 import { syncMessageAttachmentsToProjectReferences } from '../db/project-references.js';
 import { recordInteraction, markInteractionSettled, closeRunInteractions, hasUnansweredInteractions } from '../db/interactions.js';
+import { notifyQueuedPublication } from '../queued-project-publication.js';
 import { normalizeNativeInteraction } from '../interactions.js';
 import { acceptBotMessage, botRunOptions, botSystemMessage, stopBotTask } from '../bot-messaging.js';
 import { beginBotRun, botDeliveryContent, finishBotRun, getBotRun, requireQueuedBotMessage, type BotDelivery } from '../db/bot-messages.js';
@@ -326,7 +327,8 @@ function taskSystemMessage(task: Task, supplemental = ''): string {
   const secrets = secretNames.length
     ? `\n\nSaved Project secret names: ${secretNames.join(', ')}. Use project_run for foreground local test commands that need selected secrets. Supply names only and reference environment variables in the command; ordinary terminal tools do not receive these values. Never print, encode, persist or disclose credentials. These are trusted local commands, not a sandbox. Do not start background servers. Secret setup is available only in Olympus task chat or Project Settings, never through Telegram or other channels.`
     : '';
-  return `${base}${github}${secrets}${supplemental}`;
+  const publication = task.project_id ? `\n\nWhen the user authorizes publishing this Project's changes, use the Olympus Commit & Push API with this task ID. A 202 publication_queued response means the exact request is saved for after this turn and its checks finish. Report it as queued, finish your response, and do not retry or ask the user to repeat the action. Publication to the default branch requires explicit user authorization and deployToDefaultBranch: true. A queued request does not mean it has reached GitHub; do not claim publication or deployment before a confirmed receipt.` : '';
+  return `${base}${github}${secrets}${publication}${supplemental}`;
 }
 
 async function captureBaselineUntilStopped(task: Task, runId: string): Promise<void> {
@@ -344,7 +346,11 @@ async function captureBaselineUntilStopped(task: Task, runId: string): Promise<v
 
 async function verifyBeforeReview(task: Task, runId: string, performanceTrace?: PerformanceTrace | null): Promise<boolean> {
   const run = getRun(task.id);
-  const requested = Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
+  const publication = getQueuedTaskMessage(task.id)?.publication;
+  // "Yes, publish it" often changes no files. The saved publication still needs
+  // verified source, even when this approval alone would skip automatic checks.
+  const publicationNeedsChecks = publication?.runId === runId && !hasPassingCodingEvidence(task, publication.fingerprint);
+  const requested = publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
     message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {
@@ -528,9 +534,9 @@ async function streamChatTurn(
       settings: { ...taskRunSettings(runTask), mode: 'task' },
       invitedProfileIds: [], collaborationScope: 'discussion', confirmPersistentCollaboration: false,
       createdAt: now,
-      ...queued,
+      ...(queued?.publication ? {} : queued),
       id: randomUUID(),
-      content: queued && queued.content !== pendingSteer ? `${pendingSteer}\n\n${queued.content}` : pendingSteer,
+      content: queued && !queued.publication && queued.content !== pendingSteer ? `${pendingSteer}\n\n${queued.content}` : pendingSteer,
       updatedAt: now,
     });
     cancelRecovery(runTask.id, 'An undelivered message is saved in the queue. Review it before continuing.');
@@ -889,6 +895,7 @@ chatRouter.put('/:id/queued-message', (req, res) => {
   }
 
   const existing = getQueuedTaskMessage(task.id);
+  if (existing?.publication) return res.status(409).json({ error: 'A publication is queued. Cancel it before adding a different follow-up.' });
   const now = Date.now();
   const queuedMessage: QueuedTaskMessage = {
     id,
@@ -911,10 +918,13 @@ chatRouter.put('/:id/queued-message', (req, res) => {
 
 chatRouter.delete('/:id/queued-message/:queuedMessageId', (req, res) => {
   const task = res.locals.task as Task;
+  const publication = getQueuedTaskMessage(task.id)?.publication;
+  if (publication?.started && hasTaskOperation(task.id)) return res.status(409).json({ error: 'Publication is already running. Wait for its result before cancelling.' });
   if (!deleteQueuedTaskMessage(task.id, req.params.queuedMessageId)) {
     return res.status(409).json({ error: 'Queued message changed or no longer exists' });
   }
   broadcastRecovery(task.id);
+  if (publication) notifyQueuedPublication(task.id);
   res.status(204).end();
 });
 
@@ -955,6 +965,9 @@ chatRouter.post('/:id/messages', async (req, res) => {
   }
 
   const queuedMessageId = requestBody.queuedMessageId;
+  if (queuedMessageId && getQueuedTaskMessage(task.id)?.publication) {
+    return res.status(409).json({ error: 'A saved publication cannot be sent as a chat message.' });
+  }
   let consumedQueue = res.locals.claimedQueuedTaskMessage as QueuedTaskMessage | undefined;
   delete res.locals.claimedQueuedTaskMessage;
   const restoreConsumedQueue = () => {

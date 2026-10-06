@@ -63,5 +63,24 @@ try {
  assert.match((await readCodingEvidence(task))?.source?.diff ?? '', /mutated during check/, 'committed changes remain in the run diff');
  await captureCodingBaseline(task, 'noop');
  assert.equal(await verifyCodingRun(task, 'noop'), false, 'a no-op turn must not bypass failed checks on committed source');
+ await writeFile(join(cwd, '.olympus/verification.json'), JSON.stringify({ commands: [[process.execPath, '-e', 'process.exit(process.env.OLYMPUS_TEST_CHECK_FAIL ? 1 : 0)']] }));
+ const approval = insertTask({ title: 'Approved verified changes', status: 'in_progress', workdir: cwd });
+ await captureCodingBaseline(approval, 'implementation');
+ assert.equal(await verifyCodingRun(approval, 'implementation'), true);
+ await captureCodingBaseline(approval, 'approval');
+ assert.equal(await verifyCodingRun(approval, 'approval', { skipUnchanged: true }), true);
+ assert.equal((await readCodingEvidence(approval))?.status, 'skipped', 'reused evidence must not claim checks ran again');
+ assert.equal(codingReviewAllowed(approval.id, 'approval'), true, 'unchanged verified changes remain reviewable after approval');
+ process.env.OLYMPUS_TEST_CHECK_FAIL = '1';
+ try { assert.equal(await verifyCodingRun(approval, 'later-check'), false); }
+ finally { delete process.env.OLYMPUS_TEST_CHECK_FAIL; }
+ await captureCodingBaseline(approval, 'after-failure');
+ await verifyCodingRun(approval, 'after-failure', { skipUnchanged: true });
+ assert.equal(codingReviewAllowed(approval.id, 'after-failure'), false, 'newer failed checks on the same source supersede an older pass');
+ assert.equal(await verifyCodingRun(approval, 'repaired-check'), true);
+ await writeFile(join(cwd, 'source.txt'), 'later unverified changes');
+ await captureCodingBaseline(approval, 'later-approval');
+ await verifyCodingRun(approval, 'later-approval', { skipUnchanged: true });
+ assert.equal(codingReviewAllowed(approval.id, 'later-approval'), false, 'an older pass never authorizes changed source');
 } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 console.log('Coding verification tests passed');

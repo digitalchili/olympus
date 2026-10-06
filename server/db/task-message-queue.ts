@@ -11,6 +11,7 @@ interface QueueRow {
   confirm_persistent_collaboration: number;
   created_at: number;
   updated_at: number;
+  publication_json: string | null;
 }
 
 const getStmt = db.prepare('SELECT * FROM task_message_queue WHERE task_id = ?');
@@ -18,8 +19,8 @@ const listStmt = db.prepare('SELECT * FROM task_message_queue ORDER BY created_a
 const putStmt = db.prepare(`
   INSERT INTO task_message_queue (
     task_id, id, content, settings_json, invited_profile_ids_json,
-    collaboration_scope, confirm_persistent_collaboration, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    collaboration_scope, confirm_persistent_collaboration, created_at, updated_at, publication_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(task_id) DO UPDATE SET
     id = excluded.id,
     content = excluded.content,
@@ -28,15 +29,16 @@ const putStmt = db.prepare(`
     collaboration_scope = excluded.collaboration_scope,
     confirm_persistent_collaboration = excluded.confirm_persistent_collaboration,
     created_at = excluded.created_at,
-    updated_at = excluded.updated_at
+    updated_at = excluded.updated_at,
+    publication_json = excluded.publication_json
 `);
 const deleteStmt = db.prepare('DELETE FROM task_message_queue WHERE task_id = ? AND id = ?');
 const consumeStmt = db.prepare('DELETE FROM task_message_queue WHERE task_id = ? AND id = ? RETURNING *');
 const restoreStmt = db.prepare(`
   INSERT OR IGNORE INTO task_message_queue (
     task_id, id, content, settings_json, invited_profile_ids_json,
-    collaboration_scope, confirm_persistent_collaboration, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    collaboration_scope, confirm_persistent_collaboration, created_at, updated_at, publication_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 function fromRow(row: QueueRow | undefined): QueuedTaskMessage | undefined {
@@ -51,6 +53,7 @@ function fromRow(row: QueueRow | undefined): QueuedTaskMessage | undefined {
     confirmPersistentCollaboration: row.confirm_persistent_collaboration === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.publication_json ? { publication: JSON.parse(row.publication_json) } : {}),
   };
 }
 
@@ -73,12 +76,27 @@ export function putQueuedTaskMessage(message: QueuedTaskMessage): QueuedTaskMess
     message.confirmPersistentCollaboration ? 1 : 0,
     message.createdAt,
     message.updatedAt,
+    message.publication ? JSON.stringify(message.publication) : null,
   );
   return getQueuedTaskMessage(message.taskId)!;
 }
 
 export function deleteQueuedTaskMessage(taskId: string, id: string): boolean {
   return deleteStmt.run(taskId, id).changes > 0;
+}
+
+export function pauseQueuedPublication(taskId: string, id: string, error: string): void {
+  const saved = getQueuedTaskMessage(taskId);
+  if (saved?.id !== id || !saved.publication) return;
+  db.prepare('UPDATE task_message_queue SET publication_json = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+    .run(JSON.stringify({ ...saved.publication, error }), Date.now(), taskId, id);
+}
+
+export function startQueuedPublication(taskId: string, id: string): boolean {
+  const saved = getQueuedTaskMessage(taskId);
+  if (saved?.id !== id || !saved.publication || saved.publication.started || saved.publication.error) return false;
+  return db.prepare('UPDATE task_message_queue SET publication_json = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+    .run(JSON.stringify({ ...saved.publication, started: true }), Date.now(), taskId, id).changes > 0;
 }
 
 export function consumeQueuedTaskMessage(taskId: string, id: string): QueuedTaskMessage | undefined {
@@ -97,5 +115,6 @@ export function restoreQueuedTaskMessage(message: QueuedTaskMessage): boolean {
     message.confirmPersistentCollaboration ? 1 : 0,
     message.createdAt,
     message.updatedAt,
+    message.publication ? JSON.stringify(message.publication) : null,
   ).changes > 0;
 }

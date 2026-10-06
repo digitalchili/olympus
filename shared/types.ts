@@ -16,6 +16,20 @@ export interface QueuedTaskMessage {
   confirmPersistentCollaboration: boolean;
   createdAt: number;
   updatedAt: number;
+  /** Server-owned action, never delivered or steered into Hermes as chat text. */
+  publication?: {
+    projectId: string;
+    runId: string;
+    repositoryIdentity: string;
+    editorId: string;
+    branchName: string;
+    workdir: string;
+    fingerprint: string;
+    message: string;
+    deployToDefaultBranch: boolean;
+    started?: boolean;
+    error?: string;
+  };
 }
 
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;

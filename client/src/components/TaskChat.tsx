@@ -156,7 +156,7 @@ const ToolCallBlock = memo(function ToolCallBlock({ tool }: { tool: ToolProgress
   );
 });
 
-function QueuedMessageBar({
+export function QueuedMessageBar({
   queuedMessage,
   error,
   isSending,
@@ -168,6 +168,8 @@ function QueuedMessageBar({
   onEdit,
   onRemove,
   onRetry,
+  onReviewPublication,
+  pausedByRunFailure = false,
   retryLabel = 'Retry',
 }: {
   queuedMessage: QueuedMessage;
@@ -182,9 +184,14 @@ function QueuedMessageBar({
   onRemove: () => void;
   onRetry: () => void;
   retryLabel?: string;
+  onReviewPublication?: () => void;
+  pausedByRunFailure?: boolean;
 }) {
-  const statusLabel = isSending ? 'Sending...' : isSteering ? 'Sending update…' : error ?? waitingLabel;
-  const showRetry = canRetry && (Boolean(error) || retryLabel !== 'Retry');
+  const publication = queuedMessage.publication;
+  const statusLabel = publication
+    ? publication.error ?? error ?? (publication.started ? 'Publishing to GitHub…' : pausedByRunFailure ? 'Publication paused. Review the task before publishing.' : 'Publishes after this response and its checks finish.')
+    : isSending ? 'Sending...' : isSteering ? 'Sending update…' : error ?? waitingLabel;
+  const showRetry = !publication && canRetry && (Boolean(error) || retryLabel !== 'Retry');
   const { text, filePaths } = splitAttachmentMessage(queuedMessage.content);
   const messagePreview = text || (filePaths.length === 1 ? '1 attachment' : `${filePaths.length} attachments`);
 
@@ -194,7 +201,7 @@ function QueuedMessageBar({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="shrink-0 rounded-md bg-zinc-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
-              Queued
+              {publication?.error || (publication && pausedByRunFailure) ? 'Needs attention' : publication?.started ? 'Publishing' : 'Queued'}
             </span>
             <span role={error ? 'alert' : 'status'} className={`min-w-0 whitespace-pre-wrap break-words text-xs ${error ? 'text-red-500' : 'text-zinc-500 dark:text-zinc-400'}`}>
               {statusLabel}
@@ -204,7 +211,7 @@ function QueuedMessageBar({
             {messagePreview}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        {!publication && <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={onSteer}
@@ -221,7 +228,10 @@ function QueuedMessageBar({
           >
             Edit
           </button>
-        </div>
+        </div>}
+        {publication && onReviewPublication && (publication.error || pausedByRunFailure) && (
+          <button type="button" onClick={onReviewPublication} className="rounded-md px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:text-zinc-200 dark:hover:bg-zinc-700">Review</button>
+        )}
         {showRetry && (
           <button
             type="button"
@@ -234,9 +244,9 @@ function QueuedMessageBar({
         <button
           type="button"
           onClick={onRemove}
-          disabled={isSending}
-          aria-label="Remove queued message"
-          title="Remove queued message"
+          disabled={isSending || Boolean(publication?.started && !publication.error)}
+          aria-label={publication ? 'Cancel queued publication' : 'Remove queued message'}
+          title={publication ? 'Cancel queued publication' : 'Remove queued message'}
           className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
         >
           <X size={14} />
@@ -304,6 +314,7 @@ export function TaskChat({
   } = useChat(reconcilePersistedTaskRun, onPublicationIssue);
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const taskOutcome = useStore(s => s.taskOutcomes.get(taskId));
+  const taskUpdatedAt = useStore(s => s.tasks.find(task => task.id === taskId)?.updated_at);
   const [continuing, setContinuing] = useState(false);
   const authRunKey = `${activeProfileId}:${taskId}:${taskOutcome?.runId ?? taskRun?.runId ?? ''}`;
   const [openAIAuth, setOpenAIAuth] = useState<{ key: string; ready: boolean } | null>(null);
@@ -548,7 +559,7 @@ export function TaskChat({
       setQueuedMessage(current => current?.id === expected?.id && current?.updatedAt === expected?.updatedAt ? persisted : current);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [activeProfileId, taskId, queueHydratedTaskId, queuedMessage?.id, queuedMessage?.updatedAt, taskRun?.runId, taskRun?.status, taskOutcome?.runId, taskOutcome?.status]);
+  }, [activeProfileId, taskId, taskUpdatedAt, queueHydratedTaskId, queuedMessage?.id, queuedMessage?.updatedAt, taskRun?.runId, taskRun?.status, taskOutcome?.runId, taskOutcome?.status]);
 
   useEffect(() => {
     if (!configPending) inputRef.current?.focus();
@@ -654,6 +665,7 @@ export function TaskChat({
   }, [latestUserMessageId, loadedTaskId, taskId]);
 
   const sendQueuedMessage = useCallback(async (message: QueuedMessage) => {
+    if (message.publication) return;
     if (pendingAutoSendRef.current) return;
 
     pendingAutoSendRef.current = message.id;
@@ -692,7 +704,7 @@ export function TaskChat({
   }, [activeProfileId, isBot, refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
 
   useEffect(() => {
-    if (!queuedMessage) return;
+    if (!queuedMessage || queuedMessage.publication) return;
     if (!shouldAutoSendQueuedMessage({
       queuedMessageId: queuedMessage.id,
       taskBusyForQueue,
@@ -862,7 +874,7 @@ export function TaskChat({
 
   const handleSteerQueuedMessage = useCallback(async () => {
     if (!queuedMessage || steeringQueuedId || queuedIsSending) return;
-    if (queuedMessage.invitedProfileIds.length > 0) return;
+    if (queuedMessage.publication || queuedMessage.invitedProfileIds.length > 0) return;
 
     setSteeringQueuedId(queuedMessage.id);
     setQueuedSendError(null);
@@ -887,7 +899,7 @@ export function TaskChat({
   }, [queuedIsSending, queuedMessage, sendQueuedMessage, steeringQueuedId, taskId]);
 
   const handleEditQueuedMessage = useCallback(async () => {
-    if (!queuedMessage || queuedIsSending || steeringQueuedId) return;
+    if (!queuedMessage || queuedMessage.publication || queuedIsSending || steeringQueuedId) return;
     try {
       await deleteQueuedTaskMessage(taskId, queuedMessage.id);
     } catch (error) {
@@ -1330,6 +1342,8 @@ export function TaskChat({
               onEdit={handleEditQueuedMessage}
               onRemove={handleRemoveQueuedMessage}
               onRetry={handleRetryQueuedMessage}
+              onReviewPublication={onReviewPublication}
+              pausedByRunFailure={pausedByRunFailure}
             />
           )}
           <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">

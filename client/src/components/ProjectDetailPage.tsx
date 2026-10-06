@@ -441,7 +441,7 @@ export function ProjectDetailPage() {
     }
   };
 
-  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'success'>('idle');
+  const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'queued' | 'success'>('idle');
   const [lastPublication, setLastPublication] = useState<ProjectVersion | null>(null);
   const [deployToDefault, setDeployToDefault] = useState(false);
   const publicationGeneration = useRef(0);
@@ -472,6 +472,10 @@ export function ProjectDetailPage() {
     try {
       const result = await commitPushProject(projectId, editor.taskId, commitMessage.trim(), deployToDefault);
       if (request !== publicationGeneration.current) return;
+      if (!('version' in result)) {
+        setPushStatus('queued');
+        return;
+      }
       setVersions(result.versions);
       setCommitMessage('');
       setLastPublication(result.version);
@@ -660,6 +664,7 @@ export function ProjectDetailPage() {
                       </label>
                     )}
                   </div>}
+                  {pushStatus === 'queued' && <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Publication queued. Open the task to follow its progress or cancel.</p>}
                   {pushStatus === 'pushing' && (
                     <div className="space-y-1.5 rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-950/30">
                       <div className="flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-300">
@@ -687,7 +692,7 @@ export function ProjectDetailPage() {
                   <div className="flex flex-wrap gap-2">
                     {!codeStatus?.pendingPublication && <button
                       type="button"
-                      disabled={busy || !codeStatus || codeStatus.clean || !commitMessage.trim()}
+                      disabled={busy || pushStatus === 'queued' || !codeStatus || codeStatus.clean || !commitMessage.trim()}
                       onClick={() => void commitAndPush()}
                       className="inline-flex items-center gap-1.5 h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
                     >

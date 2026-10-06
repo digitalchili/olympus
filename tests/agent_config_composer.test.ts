@@ -41,7 +41,7 @@ function composer(name: 'TaskChat' | 'NewTaskPage', projectSearch?: string) {
         : id === '../contexts/ProfileContext' ? { useProfile: () => ({ activeProfileId: 'named', profiles: [] }) }
           : id === '../hooks/useChat' ? { useChat: () => ({ messages: [], activeTools: [], sendMessage: async (...args: any[]) => { sent.push(args); return { ok: true }; } }) }
             : id === '../hooks/useFileAttachments' ? load(new URL('../client/src/hooks/useFileAttachments.ts', import.meta.url))
-              : id === '../lib/store' ? { useStore: (selector: any) => selector({ taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) }
+              : id === '../lib/store' ? { useStore: (selector: any) => selector({ tasks: [], taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) }
                 : id === '../lib/api' ? api : id.startsWith('./') ? new Proxy({}, { get: () => () => null }) : dependency(id),
   });
   return exported;

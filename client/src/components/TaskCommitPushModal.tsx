@@ -129,6 +129,12 @@ export function TaskCommitPushModal({
         deployToDefault && Boolean(repositoryLink.defaultBranch),
       );
       if (request !== generation.current) return;
+      if ('action' in result && result.action === 'publication_queued') {
+        setPushStatus('idle');
+        setError({ message: 'Publication queued. It will run after this task and its checks finish.', waiting: true });
+        return;
+      }
+      if (!('version' in result)) return;
       setLastPublication(result.version);
       setPushStatus('success');
       onCommitted?.(result.version);

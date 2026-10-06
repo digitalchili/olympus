@@ -35,6 +35,8 @@ import { finishProjectDeletionCleanup, prepareProjectDeletionCleanup, ProjectSto
 import { taskRunSnapshot } from '../task-run-snapshot.js';
 import { getRunStatus, discardRun, closeSubscribersForTasks } from '../live-chat.js';
 import { isVerifying } from '../coding-verification.js';
+import { queueProjectPublication, validateQueuedPublication, publicationQueueError, notifyQueuedPublication } from '../queued-project-publication.js';
+import { consumeQueuedTaskMessage, getQueuedTaskMessage, startQueuedPublication, pauseQueuedPublication } from '../db/task-message-queue.js';
 import { activeCollaborations, claimProjectOperation, claimProjectConfigurationOperation, claimTaskOperation, hasActiveTaskRun, hasProjectOperation } from '../task-run-lifecycle.js';
 import {
   LocalProfileError,
@@ -809,8 +811,52 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
       const taskId = taskIdFromBody(req.body);
       requireProjectEditorTask(req, registry, projectId, taskId);
       const repositoryLink = requireWriteRepository(projectId);
+      if (req.body?.deployToDefaultBranch !== undefined && typeof req.body.deployToDefaultBranch !== 'boolean') {
+        return res.status(400).json({ error: 'deployToDefaultBranch must be a boolean', code: 'INVALID_PROJECT_REQUEST' });
+      }
+      const task = getTask(taskId)!;
+      const queuedId = req.body?.queuedMessageId;
+      if (queuedId !== undefined) {
+        if (typeof queuedId !== 'string' || Object.keys(req.body).some(key => !['taskId', 'queuedMessageId'].includes(key))) {
+          throw publicationQueueError('A saved publication accepts only its task and queue ID.');
+        }
+        const queued = getQueuedTaskMessage(taskId);
+        if (queued?.id !== queuedId || !queued.publication) throw publicationQueueError('The queued publication changed or was cancelled.');
+        const action = queued.publication;
+        const version = await withTaskMutation(task, async () => {
+          try {
+            await validateQueuedPublication(getTask(taskId)!, repositoryLink, queued);
+            if (!startQueuedPublication(taskId, queued.id)) throw publicationQueueError('The queued publication was cancelled or already started.');
+            notifyQueuedPublication(taskId);
+            try {
+              const version = await projectCp.commitPush({ projectId, taskId, repositoryLink, message: action.message,
+                deployToDefaultBranch: action.deployToDefaultBranch, tokenProvider: tokenProvider(github) });
+              consumeQueuedTaskMessage(taskId, queued.id);
+              return version;
+            } catch (error) {
+              // Never retry a Git outcome automatically. Existing publication receipts
+              // own ambiguous outcomes and expose their exact-intent Resume action.
+              pauseQueuedPublication(taskId, queued.id, 'Publication needs attention. Open Commit & Push to review or resume it.');
+              throw error;
+            }
+          } catch (error) {
+            pauseQueuedPublication(taskId, queued.id, (error as { code?: string }).code === 'PUBLICATION_QUEUE_BLOCKED'
+              ? (error as Error).message : 'Publication needs attention. Open Commit & Push to review or resume it.');
+            throw error;
+          } finally { notifyQueuedPublication(taskId); }
+        });
+        return res.json({ action: 'commit_push', version: publicVersion(version), versions: listProjectVersions(projectId) });
+      }
       const message = typeof req.body?.message === 'string' ? req.body.message : '';
-      const version = await withTaskMutation(getTask(taskId)!, () => projectCp.commitPush({
+      const previousQueue = getQueuedTaskMessage(taskId);
+      const live = getRunStatus(taskId);
+      if (task.workdir && getLatestTaskAgentRun(taskId)?.runId === live?.runId
+        && live?.kind === 'chat' && (live.status === 'streaming' || live.status === 'compacting')) {
+        const queued = await queueProjectPublication(task, repositoryLink, message, req.body?.deployToDefaultBranch === true);
+        return res.status(202).json({ action: 'publication_queued', queuedMessage: queued,
+          message: `${queued.content} is saved. Olympus will publish after this turn and its checks finish successfully. Do not retry or ask the user to click again.` });
+      }
+      const version = await withTaskMutation(task, () => projectCp.commitPush({
         projectId,
         taskId,
         repositoryLink,
@@ -818,6 +864,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         tokenProvider: tokenProvider(github),
         deployToDefaultBranch: Boolean(req.body?.deployToDefaultBranch),
       }));
+      if (previousQueue?.publication) { consumeQueuedTaskMessage(taskId, previousQueue.id); notifyQueuedPublication(taskId); }
       return res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) });
     } catch (error) {
       return sendError(res, error);
@@ -836,10 +883,12 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
         requireProjectEditorTask(req, registry, projectId, taskId);
         const repositoryLink = requireWriteRepository(projectId);
         const input = { projectId, taskId, publicationId: routeId(req.params.publicationId), repositoryLink, tokenProvider: tokenProvider(github) };
+        const previousQueue = getQueuedTaskMessage(taskId);
         const version = await withTaskMutation(getTask(taskId)!, async () => {
           if (action === 'abandon') { await projectCp.abandonPublication(input); return null; }
           return projectCp.retryPublication(input);
         });
+        if (previousQueue?.publication) { consumeQueuedTaskMessage(taskId, previousQueue.id); notifyQueuedPublication(taskId); }
         return version ? res.json({ version: publicVersion(version), versions: listProjectVersions(projectId) }) : res.json({ abandoned: true });
       } catch (error) { return sendError(res, error); }
     });

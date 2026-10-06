@@ -91,7 +91,7 @@ try {
     assert.equal(getTask(task.id)?.status, 'in_review');
     assert.equal(getRun(task.id)?.messages.filter(message => message.role === 'user' && message.content === content).length, 1);
   }
-  for (const queueState of ['none', 'newer', 'original'] as const) {
+  for (const queueState of ['none', 'newer', 'original', 'publication'] as const) {
     const task = insertTask({ title: 'Failed child with pending attachment', status: 'in_progress' });
     ids.push(task.id);
     const content = `Here\n\n[Attached files:\n- ${join(root, 'pending.png')}]`;
@@ -106,6 +106,10 @@ try {
         id: 'prior-queue', taskId: task.id, content: queueState === 'original' ? content : 'Also check the mobile layout',
         settings: { mode: 'task' }, invitedProfileIds: [], collaborationScope: 'discussion',
         confirmPersistentCollaboration: false, createdAt: 1, updatedAt: 1,
+        ...(queueState === 'publication' ? { publication: {
+          projectId: 'project', runId: 'run', repositoryIdentity: 'repository', editorId: 'editor', branchName: 'task',
+          workdir: root, fingerprint: 'source', message: 'Publish', deployToDefaultBranch: true,
+        } } : {}),
       });
       // Errors terminate the worker transport: the pending message must travel
       // on the error itself, rather than a subsequent done event.
@@ -122,6 +126,7 @@ try {
     assert.equal((await fetch(`${base}/${task.id}/queued-message/prior-queue?profile=default`, { method: 'DELETE' })).status, 409);
     const saved = await (await fetch(`${base}/${task.id}/queued-message?profile=default`)).json();
     assert.equal(saved.queuedMessage.content, getQueuedTaskMessage(task.id)?.content, 'Pending attachment remains available after reload');
+    assert.equal(saved.queuedMessage.publication, undefined, 'a pending user message is restored as chat input, never as a publication action');
   }
 } finally {
   for (const id of ids) discardRun(id);

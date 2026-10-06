@@ -61,7 +61,7 @@ function composer(streaming: boolean) {
         catch (error) { return { ok: false, error: String(error) }; }
       },
     }) },
-    '../lib/store': { useStore: (select: any) => select({ taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) },
+    '../lib/store': { useStore: (select: any) => select({ tasks: [], taskRuns: new Map(), taskOutcomes: new Map(), delegationRuns: new Map() }) },
     '../lib/api': { ...dependency('../client/src/lib/api.ts'),
       putQueuedTaskMessage: async (_task: string, message: any) => { await submit(message.content); return { queuedMessage: message }; },
     },

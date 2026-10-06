@@ -529,7 +529,7 @@ export function fetchProjectVersions(projectId: string) {
 }
 
 export function commitPushProject(projectId: string, taskId: string, message: string, deployToDefaultBranch = false) {
-  return request<{ version: ProjectVersion; versions: ProjectVersion[] }>(`/projects/${encodeURIComponent(projectId)}/commit-push`, {
+  return request<{ version: ProjectVersion; versions: ProjectVersion[] } | { action: 'publication_queued'; message: string; queuedMessage: QueuedTaskMessage }>(`/projects/${encodeURIComponent(projectId)}/commit-push`, {
     method: 'POST', body: JSON.stringify({ taskId, message, deployToDefaultBranch }),
   }, false);
 }

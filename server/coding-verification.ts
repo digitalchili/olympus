@@ -215,9 +215,22 @@ export function codingReviewAllowed(taskId: string, runId: string): boolean {
   // verifyCodingRun checks source freshness before emitting
   // done. Do not start another, uncancellable source scan after terminal delivery.
   if (!evidence) return true;
-  const workdir = getTask(taskId)?.workdir;
+  const task = getTask(taskId);
+  const workdir = task?.workdir;
   const reviewable = evidence.status === 'passed' || (evidence.status === 'skipped'
-    && evidence.source?.fingerprint === evidence.baseline.fingerprint && evidence.source.changedFiles.length === 0);
+    && evidence.source?.fingerprint === evidence.baseline.fingerprint
+    && (evidence.source.changedFiles.length === 0 || (!!task && hasPassingCodingEvidence(task, evidence.source.fingerprint))));
   return reviewable && evidence.source !== null && Boolean(workdir)
     && (evidence.taskWorkdir ?? evidence.workdir) === workdir;
+}
+
+/** A conversational approval may have skipped checks; retain prior same-source evidence. */
+export function hasPassingCodingEvidence(task: Task, fingerprint: string): boolean {
+  const rows = db.prepare('SELECT evidence_json FROM coding_evidence WHERE task_id = ? ORDER BY updated_at DESC, rowid DESC').all(task.id) as { evidence_json: string }[];
+  for (const row of rows) {
+    const evidence = JSON.parse(row.evidence_json) as CodingEvidence;
+    if (evidence.status !== 'skipped' && evidence.source?.fingerprint === fingerprint
+      && (evidence.taskWorkdir ?? evidence.workdir) === task.workdir) return evidence.status === 'passed';
+  }
+  return false;
 }
