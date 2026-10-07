@@ -1347,9 +1347,8 @@ export function TaskChat({
             />
           )}
           <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
-            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               <AttachButton onFiles={addFiles} disabled={configPending} />
-              {!isBot && <button type="button" onClick={secretEntry.open} className="shrink-0 text-xs text-zinc-500 hover:underline">Add secret</button>}
               <InputToolbar
                 modelPickerRequest={modelPickerRequest}
                 model={model}
@@ -1374,6 +1373,7 @@ export function TaskChat({
                   setRunMode(nextMode);
                 }}
               />
+              {!isBot && <button type="button" aria-label="Add secret" onClick={secretEntry.open} className="shrink-0 text-xs text-zinc-500 hover:underline"><span aria-hidden="true">🔑</span> Add secret</button>}
             </div>
             <div className="flex items-center gap-2">
               {context && (

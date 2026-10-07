@@ -7,6 +7,7 @@ for the chat UI, and session metadata projection for cost/token displays.
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import sqlite3
 import time
@@ -260,12 +261,13 @@ def project_session_messages(session_id: Any, task_id: Any = None) -> dict[str, 
         raise WorkerError("Session ID is required.", code="bad_request")
 
     session_db, root_session_id = open_session(session_id, resolve_live=False)
+    display_options = _display_read_options(session_db)
     projected: list[dict[str, Any]] = []
     projected_task_id = string_or_none(task_id) or session_id
 
     for lineage_index, lineage_session_id in enumerate(_session_lineage_ids(session_db, root_session_id)):
         try:
-            rows = session_db.get_messages(lineage_session_id)
+            rows = session_db.get_messages(lineage_session_id, **display_options)
         except Exception as exc:
             raise WorkerError(f"Could not load Hermes session messages: {exc}", code="session_load_error") from exc
 
@@ -336,6 +338,14 @@ MESSAGE_PAGE_MAX_RAW_SCAN = 800
 MESSAGE_PAGE_PREFIX_SCAN = 200
 
 
+def _display_read_options(session_db: Any) -> dict[str, Any]:
+    # Model replay deliberately keeps the native active-only default. Display
+    # reads include compacted history, but never withdrawn/rewound messages.
+    if "include_compacted" in inspect.signature(session_db.get_messages).parameters:
+        return {"include_compacted": True}
+    return {}  # Older Hermes uses compression child sessions instead.
+
+
 def _encode_message_cursor(lineage_index: int, before_offset: int) -> str:
     payload = json.dumps([lineage_index, before_offset], separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
@@ -385,7 +395,7 @@ def _message_page_limit(value: Any) -> int:
     return limit
 
 
-def _active_message_counts(session_db: Any, session_ids: list[str]) -> dict[str, int]:
+def _display_message_counts(session_db: Any, session_ids: list[str], display_options: dict[str, Any]) -> dict[str, int]:
     if not session_ids:
         return {}
     db_path = getattr(session_db, "db_path", None)
@@ -393,10 +403,27 @@ def _active_message_counts(session_db: Any, session_ids: list[str]) -> dict[str,
         raise WorkerError("Hermes session database path is unavailable.", code="session_db_unavailable")
     placeholders = ",".join("?" for _ in session_ids)
     try:
+        if display_options:
+            # Let Hermes backfill its display index before counting. The index
+            # groups carried copies by logical order, matching get_messages.
+            for session_id in session_ids:
+                session_db.get_messages(session_id, limit=0, **display_options)
         with sqlite3.connect(str(db_path)) as conn:
+            count = "COUNT(*)"
+            visible = "active = 1"
+            if display_options:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+                if "display_order" not in columns or conn.execute(
+                    f"SELECT 1 FROM messages WHERE session_id IN ({placeholders}) "
+                    "AND (active = 1 OR compacted = 1) AND display_order IS NULL LIMIT 1", session_ids,
+                ).fetchone():
+                    # Legacy/read-only stores cannot persist the native index.
+                    return {sid: len(session_db.get_messages(sid, **display_options)) for sid in session_ids}
+                count = "COUNT(DISTINCT display_order)"
+                visible = "(active = 1 OR compacted = 1) AND COALESCE(json_extract(CASE WHEN json_valid(display_metadata) THEN display_metadata ELSE '{}' END, '$.model_only'), 0) = 0"
             rows = conn.execute(
-                f"SELECT session_id, COUNT(*) FROM messages "
-                f"WHERE active = 1 AND session_id IN ({placeholders}) GROUP BY session_id",
+                f"SELECT session_id, {count} FROM messages "
+                f"WHERE {visible} AND session_id IN ({placeholders}) GROUP BY session_id",
                 session_ids,
             ).fetchall()
     except Exception as exc:
@@ -406,37 +433,37 @@ def _active_message_counts(session_db: Any, session_ids: list[str]) -> dict[str,
     return counts
 
 
-def _child_projection_boundary(session_db: Any, session_id: str, count: int) -> tuple[int | None, int | None]:
-    """Find the compaction marker and first visible user without loading the thread."""
+def _child_projection_boundary(session_db: Any, session_id: str, count: int, display_options: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Find logical offsets; carried copies can have newer IDs than later messages."""
     prefix_limit = min(count, MESSAGE_PAGE_PREFIX_SCAN)
     if prefix_limit <= 0:
         return None, None
     try:
-        rows = session_db.get_messages(session_id, limit=prefix_limit, offset=0)
+        rows = session_db.get_messages(session_id, limit=prefix_limit, offset=0, **display_options)
     except Exception as exc:
         raise WorkerError(f"Could not load Hermes session messages: {exc}", code="session_load_error") from exc
 
-    marker_id: int | None = None
-    first_user_id: int | None = None
-    for row in rows:
+    marker_offset: int | None = None
+    first_user_offset: int | None = None
+    for offset, row in enumerate(rows):
         if not isinstance(row, dict):
             row = dict(row)
         if row.get("role") != "user":
             continue
         content = _strip_olympus_user_scaffold(_content_to_text(row.get("content")), row.get("display_kind"))
-        row_id = int(row.get("id") or 0)
-        if marker_id is None:
+        if marker_offset is None:
             if _is_compaction_reference(content):
-                marker_id = row_id
+                marker_offset = offset
             continue
         if not _is_compaction_reference(content):
-            first_user_id = row_id
+            first_user_offset = offset
             break
-    return marker_id, first_user_id
+    return marker_offset, first_user_offset
 
 
 def _project_message_page_row(
     row: Any,
+    row_offset: int,
     lineage_session_id: str,
     projected_task_id: str,
     child_boundary: tuple[int | None, int | None] | None,
@@ -447,7 +474,6 @@ def _project_message_page_row(
     if role not in {"user", "assistant"}:
         return None
 
-    row_id = int(row.get("id") or 0)
     content = _content_to_text(row.get("content"))
     if role == "user":
         content = _strip_olympus_user_scaffold(content, row.get("display_kind"))
@@ -463,8 +489,8 @@ def _project_message_page_row(
             return None
 
     if child_boundary is not None:
-        marker_id, first_user_id = child_boundary
-        if marker_id is None or first_user_id is None or row_id < first_user_id:
+        marker_offset, first_user_offset = child_boundary
+        if marker_offset is None or first_user_offset is None or row_offset < first_user_offset:
             return None
 
     if role == "assistant" and not content.strip() and row.get("tool_calls"):
@@ -504,7 +530,8 @@ def project_session_message_page(
     page_limit = _message_page_limit(limit)
     session_db, root_session_id = open_session(session_id, resolve_live=False)
     lineage_ids = _session_lineage_ids(session_db, root_session_id)
-    counts = _active_message_counts(session_db, lineage_ids)
+    display_options = _display_read_options(session_db)
+    counts = _display_message_counts(session_db, lineage_ids, display_options)
     projected_task_id = string_or_none(task_id) or session_id
 
     decoded_cursor = _decode_message_cursor(before)
@@ -537,6 +564,7 @@ def project_session_message_page(
                 lineage_session_id,
                 limit=take,
                 offset=start_offset,
+                **display_options,
             )
         except Exception as exc:
             raise WorkerError(f"Could not load Hermes session messages: {exc}", code="session_load_error") from exc
@@ -549,6 +577,7 @@ def project_session_message_page(
                     session_db,
                     lineage_session_id,
                     counts.get(lineage_session_id, 0),
+                    display_options,
                 )
                 boundaries[lineage_session_id] = child_boundary
 
@@ -557,6 +586,7 @@ def project_session_message_page(
             before_offset = start_offset + row_index
             message = _project_message_page_row(
                 rows[row_index],
+                start_offset + row_index,
                 lineage_session_id,
                 projected_task_id,
                 child_boundary,

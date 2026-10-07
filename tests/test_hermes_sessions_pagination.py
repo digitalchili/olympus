@@ -40,6 +40,21 @@ class FixtureSessionDB:
         return [dict(row) for row in rows]
 
 
+class CompactedFixtureSessionDB(FixtureSessionDB):
+    """Small native display-index fixture; the real native contract is tested separately."""
+    def get_messages(self, session_id, include_compacted=False, limit=None, offset=0):
+        if not include_compacted:
+            return super().get_messages(session_id, limit=limit, offset=offset)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE session_id = ? AND (active = 1 OR compacted = 1) "
+                "AND COALESCE(json_extract(display_metadata, '$.model_only'), 0) = 0 ORDER BY display_order",
+                (session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows[offset:None if limit is None else offset + limit]]
+
+
 def create_fixture(path: Path) -> FixtureSessionDB:
     with sqlite3.connect(path) as conn:
         conn.executescript(
@@ -150,6 +165,32 @@ class MessagePaginationTest(unittest.TestCase):
             "child-assistant-01",
             "automatic synthesis",
         ])
+
+    def test_in_place_compaction_keeps_saved_history_available(self):
+        with sqlite3.connect(self.db.db_path) as conn:
+            conn.executescript("""
+                DELETE FROM sessions WHERE id = 'child';
+                DELETE FROM messages WHERE session_id = 'child';
+                ALTER TABLE messages ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE messages ADD COLUMN display_order INTEGER;
+                ALTER TABLE messages ADD COLUMN display_metadata TEXT;
+                UPDATE messages SET display_order = id;
+                UPDATE messages SET active = 0, compacted = 1 WHERE id <= 20;
+                INSERT INTO messages (session_id, role, content, timestamp, active, compacted, display_order)
+                  VALUES ('root', 'user', 'withdrawn', 200, 0, 0, 100);
+                INSERT INTO messages (session_id, role, content, timestamp, display_order, display_metadata)
+                  VALUES ('root', 'assistant', 'internal note', 201, 101, '{"model_only":true}');
+            """)
+        modern = CompactedFixtureSessionDB(self.db.db_path)
+        with patch.object(hermes_sessions, "open_session", return_value=(modern, "root")):
+            page = hermes_sessions.project_session_message_page("root", limit=7)
+            self.assertTrue(page["pageInfo"]["hasOlder"])
+            assembled = page["messages"]
+            while page["pageInfo"]["hasOlder"]:
+                page = hermes_sessions.project_session_message_page("root", limit=7, before=page["pageInfo"]["olderCursor"])
+                assembled = page["messages"] + assembled
+            self.assertEqual([m["content"] for m in assembled], [f"root-{i:02d}" for i in range(24)])
+            self.assertEqual(hermes_sessions.project_session_messages("root")["messages"], assembled)
 
     def test_invalid_limits_and_cursors_are_rejected(self):
         for limit in (0, 101, True, 1.5, "not-an-int"):

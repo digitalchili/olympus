@@ -16,6 +16,7 @@ const pythonTests = [
   'test_hermes_worker_resolve.py',
   'test_steering_native.py',
   'test_hermes_sessions_pagination.py',
+  'test_hermes_history_native.py',
   'test_delegation_event_projection.py',
   'test_worker_environment_overrides.py',
   'test_worker_usage.py',

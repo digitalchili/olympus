@@ -84,7 +84,7 @@ for (const name of ['TaskChat', 'NewTaskPage'] as const) {
   let secretSend = secretComposer.render().find(node => node.type === 'button' && node.props['aria-label'] === 'Send message');
   assert.ok(secretSend.props.disabled, `${name}: every ordinary message uses normal settings readiness`);
   // Secret entry is independent of the model, but must be explicitly selected.
-  secretComposer.render().find(node => node.type === 'button' && node.props.children === 'Add secret').props.onClick();
+  secretComposer.render().find(node => node.type === 'button' && node.props['aria-label'] === 'Add secret').props.onClick();
   let dialog = secretComposer.render().find(node => node.props.draft);
   assert.ok(dialog, `${name}: Add secret opens the explicit form`);
   assert.equal(Object.keys(dialog.props.draft).length, 0, 'the form does not infer or copy values from the chat draft');

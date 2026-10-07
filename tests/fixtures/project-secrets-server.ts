@@ -27,8 +27,18 @@ adapter.getDefaults = async () => ({ provider: 'fixture', model: 'fixture-model'
 adapter.getModels = async () => ({ defaultModel: 'fixture-model', activeProvider: 'fixture', groups: [] }) as never;
 adapter.healthCheck = async () => true;
 adapter.getGoalStatus = async () => null;
-adapter.getMessages = async () => [];
-adapter.getMessagePage = async () => ({ messages: [], pageInfo: { hasMore: false, nextCursor: null } }) as never;
+const history = process.env.OLYMPUS_FIXTURE_HISTORY === '1' ? Array.from({ length: 85 }, (_, i) => ({
+  id: `saved-${i}`, task_id: task.id, role: i % 2 ? 'assistant' as const : 'user' as const,
+  content: `Saved message ${String(i + 1).padStart(2, '0')}: ${i % 2 ? 'Here is the design feedback.' : 'Please review this design.'}`,
+  created_at: 1_790_000_000_000 + i * 1000,
+})) : [];
+if (history.length) db.prepare('UPDATE tasks SET last_agent_response_at = ? WHERE id = ?').run(Date.now(), task.id);
+adapter.getMessages = async () => history;
+adapter.getMessagePage = async (_id, _taskId, options) => {
+  const end = options?.before ? Number(options.before) : history.length;
+  const start = Math.max(0, end - (options?.limit ?? 40));
+  return { messages: history.slice(start, end), pageInfo: { hasOlder: start > 0, olderCursor: start > 0 ? String(start) : null } };
+};
 adapter.getSessionMetadata = async () => null;
 adapter.generateTitle = async () => { modelRequests++; throw new Error('Disabled in this fixture'); };
 adapter.chatStream = async function* () { modelRequests++; throw new Error('Disabled in this fixture'); };
