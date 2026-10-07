@@ -45,7 +45,7 @@ class NativeSteeringTests(unittest.TestCase):
                 self.assertEqual(len(rows), 1, 'No duplicate Olympus delivery receipt')
                 with patch('hermes_sessions.open_session', return_value=(db, 'task-1')):
                     full = project_session_messages('task-1')['messages']
-                paged = _project_message_page_row(rows[0], 'task-1', 'task-1', None)
+                paged = _project_message_page_row(rows[0], 0, 'task-1', 'task-1', None)
                 self.assertEqual(full[0]['content'], content)
                 self.assertEqual(paged['content'], content)
                 # A late drain is handed back by Hermes finalization, never

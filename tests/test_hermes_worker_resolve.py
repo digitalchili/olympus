@@ -348,7 +348,7 @@ class ResolveModelProviderTest(unittest.TestCase):
         self.assertEqual(hermes_sessions._sanitize_agent_history([row]), [
             {"role": "user", "content": native, "display_kind": "steer"},
         ])
-        projected = hermes_sessions._project_message_page_row(row, "session-1", "task-1", None)
+        projected = hermes_sessions._project_message_page_row(row, 0, "session-1", "task-1", None)
         self.assertEqual(projected["content"], content)
         self.assertEqual(hermes_sessions._strip_olympus_user_scaffold(native), native,
                          "User-typed marker lookalikes are not native delivery receipts")
