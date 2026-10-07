@@ -114,6 +114,36 @@ try {
     assert.equal(await readFile(join(workdir, 'EXTERNAL.md'), 'utf8'), 'From GitHub\n');
   });
 
+  await test('task source update preserves concurrent work, enforces ownership and excludes same-task activity', async () => {
+    await acquire();
+    const taskWorkdir = getTask(owner.id)!.workdir!;
+    const before = await git(taskWorkdir, 'rev-parse', 'HEAD');
+    await writeFile(join(seed, 'LATEST.md'), 'Fresh task source\n');
+    await git(seed, 'add', '.'); await git(seed, 'commit', '-m', 'Task source update'); await git(seed, 'push', remote, 'main');
+    const update = () => call('POST', {taskId:owner.id}, '', 'editor/update-source');
+    assert.equal((await call('POST', {taskId:owner.id}, 'writer', 'editor/update-source')).status, 404);
+    assert.equal((await call('POST', {taskId:owner.id}, 'viewer', 'editor/update-source')).status, 404);
+    for (const phase of ['streaming', 'compacting', 'preparing']) {
+      const release = phase === 'preparing' ? claimTaskOperation(owner.id, project.id) : null;
+      if (phase === 'streaming') startRun(owner.id, owner.id, 'Working');
+      if (phase === 'compacting') startCompactionRun(owner.id, owner.id);
+      try { assert.equal((await update()).status, 409); }
+      finally { release?.(); discardRun(owner.id); }
+    }
+    backgroundWork = async () => ({available:false,work:[]});
+    try { assert.equal((await update()).status, 409); }
+    finally { backgroundWork = async () => ({available:true,work:[]}); }
+    assert.equal(await git(taskWorkdir, 'rev-parse', 'HEAD'), before);
+    startRun(other.id, other.id, 'Independent task');
+    try {
+      const result = await update();
+      assert.equal(result.status, 200, JSON.stringify(result));
+      assert.equal(result.body.updated, true);
+      assert.equal(await readFile(join(taskWorkdir, 'LATEST.md'), 'utf8'), 'Fresh task source\n');
+      assert.equal((await update()).body.updated, false);
+    } finally { discardRun(other.id); }
+  });
+
   await test('sync preserves dirty and active task workspaces, including legacy release requests', async () => {
     const editor = await acquire();
     const taskWorkdir = getTask(owner.id)!.workdir!;

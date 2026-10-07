@@ -2,7 +2,7 @@ import { TaskActivityIndicator } from './TaskActivityIndicator';
 import { taskExecutionLabel } from '../lib/runFailurePresentation';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useParams } from 'react-router';
-import { MoreHorizontal, Trash2, Loader2, Pencil, Check, GitCommitHorizontal } from 'lucide-react';
+import { MoreHorizontal, Trash2, Loader2, Pencil, Check, GitCommitHorizontal, RefreshCw } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { StatusIcon } from './StatusIcon';
 import { useStore, optimisticMoveTask } from '../lib/store';
@@ -13,6 +13,7 @@ import {
   fetchProject,
   fetchProjectEditor,
   fetchProjectEditorStatus,
+  updateProjectTaskSource,
   patchTask,
   moveTask,
   markTaskViewed,
@@ -67,6 +68,7 @@ export function TaskDetailPage() {
   const [publicationIssue, setPublicationIssue] = useState<PublicationIssueCode | null>(null);
   const gitStatusGeneration = useRef(0);
   const [showCommitPushModal, setShowCommitPushModal] = useState(false);
+  const [updatingSource, setUpdatingSource] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const markViewedInFlightRef = useRef<string | null>(null);
   const titleAnimation = useRenameAnimation(task?.title ?? '', task?.id ?? null);
@@ -121,6 +123,19 @@ export function TaskDetailPage() {
       setTaskGitStatus(null);
     }
   }, [effectiveProjectId, task]);
+
+  const handleUpdateSource = async () => {
+    if (!effectiveProjectId || !taskId || updatingSource) return;
+    setShowMenu(false);
+    setUpdatingSource(true);
+    try {
+      const result = await updateProjectTaskSource(effectiveProjectId, taskId);
+      toast.success(result.message);
+      await refreshTaskGitStatus();
+    } catch (error) {
+      toast.error(toErrorMessage(error, 'Could not update this task from GitHub'));
+    } finally { setUpdatingSource(false); }
+  };
 
   const handlePublicationIssue = useCallback((code: PublicationIssueCode) => {
     setPublicationIssue(code);
@@ -424,13 +439,14 @@ export function TaskDetailPage() {
 
               <div className="relative shrink-0">
                 <button
+                  aria-label="Task actions"
                   onClick={() => setShowMenu(!showMenu)}
                   className="p-1.5 rounded-md text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                 >
                   <MoreHorizontal size={16} />
                 </button>
                 {showMenu && (
-                  <div ref={menuRef} className="absolute right-0 top-full mt-1 min-w-[180px] py-1 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700 shadow-xl z-50">
+                  <div ref={menuRef} className="absolute right-0 top-full mt-1 min-w-[220px] py-1 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700 shadow-xl z-50">
                     {canCommitPush && (
                       <>
                         <button
@@ -440,6 +456,15 @@ export function TaskDetailPage() {
                         >
                           <GitCommitHorizontal size={14} className="text-zinc-500 dark:text-zinc-400" />
                           {publicationLabel}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updatingSource || executionRun?.status === 'streaming' || executionRun?.status === 'compacting'}
+                          onClick={() => void handleUpdateSource()}
+                          className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 transition-colors text-left"
+                        >
+                          <RefreshCw size={14} className={updatingSource ? 'animate-spin' : 'text-zinc-500 dark:text-zinc-400'} />
+                          {updatingSource ? 'Updating source…' : 'Update from GitHub'}
                         </button>
                         <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
                       </>

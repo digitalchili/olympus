@@ -23,8 +23,8 @@ const blocker = { kind: 'project_operation' as const, task: null, message: 'A Gi
 assert.match(render({ lastSync, blocker }), /A GitHub sync is already running/);
 assert.doesNotMatch(render({ lastSync, blocker }), /Release editor|previous task|\/tasks\//i);
 assert.doesNotMatch(render({ lastSync, blocker: null }), /Release editor|previous task|\/tasks\//i, 'syncing the baseline has no dependency on another task');
-assert.match(updated, /New tasks use this version/, 'verified sync must not imply that existing task workspaces were overwritten');
-assert.match(render({ lastSync: null, blocker: null }), /Downloads the starting point for new tasks/);
+assert.match(updated, /New tasks check GitHub for the latest source automatically/);
+assert.match(render({ lastSync: null, blocker: null }), /New tasks check GitHub for the latest source automatically/);
 assert.match(render({ lastSync: null, blocker: null }), /Existing task branches and files stay unchanged/);
 assert.match(render({ lastSync, blocker }, true), /disabled=""/);
 assert.match(render({ lastSync, blocker }, true), /Syncing/);

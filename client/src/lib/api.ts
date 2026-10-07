@@ -510,6 +510,12 @@ export function prepareProjectEditor(projectId: string, taskId: string) {
   }, false);
 }
 
+export function updateProjectTaskSource(projectId: string, taskId: string) {
+  return request<{ updated: boolean; currentSha: string; message: string }>(`/projects/${encodeURIComponent(projectId)}/editor/update-source`, {
+    method: 'POST', body: JSON.stringify({ taskId }),
+  }, false);
+}
+
 export function releaseProjectEditor(projectId: string, taskId: string) {
   return request<{ editor: PublicProjectEditorLease }>(`/projects/${encodeURIComponent(projectId)}/editor/release`, {
     method: 'POST', body: JSON.stringify({ taskId }),

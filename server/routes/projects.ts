@@ -684,6 +684,22 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     }
   });
 
+  router.post('/:id/editor/update-source', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      const taskId = taskIdFromBody(req.body);
+      const task = requireProjectEditorTask(req, registry, projectId, taskId);
+      const repositoryLink = requireWriteRepository(projectId);
+      const result = await withTaskMutation(task, () => projectCp.updateTaskSource({
+        projectId, taskId,
+        profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
+        repositoryLink, tokenProvider: tokenProvider(github),
+      }));
+      return res.json(result);
+    } catch (error) { return sendError(res, error); }
+  });
+
   router.get('/:id/editor', (req, res) => {
     try {
       const projectId = routeId(req.params.id);

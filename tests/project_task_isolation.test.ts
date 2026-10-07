@@ -89,9 +89,10 @@ try {
     if (args[0] === 'fetch' || args[0] === 'ls-remote') throw new Error('GitHub unavailable');
     return promisify(execFile)('git', args, { cwd, env: { ...process.env, ...options?.env } });
   } });
-  const cached = await offline.prepareTask({ projectId: project.id, taskId: task('Start from downloaded source').id, profileId: 'default', repositoryLink });
-  assert.equal(await readFile(join(cached.workdir, 'README.md'), 'utf8'), 'Published baseline\n');
-  await assert.rejects(readFile(join(cached.workdir, 'UPSTREAM.txt')), 'new task preparation never silently changes the last synced source');
+  await assert.rejects(offline.prepareTask({ projectId: project.id, taskId: task('Needs fresh source').id, profileId: 'default', repositoryLink }),
+    { code: 'PROJECT_GIT_UNAVAILABLE' }, 'a new task cannot silently use stale source when GitHub is unavailable');
+  assert.equal((await offline.prepareTask({ projectId: project.id, taskId: first.id, profileId: 'default', repositoryLink })).id, a.id,
+    'existing task work remains available offline');
   const sync = await service.sync({ projectId: project.id, repositoryLink, releaseEditorLeaseId: legacyLease.id });
   assert.equal(sync.updated, true);
   assert.equal(sync.currentSha, await git(seed, 'rev-parse', 'HEAD'));

@@ -9,7 +9,7 @@ Each task keeps its own files and protected Git branch across turns. Commit & Pu
 ## Storage and compatibility
 
 - New task clones live under `project-checkouts/tasks/<projectId>/<taskId>`.
-- A separate `project-checkouts/baselines/<projectId>-<sourceKey>` clone supplies the downloaded default branch for new tasks. The source key identifies the repository connection and branch, so changing either preserves earlier downloads and creates the correct baseline. Project sync refreshes this baseline and records the verified time and commit. It never merges into existing task folders.
+- A separate `project-checkouts/baselines/<projectId>-<sourceKey>` clone supplies the downloaded default branch for new tasks. The source key identifies the repository connection and branch, so changing either preserves earlier downloads and creates the correct baseline. Before creating each new task workspace, Olympus fetches the current default branch into this baseline and records the verified time and commit. Project sync can also refresh it. A failed fetch stops preparation instead of silently using stale source; the saved task request remains retryable. Neither operation merges into existing task folders.
 - The existing `project-checkouts/<projectId>` folder remains with its current task. Migration preserves its files, branch, lease, and path, even when dirty or active.
 - Lease uniqueness changes from one active lease per Project to one per task and workspace. Releasing a workspace preserves its folder and the task's workdir. Historical released leases that point at another task's legacy folder must not be reused.
 - Clones have independent Git metadata and objects. Authentication is supplied only to server Git operations, never persisted in remotes or task files.
@@ -32,7 +32,11 @@ A resume requested during an active chat is saved until that turn finishes succe
 
 **Stop retrying this publication** requires confirmation. It records abandonment without undoing anything GitHub may already have accepted. The saved commit and local files remain available.
 
-**Sync latest from GitHub** downloads the starting point for new tasks. Existing task branches, files, and their verification evidence stay unchanged. The displayed sync time and commit describe the last successful verification, not a guarantee of current connectivity.
+**Sync latest from GitHub** refreshes the separate baseline. New task workspaces also fetch the latest default branch automatically. Existing task branches and files stay unchanged, and existing tasks can resume offline. The displayed sync time and commit describe the last successful verification, not a guarantee of current connectivity.
+
+An existing task can use its **Task actions → Update from GitHub** action while idle. `POST /api/projects/:id/editor/update-source` accepts `{ taskId }` through the same task/profile ownership and active-work guards as other workspace mutations. It fetches the linked default branch with a read-only token and merges it into that task branch. It never pushes or deploys. Local commits are retained; uncommitted files, unfinished Git operations and pending publications require resolution first. Git conflicts are aborted back to the prior committed tree, and ignored local files are never overwritten. Separately initialized histories are preserved with an actionable explanation. Updating a published task reopens its retained workspace.
+
+After updating, run checks on the combined source before publication; earlier evidence becomes stale when the source changes. Parallel tasks still have separate branches: publication to the default branch uses non-force updates, so a competing change can require another update and verification. A successful Git merge alone does not establish that combined application behavior is correct.
 
 ## GitHub source access
 

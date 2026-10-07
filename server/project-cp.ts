@@ -12,7 +12,9 @@ import {
   listProjectVersions,
   releaseProjectEditor,
   reactivateProjectEditor,
+  advanceProjectEditorBaseline,
 } from './db/project-cp.js';
+import { recordProjectSyncEvidence } from './db/project-sync.js';
 import { createProjectPublication, getProjectPublication, getPendingProjectPublication, setProjectPublicationCommit, confirmProjectPublication, abandonProjectPublication, markProjectPublicationBranchAdvanced, type ProjectPublication } from './db/project-publications.js';
 import { buildProjectGitEnv, parseProjectGitConfig, validateProjectGitTransportConfig, ProjectGitError } from './project-git-auth.js';
 import { getTask, updateTask } from './db/queries.js';
@@ -90,6 +92,7 @@ export interface ProjectCpSyncResult {
 export interface ProjectCpService {
   acquireEditor(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
   prepareTask(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
+  updateTaskSource(input: PrepareProjectTaskInput): Promise<ProjectCpSyncResult>;
   releaseEditor(input: { projectId: string; taskId: string }): Promise<ProjectEditorLease>;
   status(input: { projectId: string; taskId: string }): Promise<ProjectGitStatus>;
   commitPush(input: {
@@ -477,8 +480,8 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       await serialized(`baseline:${input.projectId}`, async () => {
         const baseline = projectBaselineWorkdir(options.rootDir, input.projectId, input.repositoryLink);
         await ensureManagedParents(baseline);
-        if (await pathExists(baseline)) await validateBaseline(baseline, input.repositoryLink);
-        else await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
+        const synced = await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
+        recordProjectSyncEvidence(input.repositoryLink, { verifiedAt: now(), currentSha: synced.currentSha, updated: synced.updated });
         cloning = true;
         await git(dirname(workdir), ['clone', '--no-hardlinks', '--no-recurse-submodules', '--template=', '--single-branch', '--branch', input.repositoryLink.defaultBranch, baseline, workdir]);
         const emptyBase = await emptyRepositoryBase(baseline);
@@ -510,6 +513,58 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
 
     async prepareTask(input) {
       return serialized(`task:${input.taskId}`, () => acquireEditorUnlocked(input));
+    },
+
+    async updateTaskSource(input) {
+      return serialized(`task:${input.taskId}`, async () => {
+        rejectPending(input.projectId, input.taskId);
+        const lease = await acquireEditorUnlocked(input);
+        await requireOrigin(lease.workdir, input.repositoryLink);
+        const blocked = (message: string) => Object.assign(new Error(message), { statusCode: 409 });
+        if (lease.baseBranch !== input.repositoryLink.defaultBranch
+          || (await git(lease.workdir, ['branch', '--show-current'])).stdout.trim() !== lease.branchName) {
+          throw blocked('This task’s branch has changed. Review its source before updating from GitHub.');
+        }
+        if ((await git(lease.workdir, ['status', '--porcelain=v1', '--untracked-files=all'])).stdout.trim()) {
+          throw blocked('This task has uncommitted changes. Ask the assistant to save a local commit, then update from GitHub. Your files are preserved.');
+        }
+        for (const state of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply']) {
+          const path = (await git(lease.workdir, ['rev-parse', '--git-path', state])).stdout.trim();
+          if (await pathExists(resolve(lease.workdir, path))) throw blocked('Finish the existing Git operation before updating this task.');
+        }
+        const before = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+        const remoteRef = `refs/remotes/origin/${input.repositoryLink.defaultBranch}`;
+        await git(lease.workdir, ['fetch', 'origin', `+refs/heads/${input.repositoryLink.defaultBranch}:${remoteRef}`], await authOptions(input.repositoryLink, input.tokenProvider, true));
+        const source = (await git(lease.workdir, ['rev-parse', remoteRef])).stdout.trim();
+        try {
+          await git(lease.workdir, ['merge-base', 'HEAD', source]);
+        } catch (error) {
+          if (error instanceof ProjectGitError && error.exitCode === 1) {
+            throw blocked('This task and GitHub have no shared history, which can happen when an empty repository is initialized separately. Start a new task from the current source, or ask the assistant to reconcile the histories. This task’s files and commits are preserved.');
+          }
+          throw error;
+        }
+        try {
+          await git(lease.workdir, ['-c', `branch.${lease.branchName}.mergeOptions=`, '-c', 'merge.autostash=false', '-c', 'commit.gpgsign=false', 'merge', '--strategy=ort', '--ff', '--no-squash', '--commit', '--no-edit', '--no-gpg-sign', '--no-overwrite-ignore', source]);
+        } catch (error) {
+          const conflicts = (await git(lease.workdir, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout.split('\0').filter(Boolean);
+          const mergeHead = (await git(lease.workdir, ['rev-parse', '--git-path', 'MERGE_HEAD'])).stdout.trim();
+          if (await pathExists(resolve(lease.workdir, mergeHead))) await git(lease.workdir, ['merge', '--abort']);
+          if (conflicts.length) throw blocked('The latest GitHub changes conflict with this task. Ask the assistant to merge origin/' + input.repositoryLink.defaultBranch + ' and resolve the conflicts, then run checks. Your original files and commits are preserved.');
+          throw error;
+        }
+        await git(lease.workdir, ['merge-base', '--is-ancestor', source, 'HEAD']);
+        await git(lease.workdir, ['merge-base', '--is-ancestor', before, 'HEAD']);
+        if ((await git(lease.workdir, ['status', '--porcelain=v1', '--untracked-files=all'])).stdout.trim()) {
+          throw blocked('The source update did not finish cleanly. Review this task’s Git state before continuing.');
+        }
+        // Upstream-only updates are clean; a merge retaining task commits is still unpublished.
+        advanceProjectEditorBaseline(lease.id, lease.baseSha, source, now());
+        const currentSha = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+        return { updated: before !== currentSha, currentSha, message: before === currentSha
+          ? 'This task already includes the latest GitHub source.'
+          : 'Task updated from GitHub. Run checks before publishing.' };
+      });
     },
 
     async releaseEditor(input) {
