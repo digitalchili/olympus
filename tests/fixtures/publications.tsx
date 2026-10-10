@@ -35,15 +35,16 @@ window.fetch = async (input, init) => {
   }
   if (path.endsWith('/generate-commit-message')) return json({ message: 'Update homepage design' });
   if (path.endsWith('/editor/status')) return json({ status: {
-    clean: state.published || state.pending, changedFiles: state.published || state.pending ? [] : ['draft.txt'],
+    ...(state.outcome === 'promotion' && !state.published ? { defaultBranchPromotion: { commitSha: sha, commitMessage: 'Fixture change', targetBranch: 'main' } } : {}),
+    clean: state.published || state.pending || state.outcome === 'promotion', changedFiles: state.published || state.pending || state.outcome === 'promotion' ? [] : ['draft.txt'],
     summary: state.pending ? 'Saved commit; publication unconfirmed' : state.published ? 'Working tree is clean' : 'One changed file',
     diff: 'A local draft retained throughout publication', pendingPublication: state.pending ? { ...pending, ...(state.outcome === 'conflict' ? { failureReason: 'branch_advanced' } : {}) } : null,
   } });
   if (path.endsWith('/sync')) return json({ lastSync: null, blocker: null });
   if (path.endsWith('/commit-push')) {
     state.commitRequests++; state.pending = true; save();
-    if (state.outcome !== 'success') return json({ error: 'GitHub publication could not be confirmed.', code: 'PROJECT_PUBLICATION_UNCONFIRMED' }, 503);
-    state.pending = false; state.published = true; save(); return json({ version, versions: [version] });
+    if (state.outcome !== 'success' && state.outcome !== 'promotion') return json({ error: 'GitHub publication could not be confirmed.', code: 'PROJECT_PUBLICATION_UNCONFIRMED' }, 503);
+    state.pending = false; state.published = true; save(); return json({ version: { ...version, branchName: body.deployToDefaultBranch ? 'main' : version.branchName }, versions: [version] });
   }
   if (path.endsWith('/publications/publication-1/retry')) {
     if (Object.keys(body).join() !== 'taskId') throw new Error('Retry changed saved intent');
@@ -66,7 +67,7 @@ function Fixture() {
   return <>
     <div className="flex items-center gap-4 border-b bg-zinc-100 p-3 text-sm">
       <strong>Disposable publication fixture</strong>
-      <label>Gateway outcome <select aria-label="Gateway outcome" value={outcome} onChange={event => { state.outcome = event.target.value; save(); setOutcome(event.target.value); }}><option value="success">Success</option><option value="unconfirmed">Unconfirmed</option><option value="conflict">Branch advanced</option><option value="queued">Resume during chat</option><option value="busy">Task running</option><option value="error">Connection error</option></select></label>
+      <label>Gateway outcome <select aria-label="Gateway outcome" value={outcome} onChange={event => { state.outcome = event.target.value; save(); setOutcome(event.target.value); }}><option value="promotion">Published task commit</option><option value="success">Success</option><option value="unconfirmed">Unconfirmed</option><option value="conflict">Branch advanced</option><option value="queued">Resume during chat</option><option value="busy">Task running</option><option value="error">Connection error</option></select></label>
       <button onClick={() => setModal(true)}>Open task publication</button>
       <button onClick={() => document.documentElement.classList.toggle('dark')}>Toggle theme</button>
       <button onClick={() => { state = initial(); save(); location.reload(); }}>Reset fixture</button>

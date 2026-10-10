@@ -444,6 +444,8 @@ export function ProjectDetailPage() {
   const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'queued' | 'success'>('idle');
   const [lastPublication, setLastPublication] = useState<ProjectVersion | null>(null);
   const [deployToDefault, setDeployToDefault] = useState(false);
+  const promotion = codeStatus?.clean ? codeStatus.defaultBranchPromotion : undefined;
+  const publicationMessage = promotion?.commitMessage ?? commitMessage.trim();
   const publicationGeneration = useRef(0);
   useEffect(() => {
     ++publicationGeneration.current;
@@ -458,19 +460,19 @@ export function ProjectDetailPage() {
   };
 
   const commitAndPush = async () => {
-    if (!editor || !codeStatus || codeStatus.clean || codeStatus.pendingPublication || !commitMessage.trim() || busy) return;
+    if (!editor || !codeStatus || (codeStatus.clean && !(promotion && deployToDefault)) || codeStatus.pendingPublication || !publicationMessage || busy) return;
     const request = publicationGeneration.current;
     const targetBranch = deployToDefault && project?.repositoryLink?.defaultBranch
       ? project.repositoryLink.defaultBranch
       : editor.branchName;
-    const preview = codeStatus.changedFiles.slice(0, 12).join('\n');
+    const preview = promotion ? `Existing commit ${promotion.commitSha.slice(0, 7)}: ${promotion.commitMessage}` : codeStatus.changedFiles.slice(0, 12).join('\n');
     const confirmMsg = `Commit & Push to ${targetBranch}?\n\n${preview}${codeStatus.changedFiles.length > 12 ? '\n…' : ''}`;
     if (!window.confirm(confirmMsg)) return;
     setBusy(true);
     setPushStatus('pushing');
     setActionError(null);
     try {
-      const result = await commitPushProject(projectId, editor.taskId, commitMessage.trim(), deployToDefault);
+      const result = await commitPushProject(projectId, editor.taskId, publicationMessage, deployToDefault);
       if (request !== publicationGeneration.current) return;
       if (!('version' in result)) {
         setPushStatus('queued');
@@ -633,6 +635,7 @@ export function ProjectDetailPage() {
                   {codeStatus && !codeStatus.clean && <><div><h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Changed files</h3><ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded-lg border border-zinc-200 p-2 font-mono text-xs dark:border-zinc-700">{codeStatus.changedFiles.map((file) => <li key={file} className="truncate">{file}</li>)}</ul></div><details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700"><summary className="cursor-pointer text-xs font-medium">Review change preview</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">{codeStatus.diff || 'Binary or untracked files changed; review the file list above.'}</pre></details></>}
                   {codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} queued={pushStatus === 'queued'} disabled={busy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
                   {!codeStatus?.pendingPublication && <div>
+                    {promotion ? <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">Publish existing commit <code>{promotion.commitSha.slice(0, 7)}</code> to {promotion.targetBranch}. The original commit message will be kept.</p> : <>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-xs font-medium text-zinc-500">Checkpoint message</label>
                       <button
@@ -653,17 +656,18 @@ export function ProjectDetailPage() {
                       placeholder="Describe what changed"
                       className="h-9 w-full rounded-lg border border-zinc-200 bg-transparent px-3 text-sm dark:border-zinc-700"
                     />
+                    </>}
                     {project?.repositoryLink?.defaultBranch && (
                       <label className="flex items-center gap-2 pt-1 text-xs text-zinc-600 dark:text-zinc-400 cursor-pointer select-none">
                         <input
                           type="checkbox"
                           checked={deployToDefault}
                           disabled={busy}
-                          onChange={(e) => setDeployToDefault(e.target.checked)}
+                          onChange={(e) => { setDeployToDefault(e.target.checked); setPushStatus('idle'); }}
                           className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800"
                         />
                         <span>
-                          Also push to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{project.repositoryLink.defaultBranch}</span>
+                          {promotion ? 'Push existing commit to' : 'Also push to'} <span className="font-semibold text-zinc-900 dark:text-zinc-100">{project.repositoryLink.defaultBranch}</span>
                         </span>
                       </label>
                     )}
@@ -696,7 +700,7 @@ export function ProjectDetailPage() {
                   <div className="flex flex-wrap gap-2">
                     {!codeStatus?.pendingPublication && <button
                       type="button"
-                      disabled={busy || pushStatus === 'queued' || !codeStatus || codeStatus.clean || !commitMessage.trim()}
+                      disabled={busy || pushStatus === 'queued' || !codeStatus || (codeStatus.clean && !(promotion && deployToDefault)) || !publicationMessage}
                       onClick={() => void commitAndPush()}
                       className="inline-flex items-center gap-1.5 h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
                     >
@@ -709,7 +713,7 @@ export function ProjectDetailPage() {
                           <Check size={13} /> Pushed!
                         </>
                       ) : (
-                        'Commit & Push'
+                        promotion ? `Push to ${promotion.targetBranch}` : 'Commit & Push'
                       )}
                     </button>}
                     <button

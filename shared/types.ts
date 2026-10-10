@@ -473,6 +473,7 @@ export interface PendingProjectPublication {
   state: 'prepared' | 'pending';
 }
 export interface ProjectGitStatus {
+  defaultBranchPromotion?: { commitSha: string; commitMessage: string; targetBranch: string };
   clean: boolean;
   changedFiles: string[];
   summary: string;

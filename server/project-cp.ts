@@ -14,6 +14,7 @@ import {
   reactivateProjectEditor,
   advanceProjectEditorBaseline,
 } from './db/project-cp.js';
+import { getProjectRepositoryLink } from './db/projects.js';
 import { recordProjectSyncEvidence } from './db/project-sync.js';
 import { createProjectPublication, getProjectPublication, getPendingProjectPublication, setProjectPublicationCommit, confirmProjectPublication, abandonProjectPublication, markProjectPublicationBranchAdvanced, type ProjectPublication } from './db/project-publications.js';
 import { buildProjectGitEnv, parseProjectGitConfig, validateProjectGitTransportConfig, ProjectGitError } from './project-git-auth.js';
@@ -246,7 +247,8 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     if (!lease) throw new Error('This task is not the Project editor');
     await git(lease.workdir, ['rev-parse', '--is-inside-work-tree']);
     const headSha = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
-    const recordedCommits = new Set(listProjectVersions(projectId).filter(version => version.taskId === taskId).map(version => version.commitSha));
+    const versions = listProjectVersions(projectId).filter(version => version.taskId === taskId);
+    const recordedCommits = new Set(versions.map(version => version.commitSha));
     const hasUnpublishedCommit = headSha !== lease.baseSha && !recordedCommits.has(headSha);
     const { stdout: porcelain } = await git(lease.workdir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
     const changedFiles = changedFilesFromPorcelain(porcelain);
@@ -254,7 +256,12 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       ? { stdout: '' }
       : await git(lease.workdir, ['diff', 'HEAD', '--', ...changedFiles]);
     const pending = getPendingProjectPublication(projectId, taskId);
+    const defaultBranch = getProjectRepositoryLink(projectId)?.defaultBranch;
+    const published = versions.find(version => version.leaseId === lease.id && version.commitSha === headSha && version.branchName === lease.branchName);
+    const canPromote = !pending && changedFiles.length === 0 && published && defaultBranch && lease.branchName !== defaultBranch
+      && !versions.some(version => version.commitSha === headSha && version.branchName === defaultBranch);
     return {
+      ...(canPromote ? { defaultBranchPromotion: { commitSha: headSha, commitMessage: published.commitMessage, targetBranch: defaultBranch } } : {}),
       pendingPublication: pending ? publicPublication(pending) : null,
       clean: !pending && changedFiles.length === 0 && !hasUnpublishedCommit,
       changedFiles,
@@ -583,13 +590,14 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         await requireOrigin(lease.workdir, input.repositoryLink);
         if (!input.deployToDefaultBranch && lease.branchName === input.repositoryLink.defaultBranch) throw new Error('Olympus will not push directly to the default branch');
         const status = await readStatus(input.projectId, input.taskId);
-        if (status.clean) throw new Error('There are no changes to Commit & Push');
+        const promotion = input.deployToDefaultBranch && status.defaultBranchPromotion?.targetBranch === input.repositoryLink.defaultBranch;
+        if (status.clean && !promotion) throw new Error('There are no changes to Commit & Push');
         let message = validateCommitMessage(input.message);
         const head = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
         const unpublished = head !== lease.baseSha && !listProjectVersions(input.projectId).some(version => version.taskId === input.taskId && version.commitSha === head);
         const refs = await publicationRefs(lease, input.repositoryLink, input.tokenProvider, input.deployToDefaultBranch);
         let parentSha = head; let commitSha: string | null = null; let changedFiles = status.changedFiles;
-        if (unpublished && status.changedFiles.length === 0) {
+        if ((unpublished || promotion) && status.changedFiles.length === 0) {
           commitSha = head;
           parentSha = (await git(lease.workdir, ['rev-parse', 'HEAD^'])).stdout.trim();
           message = validateCommitMessage((await git(lease.workdir, ['log', '-1', '--format=%s'])).stdout);

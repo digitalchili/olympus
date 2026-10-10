@@ -87,6 +87,24 @@ try {
   assert.equal(await git(remote, 'show', 'main:app.txt'), `repair ${f.task.id}`);
   assert.equal((await post({ taskId: f.task.id, queuedMessageId: saved.id })).status, 409, 'a consumed request cannot publish twice');
 
+  // A completed task-branch publication can be queued for main in a later turn.
+  const promotion = await taskFixture();
+  await finish(promotion);
+  const checkpoint = await projectCp.commitPush({ projectId: project.id, taskId: promotion.task.id, repositoryLink: link, message: 'Published checkpoint' });
+  const previousMain = await git(remote, 'rev-parse', 'main');
+  const promotionRun = startRun(promotion.task.id, promotion.task.id, 'Publish this existing commit to main').state.runId;
+  createTaskAgentRun({ taskId: promotion.task.id, runId: promotionRun, kind: 'chat', status: 'streaming', startedAt: Date.now() });
+  const promotionRequest = await post({ taskId: promotion.task.id, message: 'Promote to main', deployToDefaultBranch: true });
+  assert.equal(promotionRequest.status, 202, await promotionRequest.clone().text());
+  const queuedPromotion = getQueuedTaskMessage(promotion.task.id)!;
+  assert.equal(await git(remote, 'rev-parse', 'main'), previousMain);
+  await finish({ ...promotion, runId: promotionRun });
+  const promotionResult = await post({ taskId: promotion.task.id, queuedMessageId: queuedPromotion.id });
+  assert.equal(promotionResult.status, 200, await promotionResult.clone().text());
+  assert.equal((await promotionResult.json()).version.commitSha, checkpoint.commitSha);
+  assert.equal(await git(remote, 'rev-parse', 'main'), checkpoint.commitSha);
+  assert.equal(getQueuedTaskMessage(promotion.task.id), undefined, 'successful promotion consumes the saved request');
+
   // A failed publication already owns a commit. Resume during a later chat must
   // wait for that chat, then retry that receipt without committing later edits.
   for (const outcome of ['done', 'stopped', 'cancelled', 'abandoned', 'profile', 'access', 'human follow-up'] as const) {

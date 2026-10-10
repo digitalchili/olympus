@@ -62,6 +62,8 @@ export function TaskCommitPushModal({
   const [pushStatus, setPushStatus] = useState<'idle' | 'pushing' | 'abandoning' | 'queued' | 'success'>('idle');
   const [lastPublication, setLastPublication] = useState<ProjectVersion | null>(null);
   const generation = useRef(0);
+  const promotion = codeStatus?.clean ? codeStatus.defaultBranchPromotion : undefined;
+  const publicationMessage = promotion?.commitMessage ?? commitMessage.trim();
   const publicationBusy = pushStatus === 'pushing' || pushStatus === 'abandoning';
 
   const refreshStatus = async (request = generation.current) => {
@@ -118,7 +120,7 @@ export function TaskCommitPushModal({
   };
 
   const handleCommitAndPush = async () => {
-    if (!codeStatus || codeStatus.clean || codeStatus.pendingPublication || !commitMessage.trim() || pushStatus !== 'idle') return;
+    if (!codeStatus || (codeStatus.clean && !(promotion && deployToDefault)) || codeStatus.pendingPublication || !publicationMessage || pushStatus !== 'idle') return;
     const request = generation.current;
     setPushStatus('pushing');
     setError(null);
@@ -126,7 +128,7 @@ export function TaskCommitPushModal({
       const result = await commitPushProject(
         projectId,
         taskId,
-        commitMessage.trim(),
+        publicationMessage,
         deployToDefault && Boolean(repositoryLink.defaultBranch),
       );
       if (request !== generation.current) return;
@@ -260,7 +262,7 @@ export function TaskCommitPushModal({
 
           {!loading && codeStatus?.pendingPublication && <PendingProjectPublication publication={codeStatus.pendingPublication} queued={pushStatus === 'queued'} disabled={publicationBusy} onResume={() => void resumePublication()} onAbandon={() => void abandonPublication()} />}
 
-          {!loading && !error && codeStatus && codeStatus.clean && !codeStatus.pendingPublication && pushStatus !== 'success' && (
+          {!loading && !error && codeStatus && codeStatus.clean && !promotion && !codeStatus.pendingPublication && pushStatus !== 'success' && (
             <div className="flex flex-col items-center justify-center py-6 text-center">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400">
                 <CheckCircle2 size={20} />
@@ -274,8 +276,17 @@ export function TaskCommitPushModal({
             </div>
           )}
 
-          {!loading && !error && codeStatus && !codeStatus.clean && !codeStatus.pendingPublication && pushStatus !== 'success' && (
+          {!loading && !error && codeStatus && (!codeStatus.clean || promotion) && !codeStatus.pendingPublication && pushStatus !== 'success' && (
             <>
+              {promotion ? (
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-4 dark:border-zinc-700 dark:bg-zinc-950/40">
+                  <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">Publish existing commit</h3>
+                  <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+                    <code>{promotion.commitSha.slice(0, 7)}</code> is saved on this task’s branch. Select {promotion.targetBranch} below to publish the same commit there.
+                  </p>
+                  <p className="mt-2 break-words text-xs text-zinc-500">{promotion.commitMessage}</p>
+                </div>
+              ) : <>
               {/* Changed files summary */}
               <div>
                 <div className="flex items-center justify-between">
@@ -331,6 +342,7 @@ export function TaskCommitPushModal({
                 />
               </div>
 
+              </>}
               {/* Additional publication target */}
               {repositoryLink.defaultBranch && (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
@@ -344,7 +356,7 @@ export function TaskCommitPushModal({
                     />
                     <div>
                       <span>
-                        Also push to <span className="font-semibold text-zinc-900 dark:text-zinc-100">{repositoryLink.defaultBranch}</span>
+                        {promotion ? 'Push existing commit to' : 'Also push to'} <span className="font-semibold text-zinc-900 dark:text-zinc-100">{repositoryLink.defaultBranch}</span>
                       </span>
                       <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
                         Your deployment service may build this branch. Olympus does not verify deployment.
@@ -404,10 +416,10 @@ export function TaskCommitPushModal({
               Refresh status
             </button>
           )}
-          {!error && !codeStatus?.clean && !codeStatus?.pendingPublication && pushStatus !== 'success' && (
+          {!error && (!codeStatus?.clean || promotion) && !codeStatus?.pendingPublication && pushStatus !== 'success' && (
             <button
               type="button"
-              disabled={loading || Boolean(error) || publicationBusy || !commitMessage.trim()}
+              disabled={loading || Boolean(error) || publicationBusy || !publicationMessage || Boolean(promotion && !deployToDefault)}
               onClick={() => void handleCommitAndPush()}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300 dark:focus-visible:ring-offset-zinc-900"
             >
@@ -419,7 +431,7 @@ export function TaskCommitPushModal({
               ) : (
                 <>
                   <GitCommitHorizontal size={14} />
-                  Commit & Push
+                  {promotion ? `Push to ${promotion.targetBranch}` : 'Commit & Push'}
                 </>
               )}
             </button>

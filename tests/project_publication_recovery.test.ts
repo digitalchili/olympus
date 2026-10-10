@@ -36,6 +36,37 @@ async function fixture() {
 
 try {
   upsertGitHubInstallation({ id: 77, accountLogin: 'fixture', accountType: 'Organization', permissionMode: 'read_write' });
+  const promotion = await fixture();
+  const published = await promotion.service.commitPush({ ...promotion.input, message: 'Reviewed task change' });
+  const clean = await promotion.service.status(promotion.input);
+  assert.equal(clean.clean, true, 'a published task branch keeps clean workspace semantics');
+  assert.notEqual(await git(promotion.remote, 'rev-parse', 'main'), published.commitSha);
+  await assert.rejects(promotion.service.commitPush({ ...promotion.input, message: 'Duplicate branch push' }), /no changes/i);
+  const promoted = await promotion.service.commitPush({ ...promotion.input, message: 'Promotion request', deployToDefaultBranch: true });
+  assert.equal(promoted.commitSha, published.commitSha, 'promotion must reuse the published commit');
+  assert.equal(promoted.commitMessage, published.commitMessage);
+  assert.deepEqual(promoted.changedFiles, published.changedFiles);
+  assert.equal(promoted.branchName, 'main');
+  assert.equal(await git(promotion.remote, 'rev-parse', 'main'), published.commitSha);
+  assert.equal(await git(promotion.lease.workdir, 'rev-parse', 'HEAD'), published.commitSha, 'no empty promotion commit');
+  assert.equal(clean.defaultBranchPromotion?.commitSha, published.commitSha);
+  assert.equal((await promotion.service.status(promotion.input)).defaultBranchPromotion, undefined);
+  await assert.rejects(promotion.service.commitPush({ ...promotion.input, message: 'Already promoted', deployToDefaultBranch: true }), /no changes/i);
+
+  const cleanRace = await fixture();
+  const raceVersion = await cleanRace.service.commitPush({ ...cleanRace.input, message: 'Task checkpoint' });
+  const concurrent = join(root, 'promotion-race');
+  await git(root, 'clone', cleanRace.remote, concurrent);
+  await writeFile(join(concurrent, 'other.txt'), 'Another task');
+  await git(concurrent, 'add', '.');
+  await git(concurrent, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Other task');
+  await git(concurrent, 'push', 'origin', 'main');
+  const concurrentMain = await git(cleanRace.remote, 'rev-parse', 'main');
+  await assert.rejects(cleanRace.service.commitPush({ ...cleanRace.input, message: 'Promote', deployToDefaultBranch: true }), (error: any) => error.code === 'PUBLICATION_CONFLICT');
+  assert.equal(await git(cleanRace.remote, 'rev-parse', 'main'), concurrentMain, 'promotion never overwrites newer main');
+  assert.equal(await git(cleanRace.remote, 'rev-parse', cleanRace.lease.branchName), raceVersion.commitSha);
+  assert.equal((await cleanRace.service.status(cleanRace.input)).pendingPublication?.failureReason, 'branch_advanced');
+
   const f = await fixture();
   let accepted = false;
   const lost = createProjectCpService({ rootDir: f.rootDir, gitRunner: async (cwd, args, options) => {

@@ -84,6 +84,19 @@ function harness() {
 const oldFetch = globalThis.fetch;
 const oldWindow = (globalThis as any).window;
 try {
+  const promotion = harness(); promotion.render();
+  await promotion.respond(0, { editor });
+  const offer = await promotion.respond(1, { status: { clean: true, changedFiles: [], diff: '', summary: 'No file changes', pendingPublication: null,
+    defaultBranchPromotion: { commitSha: 'b'.repeat(40), commitMessage: 'Already reviewed', targetBranch: 'main' } } });
+  assert.match(offer, /Publish existing commit/);
+  assert.match(offer, /bbbbbbb/);
+  assert.equal(promotion.inputs().filter(node => node.props.type !== 'checkbox').length, 0, 'promotion needs no new commit message');
+  assert.equal(promotion.inputs().find(node => node.props.type === 'checkbox')?.props.checked, false, 'main remains opt-in');
+  promotion.chooseDefault(true); promotion.click('Push to main');
+  assert.deepEqual(JSON.parse(String(promotion.requests[2].init?.body)), { taskId: 'task-1', message: 'Already reviewed', deployToDefaultBranch: true });
+  const promoted = await promotion.respond(2, { version: { ...version, commitSha: 'b'.repeat(40) }, versions: [] });
+  assert.match(promoted, /Pushed bbbbbbb to main/);
+
   const waiting = harness(); waiting.render();
   const activeMessage = 'Wait for this task and its checks to finish, then try again.';
   const notice = await waiting.respond(0, { error: activeMessage, code: 'PROJECT_OPERATION_ACTIVE' }, 409);
