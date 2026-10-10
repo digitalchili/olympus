@@ -11,7 +11,13 @@ export function RunModelResolution({ resolution }: { resolution: AgentModelResol
   const requested = runtimeModelLabel(resolution.requested);
   const actual = runtimeModelLabel(resolution.actual);
   const changed = requested !== actual;
-  if (!changed && !resolution.fallbackReason) return null;
+  const routeChanged = resolution.requested.model !== resolution.actual.model
+    || resolution.requested.provider !== resolution.actual.provider;
+  // Older workers inferred this claim from any status text containing "fallback",
+  // including auxiliary compression failures and primary-model recovery notices.
+  const reason = !routeChanged && resolution.fallbackReason === 'Primary model failed; Hermes activated its configured fallback.'
+    ? undefined : resolution.fallbackReason;
+  if (!changed && !reason) return null;
   return (
     <div className={`${CHAT_COLUMN_CLASS} mb-2 rounded-lg border px-3 py-2 text-xs ${changed ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100' : 'border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/70 dark:text-zinc-300'}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -21,7 +27,7 @@ export function RunModelResolution({ resolution }: { resolution: AgentModelResol
           <><span className="font-semibold">Model:</span><span>{actual}</span></>
         )}
       </div>
-      {resolution.fallbackReason && <p className="mt-1 text-amber-700 dark:text-amber-300">{resolution.fallbackReason}</p>}
+      {reason && <p className="mt-1 text-amber-700 dark:text-amber-300">{reason}</p>}
     </div>
   );
 }

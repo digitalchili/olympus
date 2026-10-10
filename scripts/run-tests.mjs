@@ -10,6 +10,7 @@ const pythonTests = [
   'test_hermes_macos_restart.py',
   'test_hermes_docker_update.py',
   'test_worker_performance.py',
+  'test_worker_model_resolution.py',
   'test_worker_openai_auth.py',
   'test_worker_openai_guard.py',
   'test_worker_model_responsiveness.py',

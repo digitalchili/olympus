@@ -310,11 +310,8 @@ class ResolveModelProviderTest(unittest.TestCase):
             reasoning_config={"enabled": True, "effort": "high"},
         )
 
-        payload = hermes_worker._model_resolution_payload(
-            agent,
-            requested,
-            fallback_reason="Primary model failed; Hermes activated its configured fallback.",
-        )
+        agent._fallback_activated = True
+        payload = hermes_worker._model_resolution_payload(agent, requested)
 
         self.assertEqual(payload, {
             "requested": requested,
@@ -323,8 +320,9 @@ class ResolveModelProviderTest(unittest.TestCase):
                 "provider": "openai-codex",
                 "reasoningEffort": "high",
             },
-            "fallbackReason": "Primary model failed; Hermes activated its configured fallback.",
+            "fallbackReason": "Hermes is using its configured fallback model.",
         })
+        agent._fallback_activated = False
         inferred = hermes_worker._model_resolution_payload(agent, requested)
         self.assertEqual(
             inferred["fallbackReason"],

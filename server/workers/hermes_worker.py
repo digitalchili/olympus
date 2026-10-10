@@ -1599,8 +1599,6 @@ def _requested_model_resolution(
 def _model_resolution_payload(
     agent: Any,
     requested: dict[str, Any],
-    *,
-    fallback_reason: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "requested": {
@@ -1614,8 +1612,13 @@ def _model_resolution_payload(
             "reasoningEffort": _agent_reasoning_effort(agent),
         },
     }
-    reason = fallback_reason
-    if reason is None and payload["requested"] != payload["actual"]:
+    # Auxiliary compression and recovery notices also mention "fallback".
+    # Only native activation together with a changed route confirms a model switch.
+    route_changed = any(payload["requested"][key] != payload["actual"][key] for key in ("model", "provider"))
+    reason = None
+    if getattr(agent, "_fallback_activated", False) is True and route_changed:
+        reason = "Hermes is using its configured fallback model."
+    elif payload["requested"] != payload["actual"]:
         reason = "Requested model settings were not used; Hermes resolved the run to a different configuration."
     if reason:
         payload["fallbackReason"] = reason
@@ -1977,7 +1980,6 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
         "provider": None,
         "reasoningEffort": None,
     }
-    fallback_reason: str | None = None
     active_delegation_id: str | None = None
     pending_background_delegations: set[str] = {row["delegation"] for row in journal.rows()}
     child_delegation_ids: dict[str, str] = {}
@@ -2006,26 +2008,25 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
         state["thinking"] += chunk
         _send({"id": request_id, "type": "thinking_delta", "content": chunk})
 
+    last_model_resolution: dict[str, Any] | None = None
+
     def emit_model_resolution() -> None:
+        nonlocal last_model_resolution
         agent = agent_ref.get("agent")
         if agent is None:
             return
+        resolution = _model_resolution_payload(agent, requested_resolution)
+        if resolution == last_model_resolution:
+            return
+        last_model_resolution = resolution
         _send({
             "id": request_id,
             "type": "model_resolution",
-            "modelResolution": _model_resolution_payload(
-                agent,
-                requested_resolution,
-                fallback_reason=fallback_reason,
-            ),
+            "modelResolution": resolution,
         })
 
     def on_status(_category: Any, message: Any = None) -> None:
-        nonlocal fallback_reason
-        clean = str(message or "").strip()
-        if "fallback" not in clean.lower():
-            return
-        fallback_reason = "Primary model failed; Hermes activated its configured fallback."
+        # Refresh native state without persisting or interpreting upstream text.
         emit_model_resolution()
 
     def on_tool_progress(*args: Any, **kwargs: Any) -> None:
@@ -2261,7 +2262,7 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
                     "sessionId": getattr(agent, "session_id", None) or session_id,
                     "interrupted": True,
                     "modelResolution": _model_resolution_payload(
-                        agent, requested_resolution, fallback_reason=fallback_reason,
+                        agent, requested_resolution,
                     ),
                 }]
 
@@ -2338,7 +2339,7 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
                         "sessionId": getattr(agent, "session_id", None) or session_id,
                         "interrupted": True,
                         "modelResolution": _model_resolution_payload(
-                            agent, requested_resolution, fallback_reason=fallback_reason,
+                            agent, requested_resolution,
                         ),
                     }]
                 for owner_index, owner_session_id in enumerate(owner_session_ids):
@@ -2417,7 +2418,7 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
         "sessionId": getattr(agent, "session_id", None) or session_id,
         "context": context,
         "modelResolution": _model_resolution_payload(
-            agent, requested_resolution, fallback_reason=fallback_reason,
+            agent, requested_resolution,
         ),
     }
     if pending_steers:
