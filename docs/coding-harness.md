@@ -2,6 +2,12 @@
 
 Olympus keeps Hermes as its execution engine. Olympus provides persisted continuation bookkeeping, safe automatic recovery and Git verification evidence around that engine.
 
+## Proportionate execution
+
+The shared task instructions keep one primary executor responsible for the result, with direct execution as the default. Delegation should have a specific deliverable and a concrete benefit from parallel work, expertise, access or tools. Explicitly assigned profiles and existing active work retain ownership. When review is needed, the default is one consolidated review; additional review needs material changes, changed risk, unresolved findings or an explicit requirement. Passing evidence can be reused only while its source and relevant configuration/runtime match. Required final-source checks, independent reviews required by the user or repository, pending approvals and publication guards still apply.
+
+These are model instructions, not limits on Hermes execution or guarantees about elapsed time. They apply to subsequent task turns, including goal and recovery turns. They do not interrupt an active turn, change model/reasoning settings, replace installed skills, or start new work on upgrade.
+
 ## Coding tasks
 
 Select a local Git working directory or a managed Project checkout. A task in a repository subdirectory uses the enclosing repository root for source evidence and checks. Olympus records the starting commit and a fingerprint of tracked and nonignored untracked files, including file modes and symlinks. Before a successful coding run can enter review, Olympus runs the repository's required checks and records their command, output, exit status, elapsed time and source fingerprint. Failed, missing or stale checks leave the task in progress. A clean working tree does not bypass checks for coding work, revision changes, explicit verification requests, goals or the manual **Run checks** action.
