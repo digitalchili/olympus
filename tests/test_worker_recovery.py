@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server/workers'))
 import hermes_worker as worker
 from hermes_recovery import ContinuationJournal, RecoveryBlocked, saved_turn_matches
+from hermes_recovery_maintenance import repair
 
 
 class RecoveryTests(unittest.TestCase):
@@ -49,6 +50,183 @@ class RecoveryTests(unittest.TestCase):
         if self.polls > 4:
             raise AssertionError('Missing notification never reconciled native state')
         return None
+
+    def test_retained_recovery_preserves_results_without_replaying_completed_work(self):
+        journal = ContinuationJournal('task-1')
+        journal.track('deleg-1', 'task-1')
+        journal.save_event(self.event)
+        journal.set_turn_state('running')
+        journal.block('Native child recovery inventory is unavailable.')
+        before = journal.rows()
+        self.native_states['deleg-1'] = 'dropped'
+        receipt = journal.retain_for_user(self.native, expected=journal.fingerprint())
+        self.assertEqual(journal.status(), {'status': 'none'})
+        self.assertEqual(journal.rows(), [])
+        self.assertEqual(journal.retained()[0]['snapshot']['results'], before)
+        self.assertEqual(journal.retained()[0]['snapshot']['turn'], 'running')
+        self.assertIn('Saved child result', journal.context())
+        self.assertIn('untrusted', journal.context())
+        self.run_chat(dispatch=False)
+        self.assertEqual(len(self.messages), 1)
+        self.assertIn('Saved child result', self.messages[0][1])
+        self.assertEqual(self.completed, [], 'Retention is not native acknowledgement or synthesis')
+        self.assertEqual(len(journal.retained()), 1, 'A user turn does not erase the retained audit record')
+
+    def test_retained_unfinished_turn_and_exact_restore(self):
+        journal = ContinuationJournal('task-1')
+        journal.set_turn_state('running')
+        receipt = journal.retain_for_user(self.native, expected=journal.fingerprint())
+        self.assertEqual(journal.status(), {'status': 'none'})
+        self.assertIn('unfinished', journal.context())
+        journal.restore_retained(receipt)
+        self.assertEqual(journal.turn_state(), 'running')
+        self.assertEqual(journal.retained(), [])
+        self.assertEqual(journal.status()['status'], 'blocked')
+
+    def test_retention_refuses_live_pending_missing_and_foreign_results(self):
+        journal = ContinuationJournal('task-1')
+        journal.track('deleg-1', 'task-1')
+        journal.save_event(self.event)
+        before = journal.rows()
+        good = self.native.get_durable_delegation('deleg-1') | {'delivery_state': 'dropped'}
+        for record in [None, good | {'state': 'running'}, good | {'delivery_state': 'pending'},
+                       good | {'origin_session': 'other', 'origin_session_id': 'other'}]:
+            with self.subTest(record=record), patch.object(self.native, 'get_durable_delegation', return_value=record):
+                with self.assertRaises(RecoveryBlocked):
+                    journal.retain_for_user(self.native, expected=journal.fingerprint())
+            self.assertEqual(journal.rows(), before)
+            self.assertEqual(journal.retained(), [])
+        self.native_states['deleg-1'] = 'dropped'
+        journal.state('deleg-1', 'synthesizing')
+        with self.assertRaises(RecoveryBlocked):
+            journal.retain_for_user(self.native, expected=journal.fingerprint())
+
+    def test_retention_rolls_back_exact_results_and_refuses_overwriting_new_work(self):
+        journal = ContinuationJournal('task-1')
+        journal.track('deleg-1', 'task-1')
+        journal.save_event(self.event)
+        journal.block('original blocker')
+        journal.set_turn_state('pending')
+        before = journal.rows()
+        self.native_states['deleg-1'] = 'dropped'
+        receipt = journal.retain_for_user(self.native, expected=journal.fingerprint())
+        journal.set_turn_state('running')
+        with self.assertRaises(RecoveryBlocked):
+            journal.restore_retained(receipt)
+        journal.set_turn_state(None)
+        journal.restore_retained(receipt)
+        self.assertEqual(journal.rows(), before)
+        self.assertEqual(journal.turn_state(), 'pending')
+        self.assertEqual(journal.status(), {'status': 'blocked', 'reason': 'original blocker'})
+
+    def test_retention_refuses_changed_snapshot_and_foreign_lineage(self):
+        journal = ContinuationJournal('task-1')
+        journal.set_turn_state('running')
+        expected = journal.fingerprint()
+        journal.block('new decision')
+        with self.assertRaises(RecoveryBlocked):
+            journal.retain_for_user(self.native, expected=expected)
+        journal.track('deleg-1', 'other-task')
+        journal.save_event(self.event | {'session_key': 'other-task'})
+        foreign = self.native.get_durable_delegation('deleg-1') | {
+            'origin_session': 'other-task', 'origin_session_id': 'other-task', 'delivery_state': 'dropped'}
+        with patch.object(self.native, 'get_durable_delegation', return_value=foreign):
+            with self.assertRaises(RecoveryBlocked):
+                journal.retain_for_user(self.native, expected=journal.fingerprint())
+
+    def maintenance_fixture(self):
+        import sqlite3
+        home = Path(self.tmp.name)
+        journal = ContinuationJournal('task-1')
+        journal.set_turn_state('running')
+        with sqlite3.connect(home / 'data/olympus-dispatch.db') as db:
+            db.executescript('''CREATE TABLE tasks(id,status,profile_name);
+                CREATE TABLE task_interactions(task_id,status,olympus_run_id);
+                CREATE TABLE task_agent_runs(task_id,status,error_code,started_at,run_id);
+                CREATE TABLE task_message_queue(task_id,content);
+                INSERT INTO tasks VALUES ('task-1','in_progress',NULL);
+                INSERT INTO task_agent_runs VALUES ('task-1','error','iteration_limit',1,'run-1');
+                INSERT INTO task_message_queue VALUES ('task-1','Preserve queued work');''')
+        target = {'taskId': 'task-1', 'profile': 'default', 'hermesHome': self.tmp.name + '/hermes',
+                  'fingerprint': journal.fingerprint()}
+        return home, journal, target
+
+    def test_maintenance_retains_fence_and_preserves_queue_and_failed_run(self):
+        import sqlite3
+        home, journal, target = self.maintenance_fixture()
+        routes = []
+        def request(route):
+            routes.append(route)
+            if route == '/hermes/check':
+                self.assertEqual(journal.status()['status'], 'none')
+                self.assertTrue((home / '.hermes-update-in-progress').exists())
+                return {'ready': True}
+            return {'draining': True, 'activeRuns': 0}
+        result = repair([target], olympus_home=home, backup_dir=home / 'backups/repair', request=request)
+        self.assertTrue(result['ready'])
+        self.assertIn('/hermes/check', routes)
+        self.assertTrue((home / '.hermes-update-in-progress').exists())
+        self.assertIn('unfinished', journal.context())
+        with sqlite3.connect(home / 'data/olympus-dispatch.db') as db:
+            self.assertEqual(db.execute('SELECT status FROM task_agent_runs').fetchone(), ('error',))
+            self.assertEqual(db.execute('SELECT content FROM task_message_queue').fetchone(), ('Preserve queued work',))
+
+    def test_maintenance_failed_guard_restores_and_leaves_drain_held(self):
+        home, journal, target = self.maintenance_fixture()
+        def request(route):
+            self.assertNotEqual(route, '/cancel')
+            return {'ready': False} if route == '/hermes/check' else {'draining': True, 'activeRuns': 0}
+        with self.assertRaises(RecoveryBlocked):
+            repair([target], olympus_home=home, backup_dir=home / 'backups/repair', request=request)
+        self.assertEqual(journal.fingerprint(), target['fingerprint'])
+        self.assertFalse((home / '.hermes-update-in-progress').exists())
+
+    def test_maintenance_uncertain_rollback_keeps_restart_fence(self):
+        home, journal, target = self.maintenance_fixture()
+        def request(route):
+            if route == '/hermes/check':
+                journal.block('changed concurrently')
+                return {'ready': False}
+            return {'draining': True, 'activeRuns': 0}
+        with self.assertRaises(RecoveryBlocked):
+            repair([target], olympus_home=home, backup_dir=home / 'backups/repair', request=request)
+        self.assertTrue((home / '.hermes-update-in-progress').exists())
+        self.assertEqual(len(journal.retained()), 1)
+
+    def test_maintenance_active_work_and_existing_fence_refused(self):
+        home, journal, target = self.maintenance_fixture()
+        with self.assertRaises(RecoveryBlocked):
+            repair([target], olympus_home=home, backup_dir=home / 'backups/repair',
+                   request=lambda _: {'draining': True, 'activeRuns': 1})
+        fence = home / '.hermes-update-in-progress'
+        fence.write_text('another maintenance owner')
+        with self.assertRaises(FileExistsError):
+            repair([target], olympus_home=home, backup_dir=home / 'backups/repair',
+                   request=lambda _: {'draining': True, 'activeRuns': 0})
+        self.assertEqual(fence.read_text(), 'another maintenance owner')
+        self.assertEqual(journal.fingerprint(), target['fingerprint'])
+
+    def test_maintenance_interruption_after_commit_keeps_fence(self):
+        home, journal, target = self.maintenance_fixture()
+        retain = ContinuationJournal.retain_for_user
+        def interrupted(journal, *args, **kwargs):
+            retain(journal, *args, **kwargs)
+            raise KeyboardInterrupt()
+        with patch.object(ContinuationJournal, 'retain_for_user', interrupted), self.assertRaises(RecoveryBlocked):
+            repair([target], olympus_home=home, backup_dir=home / 'backups/repair',
+                   request=lambda _: {'draining': True, 'activeRuns': 0})
+        self.assertTrue((home / '.hermes-update-in-progress').exists())
+        self.assertEqual(len(journal.retained()), 1)
+
+    def test_maintenance_preserves_cancelled_unanswered_interaction(self):
+        import sqlite3
+        home, journal, target = self.maintenance_fixture()
+        with sqlite3.connect(home / 'data/olympus-dispatch.db') as db:
+            db.execute("INSERT INTO task_interactions VALUES ('task-1','cancelled','run-1')")
+        with self.assertRaisesRegex(RecoveryBlocked, 'Unanswered'):
+            repair([target], olympus_home=home, backup_dir=home / 'backups/repair',
+                   request=lambda _: {'draining': True, 'activeRuns': 0})
+        self.assertEqual(journal.fingerprint(), target['fingerprint'])
 
     def run_chat(self, synthesis=None, notification=True, dispatch=True, finalized=False, threaded=False, on_send=None, saved_history=None, on_turn=None, initial_result=None, **request_extra):
         outer = self
