@@ -16,6 +16,67 @@ import hermes_sessions
 
 @unittest.skipUnless(SOURCE, "Set OLYMPUS_NATIVE_HERMES_SOURCE for real SessionDB checks")
 class CompactedHistoryTest(unittest.TestCase):
+    def test_native_resume_expires_old_confirmation_and_its_api_sidecar(self):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HERMES_HOME": home}):
+            from hermes_state import SessionDB
+            from agent.replay_cleanup import canonicalize_replay_history
+            db = SessionDB(db_path=Path(home) / 'state.db')
+            try:
+                db.create_session('task', 'olympus')
+                db.append_message('task', 'user', 'confirm shutdown', timestamp=100,
+                                  api_content='confirm shutdown\n[model-only context]')
+                db.append_message('task', 'assistant', 'Acknowledged', timestamp=101)
+                history = canonicalize_replay_history(hermes_sessions.load_agent_history(db, 'task'), now=200)
+                self.assertIn('EXPIRED', history[0]['content'])
+                self.assertNotIn('api_content', history[0])
+            finally:
+                db.close()
+
+    def test_native_hidden_interrupt_keeps_replay_alternation_without_displaying(self):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HERMES_HOME": home}):
+            from hermes_state import SessionDB
+            from agent.agent_runtime_helpers_placeholders import hidden_interrupt_placeholder_row
+            db = SessionDB(db_path=Path(home) / 'state.db')
+            try:
+                db.create_session('task', 'olympus')
+                db.append_message('task', 'user', 'Original request', api_content='Original request\n[skill note]')
+                db.append_message('task', **hidden_interrupt_placeholder_row())
+                db.append_message('task', 'user', 'Correction', api_content='Correction\n[interrupt context]')
+                db.append_message('task', 'assistant', 'Saved answer')
+                history = hermes_sessions.load_agent_history(db, 'task')
+                self.assertEqual([row['role'] for row in history], ['user', 'assistant', 'user', 'assistant'])
+                self.assertEqual(history[1]['api_content'], hidden_interrupt_placeholder_row()['api_content'])
+                self.assertEqual(history[1]['display_kind'], 'hidden')
+                self.assertIn('[skill note]', history[0]['api_content'])
+                self.assertIn('[interrupt context]', history[2]['api_content'])
+                with patch.object(hermes_sessions, 'open_session', return_value=(db, 'task')):
+                    visible = hermes_sessions.project_session_messages('task')['messages']
+                self.assertEqual([row['content'] for row in visible], ['Original request', 'Correction', 'Saved answer'])
+            finally:
+                db.close()
+
+    def test_resume_keeps_native_turn_notes_and_signed_thinking(self):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HERMES_HOME": home}):
+            from hermes_state import SessionDB
+            from agent.anthropic_message_convert import convert_messages_to_anthropic
+            db = SessionDB(db_path=Path(home) / 'state.db')
+            try:
+                db.create_session('task', 'olympus')
+                note = 'Continue\n[System: The skills available in this conversation changed after its system prompt was built.\nNow available (load with the skill tool):\n- fixture-skill: Fixture]'
+                db.append_message('task', 'user', 'Continue', api_content=note)
+                thinking = [{'type': 'thinking', 'thinking': 'Fixture reasoning', 'signature': 'synthetic-signature'}]
+                db.append_message('task', 'assistant', 'Saved answer', reasoning_details=thinking)
+                history = hermes_sessions.load_agent_history(db, 'task')
+                self.assertEqual(history[0]['api_content'], note, 'resuming must retain the native skills announcement and API prefix')
+                self.assertEqual(history[1]['reasoning_details'], thinking)
+                _, wire = convert_messages_to_anthropic(history, base_url='https://api.anthropic.com', model='claude-sonnet-4-5')
+                self.assertIn(thinking[0], wire[1]['content'], 'signed reasoning must survive the Olympus replay boundary')
+                with patch.object(hermes_sessions, 'open_session', return_value=(db, 'task')):
+                    visible = hermes_sessions.project_session_messages('task')['messages']
+                self.assertEqual(visible[0]['content'], 'Continue', 'model-only notes stay out of the user message')
+            finally:
+                db.close()
+
     def test_archived_conversation_is_readable_once_without_expanding_model_context(self):
         with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HERMES_HOME": home}):
             from hermes_state import SessionDB

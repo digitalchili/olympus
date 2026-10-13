@@ -14,6 +14,16 @@ SPEC.loader.exec_module(runner)
 TARGET = {'schemaVersion': 1, 'version': '2026.9.24', 'revision': 'f' * 40, 'image': 'nousresearch/hermes-agent:v2026.9.24@sha256:' + 'a' * 64, 'releaseUrl': 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.9.24'}
 
 class RunnerTests(unittest.TestCase):
+    def test_semantic_release_accepts_only_approved_repository_and_digest_pinned_tag(self):
+        target = {**TARGET, 'version': '0.21.7', 'image': 'nousresearch/hermes-agent:stable@sha256:' + 'a' * 64,
+                  'releaseUrl': 'https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.7'}
+        self.assertEqual(runner.validate_target(target), target)
+        for image in ('nousresearch/hermes-agent:stable', 'evil/hermes-agent:stable@sha256:' + 'a' * 64,
+                      'nousresearch/hermes-agent:latest@sha256:' + 'a' * 64,
+                      'nousresearch/hermes-agent:v0.21.6@sha256:' + 'a' * 64):
+            with self.subTest(image=image), self.assertRaises(ValueError):
+                runner.validate_target({**target, 'image': image})
+
     def make_server(self, directory):
         (Path(directory) / 'update.sock').unlink(missing_ok=True)
         return runner.UpdateServer(str(Path(directory) / 'update.sock'), 'token' * 8, 'digitalchili/olympus', '/bin/true', hermes_command='/bin/true', hermes_mode='native', state_directory=str(Path(directory) / 'state'))

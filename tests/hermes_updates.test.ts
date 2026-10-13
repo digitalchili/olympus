@@ -8,6 +8,11 @@ import { createHermesUpdatesRouter } from '../server/routes/hermes-updates.js';
 
 const target = { schemaVersion: 1, version: '2026.9.24', revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f', image: 'nousresearch/hermes-agent:v2026.9.24@sha256:' + 'a'.repeat(64), releaseUrl: 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.9.24' };
 assert.deepEqual(parseHermesCompatibility(target), target);
+const semanticTarget = { ...target, version: '0.21.7', image: 'nousresearch/hermes-agent:stable@sha256:' + 'a'.repeat(64), releaseUrl: 'https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.7' };
+assert.deepEqual(parseHermesCompatibility(semanticTarget), semanticTarget, 'accept the digest-pinned official stable image for semantic releases');
+for (const image of ['nousresearch/hermes-agent:stable', 'nousresearch/hermes-agent:latest@sha256:' + 'a'.repeat(64), 'evil/hermes-agent:stable@sha256:' + 'a'.repeat(64), 'nousresearch/hermes-agent:v0.21.6@sha256:' + 'a'.repeat(64)]) {
+  assert.throws(() => parseHermesCompatibility({ ...semanticTarget, image }));
+}
 for (const invalid of [null, { ...target, revision: 'main' }, { ...target, image: 'evil/image:latest' }, { ...target, releaseUrl: 'javascript:alert(1)' }, { ...target, version: '../bad' }]) {
   assert.throws(() => parseHermesCompatibility(invalid));
 }

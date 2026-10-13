@@ -42,7 +42,7 @@ class NativeInteractionTests(unittest.TestCase):
 
     def test_real_native_batch_clarify(self):
         callback = partial(self.broker.clarify, "task", "turn", interrupt=self.interruptions.append)
-        future = self.pool.submit(clarify_tool, question="", questions=[
+        future = self.pool.submit(clarify_tool, questions=[
             {"id": "scope", "question": "Scope?", "choices": ["Core", "Full"]},
             {"id": "checks", "question": "Checks?", "choices": ["Tests", "Review"], "multi_select": True},
         ], callback=callback)
@@ -53,7 +53,8 @@ class NativeInteractionTests(unittest.TestCase):
         self.resolve({"answers": {form["questions"][0]["id"]: "Core", form["questions"][1]["id"]: ["Tests", "Review"]}})
         result = json.loads(future.result(5))
         self.assertEqual([row["user_response"] for row in result["responses"]], ["Core", ["Tests", "Review"]])
-        self.assertEqual([row["id"] for row in result["responses"]], ["scope", "checks"])
+        self.assertEqual(result['outcome'], 'submitted')
+        self.assertTrue(all(row['status'] == 'answered' for row in result['responses']))
         self.assertFalse(self.interruptions)
 
     def run_gate(self, deadline_monotonic=None):

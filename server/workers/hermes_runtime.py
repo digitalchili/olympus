@@ -56,7 +56,9 @@ def get_runtime(source: Path | None) -> dict[str, Any]:
     except (OSError, SyntaxError, ValueError):
         pass
     stamp = _json(source / 'install-stamp.json')
-    version = metadata.get('__release_date__') or stamp.get('baseVersion') or metadata.get('__version__')
+    # Current Hermes releases keep a legacy release date in __init__.py;
+    # the generated install stamp owns their semantic release version.
+    version = stamp.get('baseVersion') or metadata.get('__release_date__') or metadata.get('__version__')
     if isinstance(version, str) and VERSION.fullmatch(version):
         result['version'] = version
     image_marker = IMAGE_PROVENANCE_PATH

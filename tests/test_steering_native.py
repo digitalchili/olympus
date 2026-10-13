@@ -40,8 +40,9 @@ class NativeSteeringTests(unittest.TestCase):
                 self.assertIsNone(agent._drain_pending_steer())
                 db.append_message('task-1', **delivered)
                 replay = load_agent_history(db, 'task-1')
-                self.assertEqual(replay, [delivered], 'Keep native steering provenance and full file path in model history')
                 rows = db.get_messages('task-1')
+                self.assertEqual(replay, [{**delivered, 'timestamp': rows[0]['timestamp']}],
+                                 'Keep native steering provenance, timestamp and full file path in model history')
                 self.assertEqual(len(rows), 1, 'No duplicate Olympus delivery receipt')
                 with patch('hermes_sessions.open_session', return_value=(db, 'task-1')):
                     full = project_session_messages('task-1')['messages']

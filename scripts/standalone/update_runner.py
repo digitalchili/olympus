@@ -43,7 +43,7 @@ def validate_target(value: Any) -> dict[str, Any]:
         raise ValueError('Invalid Hermes compatibility version.')
     if not isinstance(value.get('revision'), str) or not re.fullmatch(r'[0-9a-f]{40}', value['revision']):
         raise ValueError('Invalid Hermes compatibility revision.')
-    if not isinstance(value.get('image'), str) or not re.fullmatch(r'nousresearch/hermes-agent:v' + re.escape(version) + r'@sha256:[0-9a-f]{64}', value['image']):
+    if not isinstance(value.get('image'), str) or not re.fullmatch(r'nousresearch/hermes-agent:(?:v' + re.escape(version) + r'|stable)@sha256:[0-9a-f]{64}', value['image']):
         raise ValueError('Invalid Hermes compatibility image.')
     if value.get('releaseUrl') != f'https://github.com/NousResearch/hermes-agent/releases/tag/v{version}':
         raise ValueError('Invalid Hermes release URL.')

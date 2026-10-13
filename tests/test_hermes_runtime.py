@@ -13,6 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'workers
 import hermes_worker
 
 class HermesRuntimeTests(unittest.TestCase):
+    def test_install_stamp_version_takes_precedence_over_stale_release_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / 'run_agent.py').write_text('raise RuntimeError("do not import")')
+            (source / 'hermes_cli').mkdir()
+            (source / 'hermes_cli' / '__init__.py').write_text('__release_date__ = "2026.9.24"\n__version__: str\n')
+            (source / 'install-stamp.json').write_text(json.dumps({'baseVersion': '0.21.7', 'commit': 'a' * 40}))
+            result = self.request(source)
+            self.assertEqual(result['version'], '0.21.7')
+            self.assertEqual(result['revision'], 'a' * 40)
+
     def request(self, source):
         received = []
         complete = threading.Event()

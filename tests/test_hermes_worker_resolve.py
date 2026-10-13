@@ -344,7 +344,7 @@ class ResolveModelProviderTest(unittest.TestCase):
         native = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\n" + content + "\n[/OUT-OF-BAND USER MESSAGE]"
         row = {"id": 1, "role": "user", "content": native, "display_kind": "steer", "timestamp": 1}
         self.assertEqual(hermes_sessions._sanitize_agent_history([row]), [
-            {"role": "user", "content": native, "display_kind": "steer"},
+            {"role": "user", "content": native, "display_kind": "steer", "timestamp": 1},
         ])
         projected = hermes_sessions._project_message_page_row(row, 0, "session-1", "task-1", None)
         self.assertEqual(projected["content"], content)

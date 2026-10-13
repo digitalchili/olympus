@@ -13,9 +13,9 @@ const UNKNOWN: HermesRuntimeInfo = { available: false, version: null, revision: 
 
 export function parseHermesCompatibility(value: unknown): HermesCompatibility {
   const data = value as Partial<HermesCompatibility> | null;
-  if (!data || data.schemaVersion !== 1 || typeof data.version !== 'string' || !/^\d{4}\.\d{1,2}\.\d{1,2}(?:\.\d+)?$/.test(data.version)
+  if (!data || data.schemaVersion !== 1 || typeof data.version !== 'string' || !/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(data.version)
     || typeof data.revision !== 'string' || !/^[a-f0-9]{40}$/.test(data.revision)
-    || typeof data.image !== 'string' || !new RegExp(`^nousresearch/hermes-agent:v${data.version.replaceAll('.', '\\.')}@sha256:[a-f0-9]{64}$`).test(data.image)
+    || typeof data.image !== 'string' || !new RegExp(`^nousresearch/hermes-agent:(?:v${data.version.replaceAll('.', '\\.')}|stable)@sha256:[a-f0-9]{64}$`).test(data.image)
     || data.releaseUrl !== `https://github.com/NousResearch/hermes-agent/releases/tag/v${data.version}`) {
     throw new Error('Hermes compatibility information is unavailable.');
   }

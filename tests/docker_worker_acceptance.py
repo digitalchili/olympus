@@ -213,8 +213,20 @@ def main():
     for name in ('test_worker_openai_auth_native.py', 'test_worker_openai_auth_helper_native.py'):
         shutil.copyfile(Path('/fixtures') / name, native / 'tests' / name)
         subprocess.run([sys.executable, str(native / 'tests' / name), str(SOURCE)], env=native_env, check=True, timeout=60)
+    native_env.update(PYTHONPATH=str(SOURCE), OLYMPUS_NATIVE_HERMES_SOURCE=str(SOURCE))
+    for name in ('hermes_021_native_interactions_test.py', 'test_hermes_history_native.py',
+                 'test_delegate_reasoning_native.py', 'test_background_work_native.py',
+                 'test_steering_native.py', 'test_bot_messaging.py', 'test_project_github_worker.py',
+                 'test_worker_recovery.py'):
+        shutil.copyfile(Path('/fixtures') / name, native / 'tests' / name)
+        suite_home = native / name.removesuffix('.py')
+        (suite_home / 'hermes').mkdir(parents=True)
+        suite_env = {**native_env, 'HOME': str(suite_home), 'HERMES_HOME': str(suite_home / 'hermes'),
+                     'OLYMPUS_DISPATCH_HOME': str(suite_home / 'olympus')}
+        subprocess.run([sys.executable, str(native / 'tests' / name)], env=suite_env, check=True, timeout=90)
     print('Built worker SHA256: ' + hashlib.sha256((WORKERS / 'hermes_worker.py').read_bytes()).hexdigest())
-    print('PASS container worker/auth acceptance; no external networking or model requests')
+    subprocess.run([sys.executable, '/fixtures/docker_hermes_turns.py'], env=native_env, check=True, timeout=180)
+    print('PASS container worker/auth/interaction/replay/recovery acceptance; no external networking or model requests')
 
 
 if __name__ == '__main__':

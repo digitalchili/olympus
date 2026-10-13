@@ -19,6 +19,10 @@ from hermes_worker_utils import WorkerError, json_safe, string_or_none
 AGENT_HISTORY_KEYS = {
     "role",
     "content",
+    # Hermes owns the exact model-facing user turn, including skill-change notes.
+    "api_content",
+    # Native replay uses original timestamps to expire dangerous confirmations.
+    "timestamp",
     "tool_calls",
     "tool_call_id",
     "effect_disposition",
@@ -52,13 +56,14 @@ def _sanitize_agent_history(history: Any) -> list[dict[str, Any]]:
             for key, value in item.items()
             if key in AGENT_HISTORY_KEYS and value is not None
         }
-        if not safe_item.get("content") and not safe_item.get("tool_calls") and not safe_item.get("tool_call_id"):
+        if not safe_item.get("content") and not safe_item.get("api_content") and not safe_item.get("tool_calls") and not safe_item.get("tool_call_id"):
             continue
         safe_item["role"] = role
-        if item.get("display_kind") == "steer":
+        if item.get("display_kind") in {"steer", "hidden"}:
             # Native alternation repair must keep the steer separate from the
             # user's next message instead of merging both into its marker.
-            safe_item["display_kind"] = "steer"
+            # Hidden native interruption rows also preserve turn alternation.
+            safe_item["display_kind"] = item["display_kind"]
         safe.append(safe_item)
     return safe
 

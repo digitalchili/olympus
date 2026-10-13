@@ -127,6 +127,10 @@ class InteractionBroker:
 
     def clarify(self, task_id: str, run_id: str, question: str = "", choices=None, multi_select: bool = False,
                 *, questions=None, interrupt: Callable, timeout_seconds: float | None = None, deadline_monotonic: float | None = None):
+        # Hermes 0.21.7 passes normalized questions as its sole positional argument.
+        native_batch = isinstance(question, list)
+        if native_batch:
+            questions, question = question, ""
         try:
             normalized = self._questions(question, choices, multi_select, questions)
             title = self._display(question[:1000]) if question else "Your decision is needed"
@@ -136,7 +140,7 @@ class InteractionBroker:
             interrupt("Clarification was not answered; stopped without making assumptions")
             raise
         if questions is not None:
-            return {"answers": response["answers"]}
+            return {"answers": response["answers"], **({"outcome": "submitted"} if native_batch else {})}
         answer = response["answers"][normalized[0]["id"]]
         # Native clarify accepts lists directly for multi-select callbacks.
         return answer
@@ -204,9 +208,19 @@ class InteractionBroker:
                     pending.event.set()
 
 
+def _approval_context_module():
+    try:
+        from tools import approval_context
+        return approval_context
+    except ImportError:
+        from tools import approval
+        return approval
+
+
 def _supports_native_approval_context() -> bool:
     try:
-        from tools import approval, terminal_tool
+        from tools import terminal_tool
+        approval = _approval_context_module()
     except ImportError:
         return False
     required = ("set_hermes_interactive_context", "reset_hermes_interactive_context", "set_current_session_key", "reset_current_session_key")
@@ -234,7 +248,8 @@ def native_approval_context(callback: Callable, session_id: str):
         # _create_agent excludes tools whose approval gates cannot be hosted.
         yield
         return
-    from tools import approval, terminal_tool
+    from tools import terminal_tool
+    approval = _approval_context_module()
     previous = terminal_tool._get_approval_callback()
     interactive_token = approval.set_hermes_interactive_context(True)
     session_token = approval.set_current_session_key(session_id)
