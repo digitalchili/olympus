@@ -189,7 +189,7 @@ export function QueuedMessageBar({
 }) {
   const publication = queuedMessage.publication;
   const statusLabel = publication
-    ? publication.error ?? error ?? (publication.started ? 'Publishing to GitHub…' : pausedByRunFailure ? 'Publication paused. Review the task before publishing.' : 'Publishes after this response and its checks finish.')
+    ? publication.error ?? error ?? (publication.started ? 'Publishing to GitHub…' : pausedByRunFailure ? 'Publication paused. Review the task before publishing.' : 'Your push is saved. Waiting for this response and its checks.')
     : isSending ? 'Sending...' : isSteering ? 'Sending update…' : error ?? waitingLabel;
   const showRetry = !publication && canRetry && (Boolean(error) || retryLabel !== 'Retry');
   const { text, filePaths } = splitAttachmentMessage(queuedMessage.content);
@@ -201,7 +201,7 @@ export function QueuedMessageBar({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="shrink-0 rounded-md bg-zinc-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
-              {publication?.error || (publication && pausedByRunFailure) ? 'Needs attention' : publication?.started ? 'Publishing' : 'Queued'}
+              {publication?.error || (publication && pausedByRunFailure) ? 'Needs attention' : publication?.started ? 'Publishing' : publication ? 'Push requested' : 'Queued'}
             </span>
             <span role={error ? 'alert' : 'status'} className={`min-w-0 whitespace-pre-wrap break-words text-xs ${error ? 'text-red-500' : 'text-zinc-500 dark:text-zinc-400'}`}>
               {statusLabel}
@@ -475,6 +475,19 @@ export function TaskChat({
     lastGoalStatusRef.current = goalStatus;
   }, [taskRun?.kind, taskRun?.goal?.status]);
 
+  // Drafts belong to the conversation, not to its history/queue refresh lifecycle.
+  useEffect(() => {
+    setInput('');
+    clearFiles();
+    setUploadError(null);
+    setSelectedProfiles([]);
+    setCollaborationScope('discussion');
+    setConfirmPersistentCollaboration(false);
+    setActiveMention(null);
+    setHighlightedProfileIndex(0);
+    setRunMode(isBot ? 'task' : startupRef.current.initialSettings?.mode ?? 'task');
+  }, [activeProfileId, isBot, taskId, clearFiles, setInput, setUploadError]);
+
   useEffect(() => {
     let cancelled = false;
     setLoadedTaskId(null);
@@ -484,21 +497,12 @@ export function TaskChat({
     setCompactAfterIndex(-1);
     setQueuedMessage(null);
     setQueueHydratedTaskId(null);
-    setSelectedProfiles([]);
-    setCollaborationScope('discussion');
-    setConfirmPersistentCollaboration(false);
-    setActiveMention(null);
-    setHighlightedProfileIndex(0);
     setQueuedSendError(null);
     setAutoSendingQueuedId(null);
     setQueuedSteerNoticeId(null);
-    setRunMode(isBot ? 'task' : startupRef.current.initialSettings?.mode ?? 'task');
     setOutgoingRevealActive(false);
     setInterruptInFlight(false);
     setInterruptError(null);
-    setUploadError(null);
-    setInput('');
-    clearFiles();
     lastGoalStatusRef.current = null;
     queuedMessageRef.current = null;
     pendingAutoSendRef.current = null;
@@ -547,7 +551,7 @@ export function TaskChat({
         if (!cancelled) setQueuedSendError('Could not reload the queued message.');
       });
     return () => { cancelled = true; };
-  }, [activeProfileId, isBot, taskId, loadMessages, sendMessage, clearFiles]);
+  }, [activeProfileId, isBot, taskId, loadMessages, sendMessage]);
 
   // The server can consume a queued request without this browser sending it.
   useEffect(() => {
@@ -1005,6 +1009,27 @@ export function TaskChat({
         icon: hasUploadingFiles ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} />,
       };
 
+  const queuedMessageBar = queuedMessage && (
+    <QueuedMessageBar
+      queuedMessage={queuedMessage}
+      error={queuedSendError}
+      isSending={queuedIsSending}
+      canRetry={queuedCanManualSend}
+      waitingLabel={queuedSteerNoticeId === queuedMessage.id && !pausedByRunFailure && !compactionBlocker
+        ? 'Hermes cannot take this update yet. Saved to send after this response.'
+        : queuedMessageWaitingLabel({ pausedByRunFailure, compactionBlocker })}
+      retryLabel={queuedSendError ? 'Retry sending message' : 'Send queued message'}
+      canSteer={queuedMessage.invitedProfileIds.length === 0}
+      isSteering={steeringQueuedId === queuedMessage.id}
+      onSteer={() => void handleSteerQueuedMessage()}
+      onEdit={handleEditQueuedMessage}
+      onRemove={handleRemoveQueuedMessage}
+      onRetry={handleRetryQueuedMessage}
+      onReviewPublication={onReviewPublication}
+      pausedByRunFailure={pausedByRunFailure}
+    />
+  );
+
   return (
     <div
       className="relative flex w-full flex-1 min-h-0 flex-col xl:flex-row"
@@ -1244,6 +1269,7 @@ export function TaskChat({
         {!isBot && projectId && loadedTaskId === taskId && onReviewPublication && <TaskPublicationNotice issue={publicationIssue} onReview={onReviewPublication} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
         {modelResolution && <RunModelResolution resolution={modelResolution} />}
+        {queuedMessage?.publication && <div className={CHAT_COLUMN_CLASS}>{queuedMessageBar}</div>}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
           {!isBot && persistentGrants.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-100 px-4 py-2 text-xs dark:border-zinc-700">
@@ -1326,26 +1352,7 @@ export function TaskChat({
           <AttachmentTray files={pendingFiles} onRemove={removeFile} onRetry={retryFile} onRestoreText={restoreTextFile} />
           {uploadError && <UploadErrorBar error={uploadError} onDismiss={() => setUploadError(null)} />}
           {interruptError && <UploadErrorBar error={interruptError} onDismiss={() => setInterruptError(null)} />}
-          {queuedMessage && (
-            <QueuedMessageBar
-              queuedMessage={queuedMessage}
-              error={queuedSendError}
-              isSending={queuedIsSending}
-              canRetry={queuedCanManualSend}
-              waitingLabel={queuedSteerNoticeId === queuedMessage.id && !pausedByRunFailure && !compactionBlocker
-                ? 'Hermes cannot take this update yet. Saved to send after this response.'
-                : queuedMessageWaitingLabel({ pausedByRunFailure, compactionBlocker })}
-              retryLabel={queuedSendError ? 'Retry sending message' : 'Send queued message'}
-              canSteer={queuedMessage.invitedProfileIds.length === 0}
-              isSteering={steeringQueuedId === queuedMessage.id}
-              onSteer={() => void handleSteerQueuedMessage()}
-              onEdit={handleEditQueuedMessage}
-              onRemove={handleRemoveQueuedMessage}
-              onRetry={handleRetryQueuedMessage}
-              onReviewPublication={onReviewPublication}
-              pausedByRunFailure={pausedByRunFailure}
-            />
-          )}
+          {!queuedMessage?.publication && queuedMessageBar}
           <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:gap-3 sm:px-4">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               <AttachButton onFiles={addFiles} disabled={configPending} />

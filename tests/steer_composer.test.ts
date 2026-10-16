@@ -103,7 +103,7 @@ await new Promise(resolve => setImmediate(resolve));
 assert.equal(h.render().find(node => node.props.role === 'alert')?.props.children, 'Worker unavailable');
 assert.equal(h.saved().content, 'Keep this update if steering fails');
 let publicationNodes = h.publicationBar();
-assert.ok(publicationNodes.some(node => node.props.children === 'Publishes after this response and its checks finish.'));
+assert.ok(publicationNodes.some(node => node.props.children === 'Your push is saved. Waiting for this response and its checks.'));
 assert.ok(!publicationNodes.some(node => ['Steer now', 'Edit', 'Retry'].includes(node.props.children)), 'a saved publication is never steered or edited as chat text');
 assert.ok(publicationNodes.some(node => node.props['aria-label'] === 'Cancel queued publication' && !node.props.disabled));
 publicationNodes = h.publicationBar({ started: true });
