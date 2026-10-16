@@ -231,6 +231,19 @@ class DelegationEventProjectionTests(unittest.TestCase):
             owned,
         )
 
+    def test_interim_failure_notice_does_not_replace_final_result(self) -> None:
+        final = {"type": "async_delegation", "session_key": "task-1", "delegation_id": "owned"}
+        interim = final | {"task_failure_notice": True, "status": "running"}
+        foreign = interim | {"session_key": "task-2", "delegation_id": "foreign"}
+        registry = FakeProcessRegistry(interim, foreign, final)
+        self.assertIs(take_owned_delegation_notification(
+            "task-1", delegation_ids={"owned"}, registry=registry, timeout=0), final)
+        self.assertEqual(registry.completion_queue.qsize(), 1)
+        self.assertIs(registry.completion_queue.get_nowait(), foreign)
+        registry.completion_queue.put(interim)
+        self.assertIsNone(take_owned_delegation_notification(
+            "task-1", delegation_ids={"owned"}, registry=registry, timeout=0))
+
     def test_parent_agent_continues_after_background_delegation_completes(self) -> None:
         run_messages: list[str] = []
         sent: list[dict[str, object]] = []

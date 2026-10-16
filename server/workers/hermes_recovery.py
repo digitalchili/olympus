@@ -67,6 +67,8 @@ class ContinuationJournal:
             event TEXT, PRIMARY KEY(task, delegation))''')
         db.execute('''CREATE TABLE IF NOT EXISTS retained_recovery (
             id INTEGER PRIMARY KEY, task TEXT NOT NULL, snapshot TEXT NOT NULL, restored INTEGER NOT NULL DEFAULT 0)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS superseded_interim_results (
+            task TEXT, delegation TEXT, receipt TEXT NOT NULL, PRIMARY KEY(task, delegation))''')
         return db
 
     def retained(self):
@@ -216,6 +218,10 @@ class ContinuationJournal:
         return {'status': 'pending' if rows else 'none'}
 
     def save_event(self, event):
+        # Hermes emits early per-child failures before a batch has finished.
+        # These notices have no native delivery claim and are not final results.
+        if event.get('task_failure_notice'):
+            return
         delegation = event.get('delegation_id')
         row = next((row for row in self.rows() if row['delegation'] == delegation), None)
         owners = {event.get(key) for key in ('session_key', 'origin_session_id', 'parent_session_id')}
@@ -229,12 +235,57 @@ class ContinuationJournal:
         with closing(self._db()) as db, db:
             db.execute('UPDATE continuation_results SET state=? WHERE task=? AND delegation=?', (state, self.task_id, delegation))
 
+    def repair_interim_receipts(self, native, *, expected):
+        """Replace legacy interim receipts with owned, still-undelivered finals.
+
+        Preserve the original receipt for audit. This neither acknowledges the
+        final nor replays the earlier synthesis; normal continuation consumes it.
+        Operator callers must hold drain to zero active runs.
+        """
+        with closing(self._db()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            snapshot = self._snapshot(db)
+            if hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest() != expected:
+                raise RecoveryBlocked('Recovery changed since inspection.')
+            if snapshot['turn'] or (snapshot['blocked'] or {}).get('blocked'):
+                raise RecoveryBlocked('Unfinished or stopped recovery cannot be repaired automatically.')
+            repaired = 0
+            for row in snapshot['results']:
+                event = json.loads(row['event']) if row['event'] else {}
+                if not event.get('task_failure_notice'):
+                    continue
+                record = native.get_durable_delegation(row['delegation'])
+                if (row['state'] not in {'ready', 'ack_pending'}
+                        or event.get('type') != 'async_delegation'
+                        or event.get('delegation_id') != row['delegation']
+                        or row['owner'] not in {event.get('session_key'), event.get('origin_session_id'), event.get('parent_session_id')}
+                        or not isinstance(record, dict)
+                        or row['owner'] not in {record.get('origin_session'), record.get('origin_session_id')}
+                        or record.get('delivery_state') != 'pending'):
+                    raise RecoveryBlocked('Interim receipt has no safe, owned final result to recover.')
+                if record.get('state') in {'running', 'finalizing', 'stalling'}:
+                    continue  # Keep waiting; early failures do not finish the batch.
+                if (record.get('state') not in {'completed', 'error'}
+                        or not isinstance(record.get('result'), dict) or record['result'].get('partial')):
+                    raise RecoveryBlocked('Interim receipt has no complete native result to recover.')
+                final = {'type': 'async_delegation', 'delegation_id': row['delegation'],
+                         'session_key': row['owner'], 'origin_session_id': row['owner'],
+                         'status': record['state'], 'summary': json.dumps(record['result'], ensure_ascii=False)}
+                db.execute('INSERT INTO superseded_interim_results VALUES (?, ?, ?)',
+                           (self.task_id, row['delegation'], json.dumps(row)))
+                db.execute("UPDATE continuation_results SET state='ready', event=? WHERE task=? AND delegation=?",
+                           (json.dumps(final), self.task_id, row['delegation']))
+                repaired += 1
+            return repaired
+
     def acknowledge(self, native, delegation, claim=None):
         """Repair only native acknowledgement after synthesis is committed."""
         row = next((row for row in self.rows() if row['delegation'] == delegation), None)
         if not row or row['state'] != 'ack_pending':
             raise RecoveryBlocked('Successful synthesis receipt is unavailable.')
         event = json.loads(row['event'])
+        if event.get('task_failure_notice'):
+            raise RecoveryBlocked('An interim child notice cannot acknowledge a final result.')
         acquired = claim is None
         delivered = False
         try:
@@ -253,7 +304,7 @@ class ContinuationJournal:
                 raise RecoveryBlocked('Installed Hermes cannot acknowledge saved child results.')
             if claim is None:
                 claim = native.claim_event_delivery(event, 'olympus-worker-ack')
-            if claim is None:
+            if not claim:
                 return False
             native.complete_event_delivery(event, claim)
             # Native complete_event_delivery returns None even for a failed CAS.
@@ -279,6 +330,9 @@ class ContinuationJournal:
         rows = self.rows()
         if not rows:
             return
+        if acknowledge and any(row['event'] and json.loads(row['event']).get('task_failure_notice') for row in rows):
+            self.repair_interim_receipts(native, expected=self.fingerprint())
+            rows = self.rows()
         getter = getattr(native, 'get_durable_delegation', None)
         if not callable(getter):
             raise RecoveryBlocked('Installed Hermes cannot reconcile durable child results.')
@@ -289,6 +343,8 @@ class ContinuationJournal:
             owners = {record.get('origin_session'), record.get('origin_session_id')}
             if not ({self.task_id, row['owner']} & owners):
                 raise RecoveryBlocked('Native child recovery record belongs to another task.')
+            if row['event'] and json.loads(row['event']).get('task_failure_notice'):
+                continue  # Inventory is read-only; the normal continuation repairs it.
             if row['state'] == 'ack_pending':
                 if acknowledge:
                     self.acknowledge(native, row['delegation'])
@@ -297,14 +353,16 @@ class ContinuationJournal:
                 continue
             if record.get('delivery_state') in {'delivered', 'dropped'}:
                 raise RecoveryBlocked('Native child delivery was consumed or dropped outside this continuation.')
+            if record.get('state') in {'running', 'finalizing', 'stalling'}:
+                continue
             if row['event']:
                 continue
             result = record.get('result')
-            if isinstance(result, dict):
+            if isinstance(result, dict) and not result.get('partial'):
                 self.save_event({'type': 'async_delegation', 'delegation_id': row['delegation'],
                     'session_key': row['owner'], 'origin_session_id': row['owner'],
                     'status': record.get('state'), 'summary': json.dumps(result, ensure_ascii=False)})
-            elif record.get('state') not in {'running', 'finalizing', 'stalling'}:
+            else:
                 raise RecoveryBlocked('Native child finished without a recoverable result.')
 
     def ready_event(self):

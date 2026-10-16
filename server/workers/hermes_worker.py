@@ -407,6 +407,11 @@ def take_owned_delegation_notification(
         }
         event_delegation_id = _safe_protocol_identifier(event.get("delegation_id"), 120)
         id_matches = delegation_ids is None or event_delegation_id in delegation_ids
+        if (event.get("type") == "async_delegation" and session_id in owner_ids
+                and id_matches and event.get("task_failure_notice")):
+            # Its child outcome is in the native ledger; only the final batch
+            # needs durable delivery. Leave other sessions' notices untouched.
+            continue
         if (
             selected is None
             and event.get("type") == "async_delegation"
@@ -2200,7 +2205,7 @@ def _run_chat(request_id: str, request: dict[str, Any], performance_trace: Perfo
 
         journal.save_event(event)
         claim = claim_event_delivery(event, "olympus-worker")
-        if claim is None:
+        if not claim:
             # A failed claim is never another agent turn with the old message.
             raise WorkerError("Child result delivery is busy; its continuation remains saved.", code="recovery_pending")
         delivery_event, delivery_claim = event, claim

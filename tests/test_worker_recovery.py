@@ -51,6 +51,98 @@ class RecoveryTests(unittest.TestCase):
             raise AssertionError('Missing notification never reconciled native state')
         return None
 
+    def seed_interim_receipt(self, journal, state='ack_pending', delegation='deleg-1'):
+        import json
+        import sqlite3
+        journal.track(delegation, 'task-1')
+        interim = self.event | {'delegation_id': delegation, 'task_failure_notice': True, 'status': 'running', 'summary': 'Early failure only'}
+        # Reproduce an existing journal written by Olympus before this fix.
+        with sqlite3.connect(journal.path) as db:
+            db.execute('UPDATE continuation_results SET event=?, state=? WHERE task=?',
+                       (json.dumps(interim), state, 'task-1'))
+        return interim
+
+    def test_interim_notice_cannot_become_or_overwrite_a_final_receipt(self):
+        journal = ContinuationJournal('task-1')
+        journal.track('deleg-1', 'task-1')
+        interim = self.event | {'task_failure_notice': True}
+        journal.save_event(interim)
+        self.assertIsNone(journal.ready_event())
+        journal.save_event(self.event)
+        journal.save_event(interim)
+        self.assertEqual(journal.ready_event(), self.event)
+
+    def test_partial_native_result_waits_for_all_children(self):
+        journal = ContinuationJournal('task-1')
+        journal.track('deleg-1', 'task-1')
+        partial = self.native.get_durable_delegation('deleg-1') | {
+            'state': 'running', 'result': {'partial': True, 'results': [{'error': 'one child failed'}]}}
+        with patch.object(self.native, 'get_durable_delegation', return_value=partial):
+            journal.reconcile(self.native, acknowledge=True)
+        self.assertIsNone(journal.ready_event(), 'A saved partial batch is still active work')
+        self.assertEqual(journal.rows()[0]['state'], 'waiting')
+        self.assertEqual(self.completed, [])
+        journal.reconcile(self.native, acknowledge=True)
+        self.assertEqual(journal.ready_event()['status'], 'completed')
+
+    def test_native_terminal_unknown_result_remains_recoverable(self):
+        journal = ContinuationJournal('task-1')
+        journal.track('deleg-1', 'task-1')
+        record = self.native.get_durable_delegation('deleg-1') | {'state': 'unknown'}
+        with patch.object(self.native, 'get_durable_delegation', return_value=record):
+            journal.reconcile(self.native)
+        self.assertEqual(journal.ready_event()['status'], 'unknown')
+
+    def test_saved_interim_ack_recovers_final_once_and_preserves_original_receipt(self):
+        import json
+        import sqlite3
+        journal = ContinuationJournal('task-1')
+        interim = self.seed_interim_receipt(journal)
+        before = journal.rows()[0]
+        self.native.claim_event_delivery = lambda event, *_: '' if event.get('task_failure_notice') else 'claim-1'
+        journal.reconcile(self.native)  # Read-only inventory must not repair or acknowledge.
+        self.assertEqual(journal.rows(), [before])
+        history = [{'role': 'assistant', 'content': 'Earlier response remains saved'}]
+        self.run_chat(dispatch=False, recoveryContinuation=True, saved_history=history)
+        self.assertEqual(len(self.messages), 1, 'Only the genuine final result needs synthesis')
+        self.assertNotIn('Early failure only', self.messages[0][1])
+        self.assertFalse(self.completed[0].get('task_failure_notice'))
+        self.assertEqual(journal.status(), {'status': 'none'})
+        with sqlite3.connect(journal.path) as db:
+            saved = db.execute('SELECT receipt FROM superseded_interim_results WHERE task=?', ('task-1',)).fetchall()
+        self.assertEqual([json.loads(row[0]) for row in saved], [before])
+        self.assertEqual(json.loads(before['event']), interim)
+        journal.reconcile(self.native, acknowledge=True)
+        self.assertEqual(len(self.completed), 1)
+
+    def test_interim_repair_refuses_ambiguous_foreign_and_consumed_results(self):
+        journal = ContinuationJournal('task-1')
+        self.seed_interim_receipt(journal)
+        before = journal.fingerprint()
+        good = self.native.get_durable_delegation('deleg-1')
+        for record in [None, good | {'result': None}, good | {'result': {'partial': True}},
+                       good | {'delivery_state': 'delivered'}, good | {'delivery_state': 'dropped'},
+                       good | {'origin_session': 'other', 'origin_session_id': 'other'}]:
+            with self.subTest(record=record), patch.object(self.native, 'get_durable_delegation', return_value=record):
+                with self.assertRaises(RecoveryBlocked):
+                    journal.repair_interim_receipts(self.native, expected=before)
+            self.assertEqual(journal.fingerprint(), before)
+        with patch.object(self.native, 'get_durable_delegation', return_value=good | {'state': 'running'}):
+            self.assertEqual(journal.repair_interim_receipts(self.native, expected=before), 0)
+            journal.reconcile(self.native, acknowledge=True)
+        self.assertEqual(journal.fingerprint(), before)
+        for state in ['synthesizing', 'waiting']:
+            journal.state('deleg-1', state)
+            with self.assertRaises(RecoveryBlocked):
+                journal.repair_interim_receipts(self.native, expected=journal.fingerprint())
+        journal.state('deleg-1', 'ack_pending')
+        journal.set_turn_state('running')
+        with self.assertRaises(RecoveryBlocked):
+            journal.repair_interim_receipts(self.native, expected=journal.fingerprint())
+        journal.set_turn_state(None)
+        with self.assertRaises(RecoveryBlocked):
+            journal.repair_interim_receipts(self.native, expected='stale snapshot')
+
     def test_retained_recovery_preserves_results_without_replaying_completed_work(self):
         journal = ContinuationJournal('task-1')
         journal.track('deleg-1', 'task-1')
@@ -594,6 +686,55 @@ class RecoveryTests(unittest.TestCase):
     def test_real_native_committed_ack_lost_receipt_repairs_without_synthesis_replay(self):
         self.native_recovery_probe('committed')
 
+    @unittest.skipUnless(os.environ.get('OLYMPUS_NATIVE_HERMES_SOURCE'), 'native Hermes source not selected')
+    def test_real_native_interim_receipt_recovers_pending_final(self):
+        self.native_recovery_probe('interim')
+
+    @unittest.skipUnless(os.environ.get('OLYMPUS_NATIVE_HERMES_SOURCE'), 'native Hermes source not selected')
+    def test_real_native_partial_batch_waits_then_recovers_final(self):
+        import importlib
+        import time
+        finished = threading.Event()
+        with patch.object(sys, 'path', [os.environ['OLYMPUS_NATIVE_HERMES_SOURCE']] + sys.path):
+            native = importlib.import_module('tools.async_delegation')
+            process = importlib.import_module('tools.process_registry')
+            failed = {'task_index': 0, 'error': 'Fixture child failure'}
+            successful = {'task_index': 1, 'summary': 'Saved sibling result'}
+            def runner():
+                if not finished.wait(5):
+                    raise AssertionError('Fixture batch was not released')
+                return {'results': [failed, successful]}
+            dispatched = native.dispatch_async_delegation_batch(
+                goals=['Fixture failure', 'Fixture sibling'], context=None, toolsets=[], role='leaf', model=None,
+                session_key='task-1', parent_session_id='task-1', origin_session_id='task-1', runner=runner)
+            delegation = dispatched['delegation_id']
+            journal = ContinuationJournal('task-1')
+            try:
+                native.record_unit_child(delegation, failed)
+                native.push_task_failure_notice(delegation, failed, n_tasks=2)
+                self.assertIsNone(worker.take_owned_delegation_notification(
+                    'task-1', delegation_ids={delegation}, registry=process.process_registry, timeout=0))
+                journal.track(delegation, 'task-1')
+                journal.reconcile(native, acknowledge=True)
+                self.assertIsNone(journal.ready_event())
+                self.assertEqual(native.get_durable_delegation(delegation)['delivery_attempts'], 0)
+                self.seed_interim_receipt(journal, delegation=delegation)
+                journal.reconcile(native, acknowledge=True)
+                self.assertEqual(journal.rows()[0]['state'], 'ack_pending')
+            finally:
+                finished.set()
+            deadline = time.monotonic() + 3
+            while native.get_durable_delegation(delegation)['state'] not in {'completed', 'error'}:
+                if time.monotonic() > deadline:
+                    self.fail('Native batch did not finish')
+                time.sleep(0.01)
+            self.native, self.process = native, process
+            self.run_chat(dispatch=False, notification=False, recoveryContinuation=True)
+            self.assertEqual(len(self.messages), 1)
+            self.assertIn('Saved sibling result', self.messages[0][1])
+            self.assertEqual(native.get_durable_delegation(delegation)['delivery_state'], 'delivered')
+            self.assertEqual(journal.status(), {'status': 'none'})
+
     def native_recovery_probe(self, failure=None):
         import importlib
         import queue
@@ -619,7 +760,15 @@ class RecoveryTests(unittest.TestCase):
                 except queue.Empty:
                     break
             self.native, self.process = native, process
-            if failure:
+            if failure == 'interim':
+                journal = ContinuationJournal('task-1')
+                interim = self.seed_interim_receipt(journal, delegation=delegation)
+                self.assertEqual(native.claim_event_delivery(interim, 'fixture'), '')
+                native.complete_event_delivery(interim, '')
+                self.assertEqual(native.get_durable_delegation(delegation)['delivery_state'], 'pending')
+                self.run_chat(dispatch=False, notification=False, recoveryContinuation=True)
+                self.assertEqual(len(self.messages), 1)
+            elif failure:
                 complete = native.complete_event_delivery
                 def fail_ack(*args):
                     if failure == 'committed':
