@@ -13,6 +13,12 @@ COPY --from=node-runtime /usr/local/lib/node_modules/npm /opt/olympus-node/lib/n
 RUN ln -sf /opt/olympus-node/lib/node_modules/npm/bin/npm-cli.js /opt/olympus-node/bin/npm && \
     ln -sf /opt/olympus-node/lib/node_modules/npm/bin/npx-cli.js /opt/olympus-node/bin/npx
 
+FROM olympus-base AS hermes-policy
+# Keep the targeted Hermes prompt policy with the image, not the persistent profile.
+COPY patches/hermes/selective-skills.patch /tmp/hermes-selective-skills.patch
+RUN git -c safe.directory=/opt/hermes -C /opt/hermes apply /tmp/hermes-selective-skills.patch && \
+    rm /tmp/hermes-selective-skills.patch
+
 FROM olympus-base AS dependencies
 ENV PATH="/opt/olympus-node/bin:${PATH}"
 WORKDIR /app
@@ -29,7 +35,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM olympus-base AS runtime
+FROM hermes-policy AS runtime
 ARG VERSION=0.7.0
 ARG REVISION=unknown
 WORKDIR /opt/olympus-dispatch

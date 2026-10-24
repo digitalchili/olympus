@@ -1,0 +1,26 @@
+diff --git a/tests/agent/test_oneshot_footprint.py b/tests/agent/test_oneshot_footprint.py
+index ecc8d16b..8724b828 100644
+--- a/tests/agent/test_oneshot_footprint.py
++++ b/tests/agent/test_oneshot_footprint.py
+@@ -32,7 +32,9 @@ def test_oneshot_hides_skill_manage_and_skill_authoring_coaching(oneshot, intera
+     prompt = build_skills_system_prompt(available_tools={"skill_view", "skills_list"}, skills_dir_override=_skills_dir(tmp_path))
+     assert "demo-skill" in prompt and "skill_view" in prompt
+     assert "skill_manage" not in prompt and "offer to save as a skill" not in prompt
+-    assert "skill_manage" in interactive_prompt and "offer to save as a skill" in interactive_prompt
++    assert interactive_prompt.startswith(oneshot_footprint.SELECTIVE_SKILLS_LOAD_GUIDANCE)
++    assert "one-shot run" not in interactive_prompt
++    assert prompt.split("<available_skills>", 1)[1] == interactive_prompt.split("<available_skills>", 1)[1]
+ 
+ 
+ def _skills_dir(tmp_path):
+@@ -45,8 +47,10 @@ def _skills_dir(tmp_path):
+ @pytest.fixture
+ def interactive_prompt(tmp_path, monkeypatch):
+     monkeypatch.delenv("HERMES_SINGLE_QUERY_SESSION", raising=False)
++    tools = _tools("skill_manage", "skill_view", "skills_list", "terminal", "delegate_task")
+     prompt = build_skills_system_prompt(available_tools={"skill_view", "skills_list", "skill_manage"},
+                                         skills_dir_override=_skills_dir(tmp_path))
++    assert oneshot_footprint.prune_oneshot_tools(tools) == tools
+     monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
+     return prompt
+ 

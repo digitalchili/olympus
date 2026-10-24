@@ -1,0 +1,139 @@
+diff --git a/agent/oneshot_footprint.py b/agent/oneshot_footprint.py
+index 6857ad44..615f9de8 100644
+--- a/agent/oneshot_footprint.py
++++ b/agent/oneshot_footprint.py
+@@ -5,7 +5,8 @@ exits. The interactive self-improvement loop is pure overhead there, and a measu
+ one-shot benchmark trajectories the agent authored 7 new skills and patched a bundled one mid-task, 37 of
+ ~215 tool calls were ``skill_view``/``skill_manage``, and skill text was 34% of every tool-result byte fed
+ back into context. Three rules follow, all keyed on the same session marker the approval gate and the
+-delegation dispatcher already read (``HERMES_SINGLE_QUERY_SESSION``), so interactive sessions are untouched:
++delegation dispatcher already read (``HERMES_SINGLE_QUERY_SESSION``). Regular sessions share the selective
++skill-reading guidance, but keep skill authoring and their normal delegation behavior:
+ 
+ * ``skill_manage`` is not offered (``skills_list``/``skill_view`` stay: reading a domain skill can still win);
+ * the ## Skills prompt drops the "record it / patch it / offer to save" coaching and the "load process skills
+@@ -39,10 +40,14 @@ def prune_oneshot_tools(tools: Iterable[dict[str, Any]]) -> list[dict[str, Any]]
+     return [t for t in tools if (t.get("function") or {}).get("name") not in ONESHOT_HIDDEN_TOOLS]
+ 
+ 
+-ONESHOT_SKILLS_LOAD_GUIDANCE = (
++SELECTIVE_SKILLS_LOAD_GUIDANCE = (
+     "## Skills\n"
+     "Scan the skills below and load one with skill_view(name) only when it carries domain knowledge you lack "
+     "for THIS task (an API, a tool's commands, a project's conventions). Do not load general process skills "
+-    "(testing, debugging, review methodology) for work you already know how to do, and do not create or edit "
+-    "skills: this is a one-shot run with no later session to reuse them.\n"
++    "(testing, debugging, review methodology) for work you already know how to do.\n"
++)
++
++ONESHOT_SKILLS_LOAD_GUIDANCE = (
++    SELECTIVE_SKILLS_LOAD_GUIDANCE
++    + "Do not create or edit skills: this is a one-shot run with no later session to reuse them.\n"
+ )
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index 6a22b6dc..fe0b15b2 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -207,10 +207,9 @@ def build_memory_guidance(
+             "memory tool (target='user') — the built-in notes store is disabled, so never target='memory'. "
+         )
+     skill_routing = (
+-        "Skills come first: when you learn something while doing a task — a "
+-        "procedure, a pitfall, and the user's preferences and corrections "
+-        "for that kind of work — record it in the skill you used or built "
+-        "for the task (skill_manage), where it loads only when relevant. "
++        "Task-specific knowledge — procedures, pitfalls, and the user's preferences "
++        "and corrections for that kind of work — belongs in skills (skill_manage), "
++        "where it loads only when needed. "
+         if skill_manage_available else
+         "Task-specific knowledge — procedures, pitfalls, and the user's preferences "
+         "and corrections for that kind of work — belongs in skills, not in memory, "
+@@ -221,7 +220,7 @@ def build_memory_guidance(
+         "session regardless of task (who the user is, environment facts, "
+         "standing conventions with no task home); it has a hard character "
+         "budget, so when it fills, replace or consolidate stale entries "
+-        "rather than skipping the save. Write entries as declarative facts, "
++        "and omit low-value facts. Write entries as declarative facts, "
+         "not instructions to yourself: 'User prefers concise responses' ✓ — "
+         "'Always respond concisely' ✗ (imperative phrasing gets re-read as "
+         "a directive in later sessions and can override the user's current "
+@@ -239,24 +238,15 @@ SESSION_SEARCH_GUIDANCE = (
+     "context exists, use session_search to recall it before asking them to repeat themselves."
+ )
+ 
+-# The opening sentence is worded deliberately: Anthropic's server-side filter rejected the previous phrasing
+-# ("After completing a complex task (5+ tool calls)... save the approach as a skill...") on subscription OAuth
+-# credentials, surfacing as a billing-shaped HTTP 400. If you rewrite it, re-verify with a subscription OAuth
+-# token — sk-ant-api keys do not hit the filter. The safety-rule heading is referenced by tests and compaction summaries.
+-# Anthropic's server-side content filter rejects the previous phrasing ("After completing a complex task (5+
+-# tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill
+-# with skill_manage so you can reuse it next time.") on subscription OAuth credentials, and surfaces that
+-# rejection as a billing-shaped HTTP 400 ("You're out of extra usage"), which sends users to buy quota they
+-# do not need. Bisected against the live API: that sentence alone reproduces the 400 and removing it alone
+-# clears it; size and the system[0] identity gate were both ruled out. The reword is empirically validated,
+-# not understood — if you rewrite this sentence, re-verify against a subscription OAuth token, not an
+-# sk-ant-api… key, which does not hit the filter. Dieted (#95681, maintainer-directed): the record-it /
+-# patch-it coaching that used to open this block duplicated the ## Skills section (which teaches both "offer
+-# to save as a skill" and "fix it with skill_manage(action='patch')") and skill_manage's own schema. Only
+-# the compaction-pruning contract lives here — nothing else teaches it.
++# Earlier skill-authoring wording triggered Anthropic's OAuth content filter (#82154).
++# Prompt unit tests do not replace a provider smoke test; API keys do not exercise that OAuth path.
++# Keep the safety heading and compaction-pruning contract used by restored conversations.
+ SKILL_SAFETY_HEADING = "## Skill Safety Rule"
+ SKILLS_GUIDANCE = (
+-    "When you work out a non-trivial workflow, record it with skill_manage for future reuse.\n\n"
++    "Save only verified, reusable learning worth retaining. Prefer consolidating an existing skill with "
++    "skill_manage and removing superseded wording to appending more rules. Keep core guidance short and "
++    "specialized details in references loaded on demand. Create a new skill only when no existing skill "
++    "fits; routine tasks do not need a skill update.\n\n"
+     f"{SKILL_SAFETY_HEADING}\n"
+     "A skill placeholder containing `[SKILL_PRUNED]` lost its content in context compression and is inaccessible — "
+     "reload it with skill_view(name='...') before acting on anything that depends on it. After reloading, ignore any "
+@@ -1450,8 +1440,6 @@ def _render_skills_index(
+         hidden_note += (f"\n(A copy of {', '.join(unloadable)} is not listed: it shares both its name and its path "
+                         "with a different skill in the same skills directory tier (e.g. another external_dirs entry), "
+                         "so skill_view cannot load it — rename one.)")
+-    # Don't name web_search when the session has no web tools (dangling reference).
+-    _basic_tools = "terminal" if available_tools is not None and "web_search" not in available_tools else "web_search or terminal"
+     index_lines = []
+     for category in sorted(skills_by_category):
+         entries = skills_by_category[category]
+@@ -1465,32 +1453,13 @@ def _render_skills_index(
+             if name not in seen:
+                 seen.add(name)
+                 index_lines.append(f"    - {name}: {desc}" if desc else f"    - {name}")
+-    from agent.oneshot_footprint import ONESHOT_SKILLS_LOAD_GUIDANCE, is_single_query_session
+-    if is_single_query_session():
+-        return (
+-            ONESHOT_SKILLS_LOAD_GUIDANCE
+-            + "\n<available_skills>\n" + "\n".join(index_lines) + "\n</available_skills>"
+-            + hidden_note
+-        )
++    from agent.oneshot_footprint import (
++        ONESHOT_SKILLS_LOAD_GUIDANCE, SELECTIVE_SKILLS_LOAD_GUIDANCE, is_single_query_session,
++    )
++    guidance = ONESHOT_SKILLS_LOAD_GUIDANCE if is_single_query_session() else SELECTIVE_SKILLS_LOAD_GUIDANCE
+     return (
+-        "## Skills\n"
+-        "Before replying, scan the skills below. If a skill matches or is even partially relevant to your "
+-        "task, you MUST load it with skill_view(name) and follow its instructions. Err on the side of "
+-        "loading — it is always better to have context you don't need than to miss critical steps, pitfalls, "
+-        "or established workflows. Skills contain specialized knowledge — API endpoints, tool-specific "
+-        "commands, and proven workflows that outperform general-purpose approaches. Load the skill "
+-        f"even if you think you could handle the task with basic tools like {_basic_tools}. "
+-        "Skills also encode the user's preferred approach, conventions, and quality standards for tasks like "
+-        "code review, planning, and testing — load them even for tasks you already know how to do, because "
+-        "the skill defines how it should be done here.\n"
+-        "If a skill has issues, fix it with skill_manage(action='patch').\n"
+-        "After difficult/iterative tasks, offer to save as a skill. If a skill you loaded was missing steps, "
+-        "had wrong commands, or needed pitfalls you discovered, update it before finishing.\n"
+-        "\n"
+-        "<available_skills>\n"
+-        + "\n".join(index_lines) + "\n"
+-        "</available_skills>\n\n"
+-        "Only proceed without loading a skill if genuinely none are relevant to the task."
++        guidance
++        + "\n<available_skills>\n" + "\n".join(index_lines) + "\n</available_skills>"
+         + hidden_note
+     )
+ 
