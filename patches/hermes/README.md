@@ -42,6 +42,15 @@ patch, these checks passed: 189 tests, one macOS platform skip. The actual Docke
 `hermes-policy` stage also built successfully. An offline probe inside that image
 verified the regular-session prompt, unchanged tool filtering and delegation
 budget, identical skill catalog, and isolated one-shot restrictions.
+The full Olympus runtime image also passed the native worker acceptance suite,
+including streamed/resumed turns, mid-session skill discovery and recovery.
+
+The before-deployment Olympus chat completed a bounded standard-library coding
+task with five passing tests and no skill loads. Its saved native prompt still
+contained the old regular-session guidance. The requested native helper reached
+the provider, but the installation's existing helper model was rejected before
+it did work; this is a separate configuration issue, not evidence of a policy
+regression.
 
 These checks prove prompt delivery and runtime compatibility, not model behavior.
 Acceptance still requires a fresh task through actual Olympus chat after a safe
