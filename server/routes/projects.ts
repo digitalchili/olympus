@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { projectHasRepositoryRequests } from '../db/repository-queue.js';
 import { ProjectRepositoryCheckpointError, ProjectRepositoryMergeConflictError, ProjectPublicationError } from '../project-cp.js';
 import multer from 'multer';
 import { ProjectGitError } from '../project-git-auth.js';
@@ -276,6 +277,9 @@ async function withProjectMutation<T>(projectId: string, mutate: () => Promise<T
 }
 
 function assertRepositoryReplaceable(projectId: string): void {
+  if (projectHasRepositoryRequests(projectId)) {
+    throw Object.assign(new Error('This Project has tasks waiting to run. Finish or remove their saved requests before connecting a different repository.'), { statusCode: 409 });
+  }
   if (hasRetainedProjectWorkspace(projectId) || listProjectVersions(projectId).length) {
     throw Object.assign(new Error('This Project has saved task workspaces. Create a new Project to connect a different repository.'), { statusCode: 409 });
   }

@@ -1,10 +1,10 @@
-import { reconcileRecoveries, recoverRecoveryRecords } from './run-recovery.js';
+import { reconcileRecoveries, recoverRecoveryRecords, getRecovery } from './run-recovery.js';
 import { reconcileSkippedReviews } from './reconcile-review.js';
 import 'dotenv/config';
 import './logging.js';
 import './db/index.js';
 import { createServer, type Server } from 'node:http';
-import app, { adapter, drainController } from './app.js';
+import app, { adapter, drainController, repositoryQueue } from './app.js';
 import { mountFrontend, type FrontendCleanup } from './frontend.js';
 import { closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
@@ -90,6 +90,8 @@ async function main() {
     load: getQueuedTaskMessage,
     isActive: (taskId) => {
       const status = getRunStatus(taskId)?.status ?? getLatestTaskAgentRun(taskId)?.status;
+      if (status === 'error' && getLatestTaskAgentRun(taskId)?.errorCode === 'repository_busy'
+        && getRecovery(taskId)?.reason === 'repository_busy') return false;
       // Failed/stopped runs require deliberate recovery, never automatic replay.
       return status === 'streaming' || status === 'compacting' || status === 'error' || status === 'stopped';
     },
@@ -159,6 +161,7 @@ async function main() {
   configureBotMessageDispatcher(botDispatcher);
   const recover = () => {
     if (shuttingDown || !drainController.status().ready) return;
+    void repositoryQueue.tick().catch(() => console.error('Repository handoff could not be checked; saved work is preserved.'));
     void botDispatcher.dispatch().catch(error => console.error('Bot message dispatch failed:', error));
     void reconcileRecoveries(adapter, async (taskId, runId) => {
       const task = getTask(taskId);

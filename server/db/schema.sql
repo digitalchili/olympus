@@ -482,3 +482,16 @@ CREATE TABLE IF NOT EXISTS coding_evidence (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (task_id, run_id)
 );
+CREATE TABLE IF NOT EXISTS repository_workflows (
+  repository_key TEXT PRIMARY KEY,
+  owner_task_id TEXT REFERENCES tasks(id) ON DELETE RESTRICT,
+  owner_token TEXT,
+  run_id TEXT,
+  blocker TEXT
+);
+CREATE TABLE IF NOT EXISTS repository_task_queue (
+  position INTEGER PRIMARY KEY AUTOINCREMENT,
+  repository_key TEXT NOT NULL REFERENCES repository_workflows(repository_key),
+  held_by TEXT,
+  task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE
+);

@@ -8,7 +8,7 @@ export type ChatSendFailure = {
   activeTaskProfileId?: string;
   reason?: 'changes' | 'editor';
 };
-export type SendMessageResult = { ok: true; runId?: string } | ChatSendFailure;
+export type SendMessageResult = { ok: true; runId?: string; queuedMessage?: import('@shared/types').QueuedTaskMessage; task?: import('@shared/types').Task } | ChatSendFailure;
 export type ProjectChatBlocker = ChatSendFailure;
 
 export type PublicationIssueCode = 'PUBLICATION_PENDING' | 'PUBLICATION_UNCONFIRMED' | 'PUBLICATION_CONFLICT';

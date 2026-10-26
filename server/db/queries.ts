@@ -1,5 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import db from './index.js';
+import { withRepositoryQueue, removeUnstartedRepositoryTask } from './repository-queue.js';
 import {
   DEFAULT_PROFILE_NAME,
   type Task,
@@ -51,17 +52,17 @@ const stmtProfileTaskAttention = db.prepare(`
 `);
 
 export function getAllTasks(status?: TaskStatus, includeBots = false): Task[] {
-  return status ? stmtTasksByStatus.all(status, Number(includeBots)) as Task[] : stmtAllTasks.all(Number(includeBots)) as Task[];
+  return (status ? stmtTasksByStatus.all(status, Number(includeBots)) as Task[] : stmtAllTasks.all(Number(includeBots)) as Task[]).map(withRepositoryQueue);
 }
 
 export function getTasksForProfile(profileId: string, _isDefault: boolean, status?: TaskStatus, includeBots = false): Task[] {
-  return status
+  return (status
     ? stmtTasksByProfileAndStatus.all(profileId, status, Number(includeBots)) as Task[]
-    : stmtTasksByProfile.all(profileId, Number(includeBots)) as Task[];
+    : stmtTasksByProfile.all(profileId, Number(includeBots)) as Task[]).map(withRepositoryQueue);
 }
 
 export function getTasksForProject(projectId: string): Task[] {
-  return stmtTasksByProject.all(projectId) as Task[];
+  return (stmtTasksByProject.all(projectId) as Task[]).map(withRepositoryQueue);
 }
 
 export function getProfileTaskAttention(): Array<{ profileId: string; reviewCount: number }> {
@@ -69,7 +70,7 @@ export function getProfileTaskAttention(): Array<{ profileId: string; reviewCoun
 }
 
 export function getTask(id: string): Task | undefined {
-  return stmtGetTask.get(id) as Task | undefined;
+  return withRepositoryQueue(stmtGetTask.get(id) as Task | undefined);
 }
 
 export function insertTask(task: {
@@ -202,7 +203,16 @@ export function updateTask(
   if (fieldKeys.length === 0) return getTask(id);
 
   values.updated_at = Date.now();
-  getUpdateStmt(fieldKeys).run(values);
+  db.transaction(() => {
+    getUpdateStmt(fieldKeys).run(values);
+    if (fields.status === 'done') {
+      // Completing a held task cancels its unstarted request atomically. A
+      // dispatcher already holding its old queue ID will fail normal admission.
+      db.prepare(`DELETE FROM task_message_queue WHERE task_id=? AND publication_json IS NULL
+        AND EXISTS (SELECT 1 FROM repository_task_queue WHERE task_id=?)`).run(id, id);
+      removeUnstartedRepositoryTask(id);
+    }
+  })();
   return getTask(id);
 }
 

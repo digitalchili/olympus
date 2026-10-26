@@ -126,7 +126,7 @@ try {
       putQueuedTaskMessage({ ...first, id: 'keep-human', content: 'Keep this', publication: undefined });
       assert.equal((await resume()).status, 409);
       assert.equal(getQueuedTaskMessage(f.task.id)?.id, 'keep-human');
-      discardRun(f.task.id); deleteQueuedTaskMessage(f.task.id, 'keep-human'); continue;
+      finishTaskAgentRun(runId, 'stopped'); discardRun(f.task.id); deleteQueuedTaskMessage(f.task.id, 'keep-human'); continue;
     }
     if (outcome === 'profile') {
       assert.ok((await resume('unknown-profile')).status >= 400);
@@ -192,10 +192,10 @@ try {
   putQueuedTaskMessage(message);
   assert.equal((await post({ taskId: occupied.task.id, message: 'Save' })).status, 409);
   assert.deepEqual(getQueuedTaskMessage(occupied.task.id), message, 'publication cannot replace the human follow-up');
-  discardRun(occupied.task.id);
+  finishTaskAgentRun(occupied.runId, 'stopped'); discardRun(occupied.task.id);
   // Exercise the real chat settlement hook with a fake Hermes stream. No browser
   // or second agent turn should be needed to dispatch the saved action.
-  const { default: liveApp, adapter } = await import('../server/app.js');
+  const { default: liveApp, adapter, repositoryQueue } = await import('../server/app.js');
   const { createQueuedMessageDispatcher, configureQueuedMessageDispatcher } = await import('../server/queued-message-dispatcher.js');
   const { getLatestTaskAgentRun } = await import('../server/db/task-agent-runs.js');
   for (const mode of ['new', 'verified', 'resume']) {
@@ -228,7 +228,7 @@ try {
       onError: (_taskId, error) => rejectPublished(error as Error),
     });
     configureQueuedMessageDispatcher(dispatcher);
-    adapter.getBackgroundWork = async () => ({ available: true, work: [] });
+    adapter.getBackgroundWork = async () => ({ available: true, work: [], continuation: { status: 'none' } });
     adapter.chatStream = async function* (sessionId) {
       agentTurns++;
       const response = resumeId
@@ -242,7 +242,7 @@ try {
     };
     const liveServer = liveApp.listen(0, '127.0.0.1'); await once(liveServer, 'listening');
     const liveAddress = liveServer.address(); assert.ok(liveAddress && typeof liveAddress === 'object');
-    const timeout = setTimeout(() => rejectPublished(new Error('Automatic publication did not finish')), 15_000);
+    const timeout = setTimeout(() => rejectPublished(new Error(`Automatic publication did not finish: ${JSON.stringify({ mode, agentTurns, queue: getTask(automatic.id)?.repositoryQueue, run: getLatestTaskAgentRun(automatic.id)?.status })}`)), 15_000);
     try {
       const response = await fetch(`http://127.0.0.1:${liveAddress.port}/api/tasks/${automatic.id}/messages?profile=default`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: 'Yes, of course' }),
@@ -254,6 +254,9 @@ try {
       assert.equal(getQueuedTaskMessage(automatic.id), undefined);
       assert.equal(getTask(automatic.id)?.status, 'in_review', 'approval finishes in review with fresh or reused verification');
       if (mode === 'resume') assert.equal((await readCodingEvidence(getTask(automatic.id)!))?.status, 'skipped', 'an unchanged resume turn does not force unrelated checks');
+      await repositoryQueue.tick();
+      const { repositoryOwner } = await import('../server/db/repository-queue.js');
+      assert.equal(repositoryOwner('github:9001'), undefined, 'the confirmed publication hands checked source to the next task');
     } finally {
       clearTimeout(timeout);
       liveServer.close(); await once(liveServer, 'close'); discardRun(automatic.id);

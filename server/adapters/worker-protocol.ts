@@ -40,7 +40,7 @@ export type WorkerRequest =
   | { id: string; type: 'scheduledTasks.drain'; draining: boolean }
   | { id: string; type: 'session.messages.get'; sessionId: string; taskId?: string; limit?: number; before?: string | null }
   | { id: string; type: 'session.get'; sessionId: string }
-  | { id: string; type: 'session.backgroundWork.get'; sessionId: string }
+  | { id: string; type: 'session.backgroundWork.get'; sessionId: string; repositoryLockPath?: string }
   | { id: string; type: 'session.backgroundWork.stop'; sessionId: string; processIds: string[] }
   | { id: string; type: 'goal.status'; sessionId: string }
   | { id: string; type: 'goal.set'; sessionId: string; goal: string; maxTurns?: number | null }
@@ -57,6 +57,7 @@ export type WorkerRequest =
   | {
       id: string;
       type: 'chat';
+      repositoryLockPath?: string;
       timingTraceId?: string;
       bot?: AgentRunOptions['bot'];
       projectGitHub?: boolean;

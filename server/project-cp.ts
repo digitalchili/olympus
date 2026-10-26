@@ -20,6 +20,7 @@ import { createProjectPublication, getProjectPublication, getPendingProjectPubli
 import { buildProjectGitEnv, parseProjectGitConfig, validateProjectGitTransportConfig, ProjectGitError } from './project-git-auth.js';
 import { getTask, updateTask } from './db/queries.js';
 import { GitHubPermissionUpgradeError } from './studio/github-permissions.js';
+import { createRepositoryDevelopment } from './repository-development.js';
 
 const execFile = promisify(execFileCallback);
 const MAX_DIFF_BYTES = 60_000;
@@ -51,6 +52,7 @@ export class ProjectPublicationError extends Error {
 interface PublicationInput { projectId: string; taskId: string; publicationId: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }
 
 export interface PrepareProjectTaskInput {
+  automaticHandoff?: boolean;
   projectId: string;
   taskId: string;
   profileId: string;
@@ -208,6 +210,7 @@ export function projectBaselineWorkdir(rootDir: string, projectId: string, link:
 }
 
 export function createProjectCpService(options: ProjectCpServiceOptions): ProjectCpService {
+  const development = createRepositoryDevelopment(options.rootDir);
   const rawGit = options.gitRunner ?? defaultGitRunner;
   const git: GitRunner = async (cwd, args, runOptions) => {
     try { return await rawGit(cwd, args, { env: runOptions?.env ?? buildProjectGitEnv({ baseEnv: process.env, cloneUrl: '' }) }); }
@@ -466,6 +469,14 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     const existing = getProjectEditorForTask(input.projectId, input.taskId);
     if (existing) {
       await git(existing.workdir, ['rev-parse', '--is-inside-work-tree']);
+      if (input.automaticHandoff) {
+        await serialized(`baseline:${input.projectId}`, async () => {
+          const baseline = projectBaselineWorkdir(options.rootDir, input.projectId, input.repositoryLink);
+          await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
+          await development.source(input.repositoryLink, baseline);
+          await development.updateTask(existing, input.repositoryLink, baseline);
+        });
+      }
       updateTask(input.taskId, { workdir: existing.workdir });
       return existing;
     }
@@ -476,7 +487,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     if (previous && getTask(input.taskId)?.workdir === previous.workdir) {
       await git(previous.workdir, ['rev-parse', '--is-inside-work-tree']);
       const resumed = reactivateProjectEditor(previous.id, input.taskId, now());
-      if (resumed) return resumed;
+      if (resumed) return acquireEditorUnlocked(input);
     }
 
     const workdir = managedWorkdir(options.rootDir, 'tasks', input.projectId, input.taskId);
@@ -490,7 +501,8 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         const synced = await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
         recordProjectSyncEvidence(input.repositoryLink, { verifiedAt: now(), currentSha: synced.currentSha, updated: synced.updated });
         cloning = true;
-        await git(dirname(workdir), ['clone', '--no-hardlinks', '--no-recurse-submodules', '--template=', '--single-branch', '--branch', input.repositoryLink.defaultBranch, baseline, workdir]);
+        const starting = input.automaticHandoff ? await development.source(input.repositoryLink, baseline) : { path: baseline, branch: input.repositoryLink.defaultBranch };
+        await git(dirname(workdir), ['clone', '--no-hardlinks', '--no-recurse-submodules', '--template=', '--single-branch', '--branch', starting.branch, starting.path, workdir]);
         const emptyBase = await emptyRepositoryBase(baseline);
         if (emptyBase) await git(workdir, ['config', '--local', EMPTY_REPOSITORY_BASE, emptyBase]);
       });
@@ -505,7 +517,12 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         workdir, branchName, baseSha, leaseToken: randomBytes(24).toString('base64url'), now: now(),
       });
       updateTask(input.taskId, { workdir });
-      return lease;
+      if (input.automaticHandoff) {
+        await development.updateTask(lease, input.repositoryLink, projectBaselineWorkdir(options.rootDir, input.projectId, input.repositoryLink));
+        const startingSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+        advanceProjectEditorBaseline(lease.id, lease.baseSha, startingSha, now());
+      }
+      return getProjectEditorForTask(input.projectId, input.taskId)!;
     } catch (error) {
       // This directory did not exist on entry and no agent has used it yet.
       if (cloning && !getProjectEditorForTask(input.projectId, input.taskId)) await rm(workdir, { recursive: true, force: true });

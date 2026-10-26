@@ -1,5 +1,6 @@
 import type { HermesRuntimeInfo } from '../../shared/hermes-updates.js';
 import { safeProviderErrorMessage } from '../../shared/run-errors.js';
+import { repositoryLockPath } from '../repository-lock.js';
 import { logWorkerDispatch } from '../performance-timing.js';
 import type { OpenAIAuthWorkerRequest, OpenAIAuthResponse, OpenAIAuthGuard } from '../../shared/openai-auth.js';
 import type { ProviderSetupRequest, ProviderSetupResponse } from '../../shared/provider-settings.js';
@@ -54,6 +55,7 @@ export function buildChatWorkerRequest(
     taskId: options?.task?.id,
     taskTitle: options?.task?.title ?? null,
     workdir: options?.task?.workdir ?? null,
+    ...(repositoryLockPath(options?.task?.id) ? { repositoryLockPath: repositoryLockPath(options?.task?.id) } : {}),
     ...(options?.projectRun === true ? { projectRun: true } : {}),
     ...(options?.projectGitHub === true ? { projectGitHub: true } : {}),
     ...(options?.bot ? { bot: options.bot } : {}),
@@ -674,7 +676,9 @@ export class HermesWorkerAdapter implements AgentAdapter {
   }
 
   async getBackgroundWork(sessionId: string): Promise<TaskBackgroundWork> {
-    return await this.client.request<TaskBackgroundWork>({ type: 'session.backgroundWork.get', sessionId }, 4_000);
+    return await this.client.request<TaskBackgroundWork>({ type: 'session.backgroundWork.get', sessionId,
+      ...(repositoryLockPath(sessionId) ? { repositoryLockPath: repositoryLockPath(sessionId) } : {}),
+    }, 4_000);
   }
 
   async stopBackgroundWork(sessionId: string, processIds: string[]): Promise<TaskBackgroundWork> {

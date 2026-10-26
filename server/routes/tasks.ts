@@ -5,7 +5,8 @@ import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { parseTaskStart } from '../task-start.js';
 import { Router, type ErrorRequestHandler } from 'express';
 import { getTasksForProfile, getTask, insertTask, updateTask, deleteTask, markTaskViewed, assertTaskFieldsAllowed, PermanentBotTaskError } from '../db/queries.js';
-import { getProject } from '../db/projects.js';
+import { getProject, getProjectRepositoryLink } from '../db/projects.js';
+import { enqueueRepositoryTask, repositoryKey, repositoryOwnerForTask, finishRepositoryTask } from '../db/repository-queue.js';
 import { broadcast } from '../events.js';
 import { adapter } from '../app.js';
 import { TASK_STATUSES } from '../../shared/types.js';
@@ -14,7 +15,7 @@ import { validateProjectWorkdir } from '../project-folders.js';
 import { LocalProfileError, localProfileRegistry } from '../local-profiles.js';
 import { requestProfile, requireTaskForProfile } from '../profile-context.js';
 import { closeSubscribersForTasks, discardRun } from '../live-chat.js';
-import { cancelTaskRunForDeletion } from '../task-run-lifecycle.js';
+import { cancelTaskRunForDeletion, claimTaskOperation } from '../task-run-lifecycle.js';
 import { listDelegationRuns } from '../db/delegations.js';
 import { ProjectAccessError, requireProfileProjectAccess } from '../project-access.js';
 import { getActiveProjectEditorForTask } from '../db/project-cp.js';
@@ -155,6 +156,8 @@ tasksRouter.post('/', async (req, res) => {
         const now = Date.now();
         putQueuedTaskMessage({ ...initialMessage, taskId: created.id, id: randomUUID(),
           collaborationScope: 'discussion', confirmPersistentCollaboration: false, createdAt: now, updatedAt: now });
+        const link = projectId ? getProjectRepositoryLink(projectId) : undefined;
+        if (link?.mode === 'branch_pr') enqueueRepositoryTask(repositoryKey(link), created.id);
       }
       return created;
     })();
@@ -217,15 +220,31 @@ tasksRouter.delete('/:id', requireTask, async (_req, res, next) => {
       code: 'PROJECT_EDITOR_ACTIVE',
     });
   }
+  let release: (() => void) | null = null;
   try {
+    // Goal setup and compaction can hold the operation claim. Let the existing
+    // explicit-delete cancellation settle them before claiming the final delete.
     await cancelTaskRunForDeletion(task, adapter);
+    if (repositoryOwnerForTask(task.id)) {
+      release = claimTaskOperation(task.id, task.project_id, task.workdir, true);
+      if (!release) return res.status(409).json({ error: 'This task is still busy. Wait for it to finish before deleting it.' });
+      const inventory = await adapter.getBackgroundWork?.(task.id).catch(() => undefined);
+      if (!inventory?.available || inventory.work.length) {
+        return res.status(409).json({ error: 'This task may still have background work. Check that work before deleting the task. Nothing was deleted.' });
+      }
+    }
     discardRun(task.id);
     closeSubscribersForTasks([task.id]);
-    const deleted = deleteTask(task.id);
+    const deleted = db.transaction(() => {
+      const owner = repositoryOwnerForTask(task.id);
+      if (owner) finishRepositoryTask(owner.key, owner.token);
+      return deleteTask(task.id);
+    })();
     if (!deleted) return res.status(404).json({ error: 'Task not found' });
     broadcast({ type: 'task_deleted', taskId: task.id }, task);
     res.json({ ok: true });
   } catch (error) { next(error); }
+  finally { release?.(); }
 });
 
 tasksRouter.post('/:id/move', requireTask, (req, res) => {

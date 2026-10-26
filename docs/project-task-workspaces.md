@@ -1,15 +1,22 @@
-# Independent Project task workspaces
+# Project task workspaces and automatic repository queue
 
 ## Required behavior
 
-A Project groups tasks and supplies their repository. It does not reserve that repository for one conversation. A task creating a PNG, editing code, running checks, or retaining unfinished work must not prevent another task in the same Project from starting.
+Project tasks with write access to the same linked repository run in order. Users send requests normally; saved requests wait and start automatically. Tasks in different repositories and unlinked conversations remain independent. Every task retains its own files and branch.
 
-Each task keeps its own files and protected Git branch across turns. Commit & Push, checks, background recovery, and restore operate on that task only. A publish conflict affects that task's publication; it does not authorize a force push or block other conversations.
+Cards say “Waiting for [task] to finish.” If the earlier task is unsuccessful, awaiting an answer, still has native background work, or cannot pass checks, its work stays saved and the next task explains the hold. Marking a held task Complete cancels its saved start request. Completing a running task does not bypass checks or discard its work.
+
+After a successful native turn, Olympus checkpoints the task locally, runs its required checks on that exact source, and advances a server-owned local development branch. The next task clones that accepted source and incorporates the current downloaded default branch before beginning. Changed, failed, unknown or unverified source cannot advance the development branch. No handoff approval or branch selection is required. Main and GitHub publication remain separate explicit actions. When an authorized publication was saved during the turn, that existing publication protocol creates its commit first; Olympus checks the confirmed commit before handing it to another task, preserving the exact publication request.
+
+Queue identity is the GitHub repository ID, shared across profiles and Project connections. SQLite records the owner and exact run, with no expiring lease. Native workers also hold an OS file lock in persistent storage; an old process cannot overlap its replacement, and native children/processes must clear before handoff. On restart, normal exact-run recovery retains the same owner. Nothing kills old work to let the queue advance.
+
+The initial implementation queues all tasks with write-capable access to a linked repository, including research in that workspace. A “research” label alone is not a read-only boundary. It does not introduce a task-type picker, an agent supervisor, or a parallel-writing switch.
 
 ## Storage and compatibility
 
 - New task clones live under `project-checkouts/tasks/<projectId>/<taskId>`.
-- A separate `project-checkouts/baselines/<projectId>-<sourceKey>` clone supplies the downloaded default branch for new tasks. The source key identifies the repository connection and branch, so changing either preserves earlier downloads and creates the correct baseline. Before creating each new task workspace, Olympus fetches the current default branch into this baseline and records the verified time and commit. Project sync can also refresh it. A failed fetch stops preparation instead of silently using stale source; the saved task request remains retryable. Neither operation merges into existing task folders.
+- Accepted development history lives in the bare local repository `project-checkouts/development/<repository-key-hash>` on `olympus/development`. Retain this directory along with normal task storage in backups. No GitHub refs are changed by handoff.
+- A separate `project-checkouts/baselines/<projectId>-<sourceKey>` clone supplies the downloaded default branch for new tasks. The source key identifies the repository connection and branch, so changing either preserves earlier downloads and creates the correct baseline. Before creating each new task workspace, Olympus fetches the current default branch into this baseline and records the verified time and commit. Project sync can also refresh it. A failed fetch stops preparation instead of silently using stale source; the saved task request remains retryable. Project sync leaves task folders unchanged. Before a queued follow-up starts, its task incorporates accepted development and current upstream source; conflicts preserve the original work and hold the queue.
 - The existing `project-checkouts/<projectId>` folder remains with its current task. Migration preserves its files, branch, lease, and path, even when dirty or active.
 - Lease uniqueness changes from one active lease per Project to one per task and workspace. Releasing a workspace preserves its folder and the task's workdir. Historical released leases that point at another task's legacy folder must not be reused.
 - Clones have independent Git metadata and objects. Authentication is supplied only to server Git operations, never persisted in remotes or task files.
@@ -34,11 +41,11 @@ A resume requested during an active chat is saved until that turn finishes succe
 
 **Stop retrying this publication** requires confirmation. It records abandonment without undoing anything GitHub may already have accepted. The saved commit and local files remain available.
 
-**Sync latest from GitHub** refreshes the separate baseline. New task workspaces also fetch the latest default branch automatically. Existing task branches and files stay unchanged, and existing tasks can resume offline. The displayed sync time and commit describe the last successful verification, not a guarantee of current connectivity.
+**Sync latest from GitHub** refreshes the separate baseline. New task workspaces also fetch the latest default branch automatically. Sync itself leaves existing task branches and files unchanged. Admitting a queued task or follow-up requires a successful source refresh; a running turn is unaffected by a later loss of connectivity. The displayed sync time and commit describe the last successful verification, not a guarantee of current connectivity.
 
 An existing task can use its **Task actions → Update from GitHub** action while idle. `POST /api/projects/:id/editor/update-source` accepts `{ taskId }` through the same task/profile ownership and active-work guards as other workspace mutations. It fetches the linked default branch with a read-only token and merges it into that task branch. It never pushes or deploys. Local commits are retained; uncommitted files, unfinished Git operations and pending publications require resolution first. Git conflicts are aborted back to the prior committed tree, and ignored local files are never overwritten. Separately initialized histories are preserved with an actionable explanation. Updating a published task reopens its retained workspace.
 
-After updating, run checks on the combined source before publication; earlier evidence becomes stale when the source changes. Parallel tasks still have separate branches: publication to the default branch uses non-force updates, so a competing change can require another update and verification. A successful Git merge alone does not establish that combined application behavior is correct.
+After updating, run checks on the combined source before publication; earlier evidence becomes stale when the source changes. Tasks retain separate branches: publication to the default branch uses non-force updates, so a competing change can require another update and verification. A successful Git merge alone does not establish that combined application behavior is correct.
 
 ## GitHub source access
 
@@ -52,13 +59,8 @@ Removing an account blocks subsequent source operations; it does not delete file
 
 The tool is available directly to the root task agent. Delegated sessions do not inherit its broker access. On older Hermes versions, `execute_code` does not discover this custom tool; the agent must call `project_github` directly.
 
-## Implementation and verification plan
+## Verification and rollout
 
-1. Update `server/db/schema.sql`, `server/db/index.ts`, and `server/db/project-cp.ts`. Verify old database migration twice, retain the legacy lease, and acquire two distinct task leases. Reject two owners of the same folder.
-2. Update `server/project-cp.ts`. Resolve exact task ownership, create independent clones, retain resumable folders, and refresh a separate baseline. Test two dirty tasks, unpublished local commits, release/resume, failed clone and sync, and publication excluding the other task's files.
-3. Update `server/task-run-lifecycle.ts` and Project, recovery, and verification routes. Hold only the target task during its mutation, including after a browser disconnect. Reject active native work in that target; allow unrelated tasks and their checks to proceed.
-4. Expose exact-task editor lookup and a workspace list. Update task and Project pages to select the correct task for status, publishing, and restore. Project sync must not show another task's saved files as a global blocker.
-5. Run real Git/HTTP regressions and browser checks. Verify a task producing a poster does not block a second design task, either task can resume, and a Project sync leaves both folders unchanged. Retain profile-access, credentials, source-evidence, drain, and same-task exclusion coverage.
-6. Run the full test suite, TypeScript checks, and production build, then independently review the combined change. Stop all disposable browser/test servers after verification.
+Real SQLite, Git, HTTP and subprocess regressions cover durable ownership, queue order, failed/unknown native work, exact accepted source, protected upstream refs, and OS exclusion across worker replacement. UI tests cover plain-language notices and board updates without changing task timestamps.
 
-The live installation must be updated through its normal approved installation flow before it uses this architecture. Do not migrate live files by stashing, resetting, moving, or deleting a running task's checkout.
+Deploy only through the normal safe idle/drain flow. Existing task folders, histories, native children and previews are preserved. Old unfinished work is never silently accepted into development history. Project repository reconnection is blocked while repository requests exist. Task deletion clears ownership only after native work is confirmed idle; database constraints prevent bulk deletion from leaving an orphaned owner.

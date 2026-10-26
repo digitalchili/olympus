@@ -1,4 +1,9 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
+import type { RepositoryQueue } from '../repository-queue.js';
+import { parseTaskStart } from '../task-start.js';
+import { parseCollaborationInvitationScope } from '../collaboration.js';
+import { putQueuedTaskMessage } from '../db/task-message-queue.js';
 import { performanceSpan } from '../performance-timing.js';
 import type { ProjectCpService } from '../project-cp.js';
 import { ProjectRepositoryBusyError, ProjectRepositoryMergeConflictError, ProjectRepositoryCheckpointError, ProjectPublicationError } from '../project-cp.js';
@@ -16,6 +21,7 @@ import { DEFAULT_PROFILE_NAME, type QueuedTaskMessage, type Task } from '../../s
 import { GitHubPermissionUpgradeError } from '../studio/github-permissions.js';
 
 interface ProjectTaskWorkspaceRouterOptions {
+  repositoryQueue?: RepositoryQueue;
   projectCp: ProjectCpService;
   github?: StudioGitHubGateway;
 }
@@ -47,7 +53,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
 
     const content = req.body?.content;
     const command = commitPushRequest(content);
-    const queuedMessageId = req.body?.queuedMessageId;
+    let queuedMessageId = req.body?.queuedMessageId;
     const runStatus = getRunStatus(task.id)?.status;
     if (hasActiveTaskRun(task.id) || runStatus === 'streaming' || runStatus === 'compacting') {
       return res.status(409).json({ error: 'This task already has a message in progress' });
@@ -77,6 +83,26 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
       }
     }
 
+    if (options.repositoryQueue && typeof content === 'string' && content.trim()) {
+      try {
+        if (req.body.recoveryOfRunId === undefined && !consumedQueue) {
+          if (getQueuedTaskMessage(task.id)) return res.status(409).json({ error: 'This task already has a saved message. Edit that message instead.' });
+          const parsed = parseTaskStart(req.body, task.profile_name ?? DEFAULT_PROFILE_NAME)!;
+          const now = Date.now();
+          consumedQueue = putQueuedTaskMessage({ ...parsed, content, id: randomUUID(), taskId: task.id,
+            collaborationScope: parseCollaborationInvitationScope(req.body.collaborationScope, req.body.confirmPersistentCollaboration === true),
+            confirmPersistentCollaboration: req.body.confirmPersistentCollaboration === true, createdAt: now, updatedAt: now });
+          queuedMessageId = consumedQueue.id;
+          req.body.queuedMessageId = queuedMessageId;
+        }
+        if (!(await options.repositoryQueue.admit(task))) {
+          return res.status(202).json({ action: 'repository_queued', queuedMessage: getQueuedTaskMessage(task.id), task: getTask(task.id) });
+        }
+      } catch {
+        return res.status(400).json({ error: 'Could not prepare this request. Your saved message is preserved.' });
+      }
+    }
+
     res.locals.preparingProjectTask = true;
     try {
       await performanceSpan(res.locals.performanceTrace, 'workspace', () => options.projectCp.prepareTask({
@@ -84,6 +110,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
         taskId: task.id,
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
         repositoryLink,
+        automaticHandoff: Boolean(options.repositoryQueue),
         tokenProvider: tokenProvider(options.github),
       }));
     } catch (error) {

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import type { Task, QueuedTaskMessage } from '@shared/types';
 import type {
   AgentModelResolution,
   CollaborationInvitationScope,
@@ -765,10 +766,19 @@ export function useChat(onRunStatus?: (run: TaskRunState | null) => void, onPubl
       const body = await res.json().catch(() => ({})) as {
         runId?: string;
         action?: string;
+        task?: Task;
+        queuedMessage?: QueuedTaskMessage;
         version?: { commitSha?: string; branchName?: string; commitMessage?: string; changedFiles?: string[] };
       };
       if (abort.signal.aborted) return { ok: false, error: 'Message send was cancelled.' };
       setProjectBlocker(previous => settleProjectChatBlocker(previous, taskIdRef.current, taskId, { ok: true }));
+      if (body.action === 'repository_queued') {
+        if (taskIdRef.current === taskId) {
+          liveRunRef.current = rollbackOptimisticChatRun(liveRunRef.current, optimisticRun?.runId);
+          publishState();
+        }
+        return { ok: true, queuedMessage: body.queuedMessage, task: body.task };
+      }
       if (body.action === 'commit_push' && body.version) {
         const settled = settleCommitPushChatResult({
           currentTaskId: taskIdRef.current,

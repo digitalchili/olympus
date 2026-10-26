@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const pythonTests = [
+  'test_repository_lock.py',
   'test_hermes_runtime.py',
   'test_hermes_update_runner.py',
   'test_hermes_native_update.py',

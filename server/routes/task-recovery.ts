@@ -87,7 +87,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
       return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has a message in progress.' });
     }
     // Hold through downstream startup so two tabs cannot both pass an async probe.
-    const release = claimTaskOperation(task.id, task.project_id, task.workdir);
+    const release = claimTaskOperation(task.id, task.project_id, task.workdir, true);
     if (!release) return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has work in progress.' });
     res.locals.releaseTaskOperation = release;
     res.once('finish', release);

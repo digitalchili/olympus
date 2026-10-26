@@ -315,6 +315,7 @@ export function TaskChat({
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const taskOutcome = useStore(s => s.taskOutcomes.get(taskId));
   const taskUpdatedAt = useStore(s => s.tasks.find(task => task.id === taskId)?.updated_at);
+  const repositoryWait = useStore(s => s.tasks.find(task => task.id === taskId)?.repositoryQueue?.message);
   const [continuing, setContinuing] = useState(false);
   const authRunKey = `${activeProfileId}:${taskId}:${taskOutcome?.runId ?? taskRun?.runId ?? ''}`;
   const [openAIAuth, setOpenAIAuth] = useState<{ key: string; ready: boolean } | null>(null);
@@ -690,8 +691,9 @@ export function TaskChat({
       confirmPersistentCollaboration: !isBot && message.confirmPersistentCollaboration,
     });
     if (result.ok) {
+      if (result.task?.id === taskId) useStore.getState().upsertTask(result.task);
       if (message.collaborationScope !== 'discussion') await refreshPersistentGrants();
-      setQueuedMessage((current) => current?.id === message.id ? null : current);
+      setQueuedMessage((current) => current?.id === message.id ? result.queuedMessage ?? null : current);
     } else if (queuedMessageRef.current?.id === message.id) {
       pendingRevealRef.current = false;
       setOutgoingRevealActive(false);
@@ -708,7 +710,7 @@ export function TaskChat({
   }, [activeProfileId, isBot, refreshPersistentGrants, sendMessage, taskId, taskRun?.goal?.status, taskRun?.kind]);
 
   useEffect(() => {
-    if (!queuedMessage || queuedMessage.publication) return;
+    if (!queuedMessage || queuedMessage.publication || repositoryWait) return;
     if (!shouldAutoSendQueuedMessage({
       queuedMessageId: queuedMessage.id,
       taskBusyForQueue,
@@ -720,7 +722,7 @@ export function TaskChat({
       pausedByRunFailure,
     })) return;
     void sendQueuedMessage(queuedMessage);
-  }, [configPending, loadedTaskId, pausedByRunFailure, queueHydratedTaskId, queuedMessage, queuedSendError, sendQueuedMessage, taskBusyForQueue, taskId]);
+  }, [repositoryWait, configPending, loadedTaskId, pausedByRunFailure, queueHydratedTaskId, queuedMessage, queuedSendError, sendQueuedMessage, taskBusyForQueue, taskId]);
 
   useEffect(() => {
     if (!isStreaming) setInterruptInFlight(false);
@@ -824,6 +826,8 @@ export function TaskChat({
       confirmPersistentCollaboration: confirmationAtSend,
     });
     if (startupRef.current.taskId !== taskId || startupRef.current.profileId !== activeProfileId) return;
+    if (result.ok && result.queuedMessage) setQueuedMessage(result.queuedMessage);
+    if (result.ok && result.task?.id === taskId) useStore.getState().upsertTask(result.task);
     if (result.ok && scopeAtSend !== 'discussion') await refreshPersistentGrants();
     if (!result.ok) {
       pendingRevealRef.current = false;

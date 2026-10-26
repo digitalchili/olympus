@@ -23,6 +23,7 @@ import { STATUS_META } from '../lib/constants';
 import { timeAgo, toErrorMessage } from '../lib/format';
 import { isEditableTarget } from '../lib/keyboard';
 import { TaskChat } from './TaskChat';
+import { RepositoryQueueNotice } from './RepositoryQueueNotice';
 import {
   CollaborationLiveBanner,
   CollaborationPanel,
@@ -547,6 +548,7 @@ export function TaskDetailPage() {
               <CollaborationLiveBanner run={latestCollaboration} onOpen={() => setActiveTab('collaboration')} />
             </div>
           )}
+          <RepositoryQueueNotice queue={task.repositoryQueue} />
           <TaskChat
             taskId={task.id}
             projectId={task.project_id}

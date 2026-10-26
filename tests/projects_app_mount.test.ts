@@ -6,7 +6,7 @@ assert.match(appSource, /import \{ createProjectsRouter \} from '\.\/routes\/pro
 assert.match(appSource, /const studioGitHubGateway = createGitHubAppGateway\(\{ credentialStore: createGitHubCredentialStore\(\) \}\);/);
 assert.match(appSource, /const projectCp = createProjectCpService\(/);
 assert.match(appSource, /app\.use\('\/api\/projects', createProjectsRouter\(\{ github: studioGitHubGateway, projectCp, adapter \}\)\);/);
-const prepareMount = appSource.indexOf("app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway }));");
+const prepareMount = appSource.indexOf("app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway, repositoryQueue }));");
 const chatMount = appSource.indexOf("app.use('/api/tasks', chatRouter);");
 assert.ok(prepareMount >= 0, 'Project repository preparation middleware is mounted');
 assert.ok(chatMount > prepareMount, 'Project repository preparation runs before chat execution');

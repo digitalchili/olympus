@@ -374,6 +374,7 @@ export interface ProfileBuilderSuggestion {
 export type HermesProfileSettingsUpdate = Partial<Omit<HermesProfileSettings, 'id'>>;
 
 export interface Task {
+  repositoryQueue?: { state: 'waiting' | 'blocked'; waitingForTaskId: string | null; message: string };
   id: string;
   kind?: 'task' | 'bot';
   title: string;

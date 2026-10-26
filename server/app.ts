@@ -29,6 +29,7 @@ import { createProjectGitHubService } from './project-github.js';
 import { localProfileRegistry } from './local-profiles.js';
 import { createInteractionRouter } from './routes/interactions.js';
 import { createProjectCpService } from './project-cp.js';
+import { createRepositoryQueue } from './repository-queue.js';
 import { resolveOlympusDataDir } from './paths.js';
 import { resolve } from 'node:path';
 import { createGitHubAppGateway } from './studio/github-app.js';
@@ -150,12 +151,14 @@ const projectGitHub = createProjectGitHubService({
   workspaceForTask: task => localProfileRegistry.require(task.profile_name ?? 'default').workspaceDir,
 });
 const projectCp = createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts') });
+const repositoryQueue = createRepositoryQueue({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), adapter,
+  canDispatch: () => drainController.status().ready });
 app.use('/api/tasks', profileTaskRequestGate());
 app.use('/api/tasks', tasksRouter);
 app.use('/api/tasks', createTaskArtifactsRouter({ getTask }));
 app.use('/api/tasks', createTaskAgentSettingsRouter(adapter));
 app.use('/api/tasks', createTaskRecoveryRouter(adapter));
-app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway }));
+app.use('/api/tasks', createProjectTaskWorkspaceRouter({ projectCp, github: studioGitHubGateway, repositoryQueue }));
 app.use('/api/tasks', createInteractionRouter(adapter));
 app.use('/api/tasks', createCodingVerificationRouter(adapter));
 app.use('/api/tasks', chatRouter);
@@ -191,5 +194,5 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   next(error);
 });
 
-export { adapter, drainController, projectGitHub };
+export { adapter, drainController, projectGitHub, repositoryQueue };
 export default app;

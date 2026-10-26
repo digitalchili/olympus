@@ -1,4 +1,5 @@
 import { TaskActivityIndicator } from './TaskActivityIndicator';
+import { RepositoryQueueNotice } from './RepositoryQueueNotice';
 import { useCallback, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { AlertTriangle, FolderKanban, Loader2, MoreHorizontal, Target } from 'lucide-react';
@@ -65,7 +66,8 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
           {task.description}
         </p>
       )}
-      <div className="mt-3 -mr-[18px] flex min-w-0 items-center gap-2">
+      {task.repositoryQueue && <RepositoryQueueNotice queue={task.repositoryQueue} compact />}
+      {!task.repositoryQueue && <div className="mt-3 -mr-[18px] flex min-w-0 items-center gap-2">
         <div className={`flex min-w-0 flex-1 items-center gap-1.5 text-[11px] leading-none ${timeRowClass}`}>
           {showBusyState ? (
             <Loader2 size={12} className="shrink-0 animate-spin" strokeWidth={2.5} />
@@ -88,8 +90,8 @@ function TaskCardBody({ task, run }: { task: Task; run?: TaskRunState }) {
             )}
           </span>
         )}
-      </div>
-      <TaskActivityIndicator run={run} compact />
+      </div>}
+      {!task.repositoryQueue && <TaskActivityIndicator run={run} compact />}
       {routingLabel && (
         <p className="mt-2 truncate text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
           {routingLabel}

@@ -1,4 +1,5 @@
 import db from './index.js';
+import { recordRepositoryRun } from './repository-queue.js';
 import { safeRunErrorCode } from '../../shared/run-errors.js';
 import type { AgentModelResolution, LiveChatRunStatus, TaskAgentRun, TaskRunKind, RecoveryWaitReason } from '../../shared/types.js';
 
@@ -95,6 +96,7 @@ export function createTaskAgentRun(input: {
   startedAt: number;
 }): void {
   insertRun.run(input);
+  recordRepositoryRun(input.taskId, input.runId);
 }
 
 export function hasRecordedTaskAgentRun(runId: string): boolean {

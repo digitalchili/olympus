@@ -5,6 +5,8 @@ import { cancelCollaborationRun, getCollaborationRun } from './db/collaboration.
 import { getRunStatus } from './live-chat.js';
 import { getAllTasks } from './db/queries.js';
 import { cancelCodingVerification, isVerifying } from './coding-verification.js';
+import { getProjectRepositoryLink } from './db/projects.js';
+import { repositoryKey, repositoryOwner } from './db/repository-queue.js';
 
 export type ActiveCollaboration = {
   runId: string;
@@ -65,7 +67,10 @@ export function claimPreparedTaskWorkspace(taskId: string, workdir?: string | nu
 }
 
 /** Hold message preparation and manual verification across their awaited work. */
-export function claimTaskOperation(taskId: string, projectId?: string | null, workdir?: string | null): (() => void) | null {
+export function claimTaskOperation(taskId: string, projectId?: string | null, workdir?: string | null, admission = false): (() => void) | null {
+  const link = projectId ? getProjectRepositoryLink(projectId) : undefined;
+  const owner = link ? repositoryOwner(repositoryKey(link)) : undefined;
+  if (!admission && owner && owner.taskId !== taskId) return null;
   if (projectId && taskOperations.has(`project-config:${projectId}`)) return null;
   if (hasActiveWorkspaceRun(taskId, workdir)) return null;
   const keys = [`task:${taskId}`, ...(workdir ? [`workspace:${workspacePath(workdir)}`] : [])];

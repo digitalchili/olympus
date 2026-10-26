@@ -18,7 +18,8 @@ import {
   startCollaborationPhase,
   updateCollaborationRun,
 } from '../db/collaboration.js';
-import { adapter, projectGitHub } from '../app.js';
+import { adapter, projectGitHub, repositoryQueue } from '../app.js';
+import { repositoryOwnerForTask } from '../db/repository-queue.js';
 import { projectSecretNamesForTask, projectSecretsRuntime } from '../project-secrets-runtime.js';
 import { getProjectGitHubInstallationIds } from '../db/project-github-access.js';
 import { broadcast, initSSE } from '../events.js';
@@ -350,10 +351,15 @@ async function verifyBeforeReview(task: Task, runId: string, performanceTrace?: 
   // "Yes, publish it" often changes no files. The saved publication still needs
   // verified source, even when this approval alone would skip automatic checks.
   const publicationNeedsChecks = publication?.runId === runId && !publication.publicationId && !hasPassingCodingEvidence(task, publication.fingerprint);
-  const requested = publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
+  const automaticHandoff = Boolean(repositoryOwnerForTask(task.id));
+  const requested = (automaticHandoff && !publication?.publicationId) || publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
     message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {
+    if (automaticHandoff) await repositoryQueue.checkpoint(task,
+      () => getRunStatus(task.id)?.status === 'stopped',
+      () => appendSystemMessage(task.id, 'Waiting for this task’s background work to finish before checking its changes. Your work is saved.'),
+    );
     return await performanceSpan(performanceTrace, 'verification', () => untilStopped(
       () => verifyCodingRun(task, runId, { skipUnchanged: !requested }),
       () => getRunStatus(task.id)?.status === 'stopped',
@@ -385,6 +391,7 @@ async function streamChatTurn(
   let interrupted = false;
   let pendingSteer: string | undefined;
   let workerStreamOpen = true;
+  let heldDone: StreamEvent | undefined;
   const interactionRunId = getRunStatus(runTask.id)?.runId;
 
   try {
@@ -441,7 +448,7 @@ async function streamChatTurn(
       if (options.hideInternalEvents && isPrivateCollaborationEvent(event.type)) {
         continue;
       }
-      if (runTask.kind !== 'bot' && rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
+      if (!repositoryOwnerForTask(runTask.id) && runTask.kind !== 'bot' && rawEvent.type === 'done' && options.completeOnDone && !rawEvent.interrupted && !rawEvent.pendingSteer && !hadError && interactionRunId) {
         const passed = await verifyBeforeReview(runTask, interactionRunId, options.performanceTrace);
         if (!passed) {
           appendSystemMessage(runTask.id, 'Code verification did not pass. Review the saved checks and remaining work.');
@@ -488,6 +495,10 @@ async function streamChatTurn(
           continue;
         }
       }
+      if (event.type === 'done' && !event.interrupted && !hadError && repositoryOwnerForTask(runTask.id)) {
+        heldDone = event;
+        continue;
+      }
       if (event.type === 'error') {
         hadError = true;
         if (event.pendingSteer?.trim()) pendingSteer = event.pendingSteer.trim();
@@ -498,6 +509,15 @@ async function streamChatTurn(
       }
       applyEvent(runTask.id, event);
       broadcastLive(runTask.id, event);
+    }
+    // Keep the run visibly active until native work has closed and checks finish.
+    if (heldDone && interactionRunId && !hadError && getRunStatus(runTask.id)?.status === 'streaming') {
+      const passed = await verifyBeforeReview(runTask, interactionRunId, options.performanceTrace);
+      if (!passed) appendSystemMessage(runTask.id, 'Your work is saved. The checks need to pass before the next task starts.');
+      if (getRunStatus(runTask.id)?.status === 'streaming') {
+        applyEvent(runTask.id, heldDone);
+        broadcastLive(runTask.id, heldDone);
+      }
     }
   } catch (error) {
     hadError = true;
@@ -975,6 +995,12 @@ chatRouter.post('/:id/messages', async (req, res) => {
     if (restoreQueuedTaskMessage(consumedQueue)) broadcastRecovery(task.id);
     consumedQueue = undefined;
   };
+  const finishWork = () => {
+    // This specific error is emitted before AIAgent is called. Retrying the
+    // original saved request is safe and must not lose attachments/settings.
+    if (getRun(task.id)?.errorCode === 'repository_busy') restoreConsumedQueue();
+    finishTiming();
+  };
   if (queuedMessageId !== undefined) {
     if (typeof queuedMessageId !== 'string' || !queuedMessageId.trim()) {
       restoreConsumedQueue();
@@ -1117,7 +1143,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     let handedOff = false;
     try {
       const operation = beginGoalRunOperation(runTask, sessionId, content, res.locals.recoveryContinuation === true, performanceTrace);
-      releaseProfileWorkWhenSettled(runTask.id, operation.work.finally(finishTiming), releaseRunWork);
+      releaseProfileWorkWhenSettled(runTask.id, operation.work.finally(finishWork), releaseRunWork);
       handedOff = true;
 
       let started: Awaited<typeof operation.setup>;
@@ -1193,7 +1219,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       performanceTrace?.mark('accepted');
       releaseProfileWorkWhenSettled(
         runTask.id,
-        consumeCollaborationRun(runTask, content, snapshot.runId, collaboration.id, active, performanceTrace).finally(finishTiming),
+        consumeCollaborationRun(runTask, content, snapshot.runId, collaboration.id, active, performanceTrace).finally(finishWork),
         releaseRunWork,
       );
       handedOff = true;
@@ -1203,7 +1229,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
     performanceTrace?.mark('accepted');
     releaseProfileWorkWhenSettled(
       runTask.id,
-      consumeChatRun(runTask, sessionId, content, snapshot.runId, performanceTrace).finally(finishTiming),
+      consumeChatRun(runTask, sessionId, content, snapshot.runId, performanceTrace).finally(finishWork),
       releaseRunWork,
     );
     handedOff = true;

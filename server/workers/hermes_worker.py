@@ -41,6 +41,7 @@ from hermes_project_github import ProjectGitHubBroker, ProjectGitHubError, confi
 from hermes_bot_messaging import BotMessageBroker, BotMessageError, configure_bot_agent, install_native_guard
 from hermes_recovery import ContinuationJournal, RecoveryBlocked, saved_turn_matches
 from hermes_background_work import get_background_work as _native_session_background_work
+from hermes_repository_lock import acquire_repository_lock, repository_locked
 from hermes_background_work import stop_background_work as _native_stop_background_work, _scoped_session_ids
 from hermes_interactions import InteractionBroker, InteractionError, approval_preflight, native_approval_context, interaction_disabled_toolsets
 from hermes_sessions import (
@@ -878,6 +879,9 @@ def _task_key_for(request: dict[str, Any]) -> str:
 
 def _session_background_work(request: dict[str, Any], **kwargs) -> dict[str, Any]:
     result = _native_session_background_work(request, **kwargs)
+    if repository_locked(request.get('repositoryLockPath')):
+        result = {**result, 'work': [*result.get('work', []),
+            {'id': 'repository-writer', 'kind': 'operation', 'status': 'running'}]}
     with ACTIVE_TASKS_LOCK:
         request_id = ACTIVE_TASKS.get(_task_key_for(request))
     if request_id:
@@ -2439,7 +2443,12 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
     pending_steers: list[str] = []
     failure = None
     acquired = False
+    repository_lock = None
     try:
+        try:
+            repository_lock = acquire_repository_lock(request.get('repositoryLockPath'))
+        except BlockingIOError:
+            raise WorkerError('Earlier repository work is still running. Your request has not started.', code='repository_busy')
         AGENT_SEMAPHORE.acquire()
         acquired = True
         performance_trace.mark('slot_acquired')
@@ -2454,6 +2463,8 @@ def _run_chat_thread(request_id: str, request: dict[str, Any], task_key: str) ->
         if acquired:
             AGENT_SEMAPHORE.release()
         _clear_task_active(task_key, request_id)
+        if repository_lock:
+            repository_lock.close()
         performance_trace.mark('cleaned_up')
         performance_trace.finish('error' if failure else 'stopped' if any(event.get('interrupted') for event in terminal_events) else 'done')
     # A terminal event can trigger an immediate evaluator or follow-up. All

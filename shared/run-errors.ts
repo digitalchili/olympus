@@ -6,6 +6,7 @@ const INTERNAL_RUN_STOP_CODES = new Set([
 ]);
 
 const PERSISTED_RUN_ERROR_CODES = new Set([
+  'repository_busy',
   'openai_auth_required', 'openai_auth_unavailable', 'auth_busy',
   'auth_error', 'rate_limit', 'quota_exhausted', 'model_error', 'provider_error',
   ...INTERNAL_RUN_STOP_CODES, 'agent_failed', 'worker_error', 'stream_incomplete',
