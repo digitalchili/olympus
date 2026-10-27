@@ -10,10 +10,10 @@ state_volume="$project-state"
 restore_volume="$project-restored-state"
 restore_container="$project-restored"
 # Keep a real released baseline so this exercises schema/runtime upgrades too.
-# v0.7.42 multi-platform manifest, deliberately independent of the checkout.
-image_v1=${OLYMPUS_E2E_IMAGE_V1:-ghcr.io/digitalchili/olympus:0.7.42@sha256:e47f00f583f911c2af46a305b7b8334844aa2779afe5df7ba44991b8168475a2}
+# v0.7.49 (Hermes 0.21.7), deliberately independent of the candidate checkout.
+image_v1=${OLYMPUS_E2E_IMAGE_V1:-ghcr.io/digitalchili/olympus:0.7.49@sha256:f2c79b5dc8ac0bfe12ad7bdd31c3f995b6bda442a02ff1144b0b4eff2c5d00cf}
 image_v2=${OLYMPUS_E2E_IMAGE_V2:-olympus-dispatch:e2e-candidate-$suffix}
-version_v1=${OLYMPUS_E2E_VERSION_V1:-0.7.42}
+version_v1=${OLYMPUS_E2E_VERSION_V1:-0.7.49}
 version_v2=$(node -p 'require(process.argv[1]).version' "$root/package.json")
 sandbox=$(mktemp -d "${TMPDIR:-/tmp}/olympus-e2e.XXXXXX")
 

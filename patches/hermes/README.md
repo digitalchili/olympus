@@ -1,7 +1,7 @@
 # Selective skill policy
 
 `selective-skills.patch` is a small downstream patch for the pinned Hermes
-v0.21.7 source, `71d34bad1045610252eda02ee79549436896e784`. The Docker runtime
+v0.22.5 source, `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. The Docker runtime
 applies it during the image build; a source mismatch fails the build.
 
 Regular sessions reuse the selective skill-reading guidance already used by
@@ -59,6 +59,11 @@ the actual skill/tool calls and native child result, not just the assistant's
 claims. Do not restart or alter active work to obtain the comparison. Earlier
 Hermes skill-authoring wording triggered Anthropic OAuth filtering; that provider
 path also needs a live smoke test before claiming its compatibility.
+
+The policy patch is unchanged from the Hermes 0.21.7 integration. The built-image
+acceptance suite runs `test_skill_policy_native.py` against real Hermes and checks
+the policy and retained `skill_manage` tool in actual worker/provider requests.
+The pristine 0.22.5 image fails the selective-guidance regression, as expected.
 
 On a Hermes image upgrade, review this patch against upstream and rerun the
 checks. Drop it when upstream supplies the equivalent policy.

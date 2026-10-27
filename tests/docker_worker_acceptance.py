@@ -214,7 +214,7 @@ def main():
         shutil.copyfile(Path('/fixtures') / name, native / 'tests' / name)
         subprocess.run([sys.executable, str(native / 'tests' / name), str(SOURCE)], env=native_env, check=True, timeout=60)
     native_env.update(PYTHONPATH=str(SOURCE), OLYMPUS_NATIVE_HERMES_SOURCE=str(SOURCE))
-    for name in ('hermes_021_native_interactions_test.py', 'test_hermes_history_native.py',
+    for name in ('test_skill_policy_native.py', 'hermes_021_native_interactions_test.py', 'test_hermes_history_native.py',
                  'test_delegate_reasoning_native.py', 'test_background_work_native.py',
                  'test_steering_native.py', 'test_bot_messaging.py', 'test_project_github_worker.py',
                  'test_worker_recovery.py'):

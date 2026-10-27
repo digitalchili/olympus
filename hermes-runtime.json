@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "0.21.7",
-  "revision": "71d34bad1045610252eda02ee79549436896e784",
-  "image": "nousresearch/hermes-agent:stable@sha256:444b42594e7f467425872fc35e077a227d377f0fe0726bc818706d62175fad8b",
-  "releaseUrl": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.7"
+  "version": "0.22.5",
+  "revision": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "image": "nousresearch/hermes-agent:stable@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
+  "releaseUrl": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5"
 }

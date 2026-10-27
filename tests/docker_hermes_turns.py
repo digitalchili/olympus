@@ -101,6 +101,10 @@ def main():
             assert len(chats) == 3, 'each resumed worker turn must reach the fixture provider once'
             first_prompt = next(m['content'] for m in chats[0] if m['role'] == 'system')
             assert 'olympus-before-upgrade-fixture' in first_prompt
+            assert 'only when it carries domain knowledge you lack' in first_prompt
+            assert 'even partially relevant' not in first_prompt
+            assert 'removing superseded wording' in first_prompt
+            assert 'skill_manage' in {t['function']['name'] for t in next(r for r in requests if r.get('tools'))['tools']}
             assert 'olympus-installed-during-session-fixture' not in first_prompt
             resumed_prompt = next(m['content'] for m in chats[1] if m['role'] == 'system')
             assert resumed_prompt == first_prompt, 'native cached system prompt must remain stable'
