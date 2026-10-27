@@ -38,7 +38,7 @@ try {
   assert.deepEqual(started, [a.id]); assert.deepEqual(prepared, [a.id], 'held task does not clone stale code');
   const saved = getQueuedTaskMessage(b.id)!;
   assert.equal(saved.content, 'Add settings');
-  assert.equal(getTask(b.id)?.repositoryQueue?.message, 'Waiting for “Implement login” to finish.');
+  assert.equal(getTask(b.id)?.repositoryQueue?.message, 'Waiting for “Implement login” to finish. Your request is saved and will start automatically.');
   assert.equal((await post(b.id, 'Do something else')).status, 409, 'another tab cannot replace a saved request');
   assert.equal(getQueuedTaskMessage(b.id)?.id, saved.id);
   finishTaskAgentRun(`run-${a.id}-1`, 'error');

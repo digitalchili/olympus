@@ -6,7 +6,7 @@ import { getProjectEditorForTask } from './db/project-cp.js';
 import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
 import { getQueuedTaskMessage } from './db/task-message-queue.js';
 import { claimRepositoryTask, enqueueRepositoryTask, finishRepositoryTask, listRepositoryOwners, queuedRepositoryTasks, removeUnstartedRepositoryTask, repositoryKey, repositoryOwner, repositoryOwnerForTask, setRepositoryBlocker, setRepositoryWait } from './db/repository-queue.js';
-import { createRepositoryDevelopment } from './repository-development.js';
+import { createRepositoryDevelopment, RepositoryHandoffError } from './repository-development.js';
 import { claimTaskOperation, hasActiveTaskRun, hasTaskOperation } from './task-run-lifecycle.js';
 import { getRunStatus } from './live-chat.js';
 import { isVerifying } from './coding-verification.js';
@@ -18,6 +18,13 @@ import { getRecovery } from './run-recovery.js';
 const running = (taskId: string) => hasActiveTaskRun(taskId) || isVerifying(taskId)
   || ['streaming', 'compacting'].includes(getRunStatus(taskId)?.status ?? getLatestTaskAgentRun(taskId)?.status ?? '');
 
+function stopped(taskId: string, runId: string): boolean {
+  const latest = getLatestTaskAgentRun(taskId);
+  const recovery = getRecovery(taskId);
+  return latest?.runId === runId && (latest.status === 'stopped'
+    || (recovery?.run_id === runId && recovery.state === 'blocked' && recovery.reason === 'Stopped by user'));
+}
+
 export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<AgentAdapter, 'getBackgroundWork'>; canDispatch?: () => boolean }) {
   const development = createRepositoryDevelopment(options.rootDir);
   let ticking = false;
@@ -27,10 +34,19 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
       if (task) broadcast({ type: 'task_updated', task });
     }
   };
-  async function idle(taskId: string): Promise<boolean> {
+  async function idle(taskId: string, stoppedRunId?: string): Promise<boolean> {
     const inventory = await options.adapter.getBackgroundWork?.(taskId);
     // Native inventory omits continuation when no journal has ever existed.
-    return Boolean(inventory?.available && inventory.work.length === 0 && (!inventory.continuation || inventory.continuation.status === 'none'));
+    if (!inventory?.available || inventory.work.length) return false;
+    if (!inventory.continuation || inventory.continuation.status === 'none') return true;
+    // Hermes retains a user-stop marker even after all work has ended. Keep
+    // that saved journal intact, including undelivered results. The explicit
+    // Stop prevents recovery; the fresh work inventory proves no writer remains.
+    const receipt = inventory.checkpoint;
+    return Boolean(stoppedRunId && stopped(taskId, stoppedRunId)
+      && inventory.continuation.status === 'blocked'
+      && inventory.continuation.reason === 'Stopped by user or interaction; explicit continuation is required.'
+      && receipt?.saved && receipt.source === 'task-continuation-journal');
   }
   return {
     async admit(task: Task): Promise<boolean> {
@@ -44,8 +60,10 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
       for (const other of getAllTasks()) {
         if (other.id === task.id || !other.project_id) continue;
         const otherLink = getProjectRepositoryLink(other.project_id);
-        if (!otherLink || repositoryKey(otherLink) !== key || !getLatestTaskAgentRun(other.id)) continue;
-        if (running(other.id) || hasTaskOperation(other.id) || !(await idle(other.id).catch(() => false))) {
+        const previousRun = getLatestTaskAgentRun(other.id);
+        if (!otherLink || repositoryKey(otherLink) !== key || !previousRun) continue;
+        if (running(other.id) || hasTaskOperation(other.id) || !(await idle(other.id, previousRun.runId).catch(() => false))
+          || running(other.id) || hasTaskOperation(other.id)) {
           setRepositoryWait(task.id, other.id); notify(); return false;
         }
       }
@@ -101,24 +119,41 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
           const latest = getLatestTaskAgentRun(task.id);
           if (latest?.runId !== owner.runId) continue;
           if (getQueuedTaskMessage(task.id)) continue;
+          if (stopped(task.id, owner.runId)) {
+            const release = claimTaskOperation(task.id, task.project_id, task.workdir);
+            if (!release) continue;
+            try {
+              if (await idle(task.id, owner.runId).catch(() => false) && stopped(task.id, owner.runId)
+                && !running(task.id) && !getQueuedTaskMessage(task.id)) {
+                // Keep this task's workspace and history. Do not accept its
+                // unfinished code; the next task uses the last accepted source.
+                finishRepositoryTask(owner.key, owner.token);
+              } else setRepositoryBlocker(owner.key, owner.token, 'This task was stopped. Waiting for its background work to finish before starting the next task.');
+            } finally { release(); notify(task.id); }
+            continue;
+          }
           if (latest.status !== 'done' || getRecovery(task.id)?.state === 'blocked' || hasUnansweredInteractions(task.id, owner.runId)) {
-            setRepositoryBlocker(owner.key, owner.token, 'The previous task still needs attention. Its saved work is safe.');
+            setRepositoryBlocker(owner.key, owner.token, hasUnansweredInteractions(task.id, owner.runId)
+              ? 'This task needs your answer. Open it to reply.'
+              : 'This task ended before it finished. Open it to continue, or stop it to let the next task start. Its work is saved.');
             notify(); continue;
           }
           const release = claimTaskOperation(task.id, task.project_id, task.workdir);
           if (!release) continue;
           try {
             if (!(await idle(task.id))) {
-              setRepositoryBlocker(owner.key, owner.token, 'The previous task is still finishing background work.');
+              setRepositoryBlocker(owner.key, owner.token, 'This task is finishing background work. The next task will start automatically when it is ready.');
               continue;
             }
+            if (getLatestTaskAgentRun(task.id)?.runId !== owner.runId || getQueuedTaskMessage(task.id) || stopped(task.id, owner.runId)) continue;
             const link = task.project_id && getProjectRepositoryLink(task.project_id);
             const lease = task.project_id && getProjectEditorForTask(task.project_id, task.id);
-            if (!link || !lease || repositoryKey(link) !== owner.key) throw new Error('The repository connection changed. Saved work is safe.');
+            if (!link || !lease || repositoryKey(link) !== owner.key) throw new RepositoryHandoffError('This task’s project connection or saved workspace is unavailable. Check its Project settings.');
             await development.accept(task, owner.runId, lease, link);
             finishRepositoryTask(owner.key, owner.token);
-          } catch {
-            setRepositoryBlocker(owner.key, owner.token, 'The previous task’s checked changes are not ready to share yet. Open that task to see what needs attention.');
+          } catch (error) {
+            setRepositoryBlocker(owner.key, owner.token, error instanceof RepositoryHandoffError ? error.message
+              : 'Olympus could not check this task’s saved code. Its work is safe; the next task is waiting.');
           } finally { release(); notify(task.id); }
         }
         for (const taskId of queuedRepositoryTasks()) {

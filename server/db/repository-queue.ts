@@ -71,10 +71,10 @@ export function withRepositoryQueue<T extends Task | undefined>(task: T): T {
     const title = row.title ?? 'the previous task';
     task.repositoryQueue = {
       state: row.blocker ? 'blocked' : 'waiting',
-      waitingForTaskId: row.owner_task_id,
+      waitingForTaskId: row.owner_task_id === task.id ? null : row.owner_task_id,
       message: row.owner_task_id === task.id ? row.blocker!
-        : row.blocker ? `Waiting for “${title}” to be ready. ${row.blocker}`
-          : row.owner_task_id ? `Waiting for “${title}” to finish.` : 'Waiting to start. Olympus will start this task automatically.',
+        : row.blocker ? `Waiting for “${title}”. ${row.blocker}`
+          : row.owner_task_id ? `Waiting for “${title}” to finish. Your request is saved and will start automatically.` : 'Waiting to start. Olympus will start this task automatically.',
     };
   }
   return task;

@@ -352,7 +352,7 @@ async function verifyBeforeReview(task: Task, runId: string, performanceTrace?: 
   // verified source, even when this approval alone would skip automatic checks.
   const publicationNeedsChecks = publication?.runId === runId && !publication.publicationId && !hasPassingCodingEvidence(task, publication.fingerprint);
   const automaticHandoff = Boolean(repositoryOwnerForTask(task.id));
-  const requested = (automaticHandoff && !publication?.publicationId) || publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
+  const requested = publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
     message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {

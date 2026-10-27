@@ -16,7 +16,7 @@ assert.equal(claimRepositoryTask('github:42', b.id), null);
 assert.ok(claimRepositoryTask('github:43', c.id), 'different repositories remain concurrent');
 recordRepositoryRun(a.id, 'run-a');
 assert.equal(repositoryOwner('github:42')?.runId, 'run-a');
-assert.equal(getTask(b.id)?.repositoryQueue?.message, 'Waiting for “Implement login” to finish.');
+assert.equal(getTask(b.id)?.repositoryQueue?.message, 'Waiting for “Implement login” to finish. Your request is saved and will start automatically.');
 setRepositoryBlocker('github:42', first.token, 'The previous task needs attention. Its saved work is safe.');
 assert.equal(getTask(b.id)?.repositoryQueue?.state, 'blocked');
 assert.equal(claimRepositoryTask('github:42', a.id)?.token, first.token, 'recovery keeps the same durable owner');

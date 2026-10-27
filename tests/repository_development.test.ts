@@ -13,6 +13,7 @@ import { createTaskAgentRun, finishTaskAgentRun } from '../server/db/task-agent-
 import { repositoryOwner } from '../server/db/repository-queue.js';
 import { configureQueuedMessageDispatcher } from '../server/queued-message-dispatcher.js';
 import { putQueuedTaskMessage } from '../server/db/task-message-queue.js';
+import { deleteQueuedTaskMessage } from '../server/db/task-message-queue.js';
 
 const root = process.env.OLYMPUS_DISPATCH_HOME!;
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -61,6 +62,9 @@ assert.equal(repositoryOwner('github:9001')?.taskId, a.id, 'unknown native state
 backgroundAvailable = true;
 await queue.tick();
 assert.equal(repositoryOwner('github:9001'), undefined, 'successful checked work hands off automatically');
+await captureCodingBaseline(getTask(a.id)!, 'follow-up');
+await verifyCodingRun(getTask(a.id)!, 'follow-up', { skipUnchanged: true });
+assert.equal(await development.accept(getTask(a.id)!, 'follow-up', leaseA, link), accepted, 'a conversation after accepted work must not block the repository again');
 assert.ok(scheduled.includes(b.id), 'the next saved request is dispatched without user input');
 assert.equal(await queue.admit(b), true);
 const leaseB = await prepare(b.id);
@@ -74,6 +78,26 @@ const c = insertTask({ title: 'Source probe only', status: 'in_progress', projec
 const leaseC = await prepare(c.id);
 assert.equal(leaseC.baseSha, accepted, 'unverified B cannot become another task’s source');
 await assert.rejects(readFile(join(leaseC.workdir, 'unfinished.txt')));
+await captureCodingBaseline(getTask(c.id)!, 'conversation');
+assert.equal(await verifyCodingRun(getTask(c.id)!, 'conversation', { skipUnchanged: true }), true);
+assert.equal(await development.accept(getTask(c.id)!, 'conversation', leaseC, link), accepted, 'clean unchanged conversations release without publishing code or requiring checks');
+// A follow-up conversation must not launder an earlier unverified commit.
+await captureCodingBaseline(getTask(b.id)!, 'conversation-after-change');
+await verifyCodingRun(getTask(b.id)!, 'conversation-after-change', { skipUnchanged: true });
+await assert.rejects(development.accept(getTask(b.id)!, 'conversation-after-change', leaseB, link), /checks/i);
+// Stopping B preserves both its unverified commit and uncommitted files, while
+// the next workspace starts at A's accepted commit.
+deleteQueuedTaskMessage(b.id, 'request-b');
+createTaskAgentRun({ taskId: b.id, runId: 'stopped-b', status: 'streaming', kind: 'chat', startedAt: Date.now() });
+await writeFile(join(leaseB.workdir, 'draft.txt'), 'keep this unfinished draft');
+const stoppedHead = git(leaseB.workdir, 'rev-parse', 'HEAD');
+finishTaskAgentRun('stopped-b', 'stopped');
+await queue.tick();
+assert.equal(repositoryOwner('github:9001'), undefined);
+assert.equal(git(leaseB.workdir, 'rev-parse', 'HEAD'), stoppedHead);
+assert.equal(await readFile(join(leaseB.workdir, 'draft.txt'), 'utf8'), 'keep this unfinished draft');
+const afterStop = insertTask({ title: 'After stopped work', status: 'in_progress', project_id: project.id });
+assert.equal((await prepare(afterStop.id)).baseSha, accepted);
 assert.equal(git(remote, 'rev-parse', 'main'), original, 'automatic handoff never publishes to GitHub');
 assert.equal(git(leaseA.workdir, 'status', '--porcelain'), '');
 console.log('Checked development handoff tests passed');
@@ -83,11 +107,17 @@ git(seed, 'add', '.'); git(seed, 'commit', '-m', 'Upstream update'); git(seed, '
 const d = insertTask({ title: 'New upstream source', status: 'in_progress', project_id: project.id });
 const leaseD = await prepare(d.id);
 assert.equal(leaseD.baseSha, git(leaseD.workdir, 'rev-parse', 'HEAD'));
+await captureCodingBaseline(getTask(d.id)!, 'accepted-upstream');
+await verifyCodingRun(getTask(d.id)!, 'accepted-upstream');
+const acceptedUpstream = await development.accept(getTask(d.id)!, 'accepted-upstream', leaseD, link);
 // A previously released task must also receive the accepted source when reopened.
 const { releaseProjectEditor } = await import('../server/db/project-cp.js');
 releaseProjectEditor({ leaseId: leaseC.id, taskId: c.id });
 await prepare(c.id);
 assert.equal(await readFile(join(leaseC.workdir, 'upstream.txt'), 'utf8'), 'latest remote work');
+await captureCodingBaseline(getTask(c.id)!, 'refreshed-conversation');
+await verifyCodingRun(getTask(c.id)!, 'refreshed-conversation', { skipUnchanged: true });
+assert.equal(await development.accept(getTask(c.id)!, 'refreshed-conversation', leaseC, link), acceptedUpstream, 'a refreshed conversation can use code accepted from another task');
 // Do not finish or abort a Git operation that belongs to the task.
 const mergeHead = join(leaseD.workdir, '.git', 'MERGE_HEAD');
 await writeFile(mergeHead, original + '\n');
