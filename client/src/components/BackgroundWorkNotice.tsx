@@ -61,9 +61,11 @@ export function BackgroundWorkNotice({ taskId, isStreaming }: { taskId: string; 
     <div className="border-t border-zinc-100 p-3 dark:border-zinc-800">
     <p role="status" className="font-medium">{busy ? (confirming ? 'Stopping background work…' : 'Checking background work…')
       : cleared && !blocked ? 'Ready to continue — send your message below.'
+      : inventory?.canContinue ? 'The reply is finished. You can send another message while this task’s background commands stay running.'
       : inventory?.canStop ? 'Background work is keeping this task open.'
       : blocked ? 'This task still has work running.' : 'Background status could not be checked.'}</p>
     {blocked && <p className="mt-1">{inventory!.work.filter(item => item.kind === 'process').length} background command(s){inventory!.work.some(item => item.kind !== 'process') ? ' · Agent or delegated work is still active.' : ''}</p>}
+    {inventory?.canContinue && <p className="mt-1">Other tasks for this repository will wait until these commands finish and the code checks pass.</p>}
     {confirming && <p className="mt-2">Stop this task’s background commands, including any preview server? This interrupts those commands. Saved files and chat are kept. Your message will not be sent automatically.</p>}
     {error && <p role="alert" className="mt-1 text-red-600">{error}</p>}
     {(!cleared || blocked || error) && <div className="mt-2 flex flex-wrap gap-3">

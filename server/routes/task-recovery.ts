@@ -9,6 +9,17 @@ import { getTask } from '../db/queries.js';
 import { getRunStatus } from '../live-chat.js';
 import { requireTaskForProfile } from '../profile-context.js';
 import type { Task } from '../../shared/types.js';
+import { onlyBackgroundProcesses } from '../../shared/background-work.js';
+import { repositoryOwnerForTask } from '../db/repository-queue.js';
+import { getProjectEditorForTask } from '../db/project-cp.js';
+
+function canContinueWithProcesses(task: Task, inventory: TaskBackgroundWork): boolean {
+  const latest = getLatestTaskAgentRun(task.id);
+  const lease = task.project_id && getProjectEditorForTask(task.project_id, task.id);
+  return Boolean(latest?.status === 'done' && repositoryOwnerForTask(task.id)?.runId === latest.runId
+    && lease && lease.workdir === task.workdir && getRecovery(task.id)?.state !== 'blocked'
+    && onlyBackgroundProcesses(inventory));
+}
 
 function taskIsRunning(task: Task): boolean {
   const live = getRunStatus(task.id);
@@ -37,7 +48,7 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
       const canStop = Boolean(adapter.stopBackgroundWork && inventory.available && inventory.work.length
         && inventory.work.every(item => item.kind === 'process') && !taskIsRunning(task)
         && !hasTaskOperation(task.id));
-      res.json({ ...inventory, canStop, runId: getLatestTaskAgentRun(task.id)?.runId ?? null });
+      res.json({ ...inventory, canStop, canContinue: !taskIsRunning(task) && !hasTaskOperation(task.id) && canContinueWithProcesses(task, inventory), runId: getLatestTaskAgentRun(task.id)?.runId ?? null });
     } catch {
       res.status(503).json({ code: 'BACKGROUND_WORK_UNAVAILABLE', error: 'Could not check background work. Try again.' });
     }
@@ -103,7 +114,11 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
         return res.status(503).json({ code: 'BACKGROUND_WORK_UNAVAILABLE', error: 'Could not verify whether this task still has background work. Nothing new was started. Retry the check before continuing.' });
       }
       if (inventory.work.length > 0) {
-        return res.status(409).json({ code: 'BACKGROUND_WORK_ACTIVE', error: 'This task has background work. Open the Background work card to check or stop it, then send your message again.' });
+        if (req.body.recoveryOfRunId === undefined && canContinueWithProcesses(task, inventory)) {
+          // Internal admission result, never a client-supplied bypass. Keep the
+          // exact workspace; no upstream merge while its commands are alive.
+          res.locals.reuseTaskWorkspace = true;
+        } else return res.status(409).json({ code: 'BACKGROUND_WORK_ACTIVE', error: 'This task has background work. Open the Background work card to check or stop it, then send your message again.' });
       }
       if (req.body.recoveryOfRunId !== undefined) {
         const recovery = getRecovery(task.id);

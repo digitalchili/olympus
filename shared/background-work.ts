@@ -9,4 +9,14 @@ export interface TaskBackgroundWork {
 export interface TaskBackgroundWorkStatus extends TaskBackgroundWork {
   runId: string | null;
   canStop: boolean;
+  canContinue?: boolean;
+}
+
+/** A finished assistant may reuse its own services; children/results may not overlap. */
+export function onlyBackgroundProcesses(inventory: TaskBackgroundWork): boolean {
+  return inventory.available && inventory.work.length > 0
+    && inventory.work.every(item => item.kind === 'process')
+    && (!inventory.continuation || inventory.continuation.status === 'none')
+    && (!inventory.checkpoint || (inventory.checkpoint.pendingDelegationIds.length === 0
+      && inventory.checkpoint.undeliveredResultCount === 0));
 }

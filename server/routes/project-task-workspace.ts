@@ -53,6 +53,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
 
     const content = req.body?.content;
     const command = commitPushRequest(content);
+    if (command && res.locals.reuseTaskWorkspace) return res.status(409).json({ code: 'BACKGROUND_WORK_ACTIVE', error: 'Background commands are still running. Stop them from Background work before publishing. Your files and request are kept.' });
     let queuedMessageId = req.body?.queuedMessageId;
     const runStatus = getRunStatus(task.id)?.status;
     if (hasActiveTaskRun(task.id) || runStatus === 'streaming' || runStatus === 'compacting') {
@@ -111,6 +112,7 @@ export function createProjectTaskWorkspaceRouter(options: ProjectTaskWorkspaceRo
         profileId: task.handling_profile_id ?? task.profile_name ?? DEFAULT_PROFILE_NAME,
         repositoryLink,
         automaticHandoff: Boolean(options.repositoryQueue),
+        reuseTaskWorkspace: res.locals.reuseTaskWorkspace === true,
         tokenProvider: tokenProvider(options.github),
       }));
     } catch (error) {

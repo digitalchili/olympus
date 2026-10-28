@@ -352,14 +352,14 @@ async function verifyBeforeReview(task: Task, runId: string, performanceTrace?: 
   // verified source, even when this approval alone would skip automatic checks.
   const publicationNeedsChecks = publication?.runId === runId && !publication.publicationId && !hasPassingCodingEvidence(task, publication.fingerprint);
   const automaticHandoff = Boolean(repositoryOwnerForTask(task.id));
-  const requested = publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
+  let requested = publicationNeedsChecks || Boolean(getRecovery(task.id)?.repair_fingerprint) || run?.messages.some(message =>
     message.role === 'user' && requestsCodingVerification(message.content),
   );
   try {
-    if (automaticHandoff) await repositoryQueue.checkpoint(task,
+    if (automaticHandoff && !(await repositoryQueue.checkpoint(task,
       () => getRunStatus(task.id)?.status === 'stopped',
       () => appendSystemMessage(task.id, 'Waiting for this task’s background work to finish before checking its changes. Your work is saved.'),
-    );
+    ))) requested = true; // Deferred commits still require evidence for the current files.
     return await performanceSpan(performanceTrace, 'verification', () => untilStopped(
       () => verifyCodingRun(task, runId, { skipUnchanged: !requested }),
       () => getRunStatus(task.id)?.status === 'stopped',

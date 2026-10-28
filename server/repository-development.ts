@@ -73,11 +73,23 @@ export function createRepositoryDevelopment(root: string) {
       await git(lease.workdir, 'add', '--all', '--', '.');
       await git(lease.workdir, 'commit', '-m', 'Save task work before automatic checks');
     },
-    async accept(task: Task, runId: string, lease: ProjectEditorLease, link: ProjectRepositoryLink): Promise<string> {
+    async accept(task: Task, runId: string, lease: ProjectEditorLease, link: ProjectRepositoryLink, stillCurrent: () => Promise<boolean> = async () => true): Promise<string> {
       await assertLease(lease);
       let evidence = await readCodingEvidence(task);
-      const clean = !(await git(lease.workdir, 'status', '--porcelain=v1', '--untracked-files=all'));
-      const identity = await sourceIdentity(lease.workdir);
+      let clean = !(await git(lease.workdir, 'status', '--porcelain=v1', '--untracked-files=all'));
+      let identity = await sourceIdentity(lease.workdir);
+      // A finished reply can leave a test service alive. The queue calls accept
+      // only while fully idle and holding the task operation. Save only the
+      // exact files that passed checks, then check the resulting commit too.
+      if (!clean && task.workdir === lease.workdir && evidence?.runId === runId
+        && evidence.status === 'passed' && evidence.source?.fingerprint === identity.fingerprint) {
+        if (!(await stillCurrent())) throw new RepositoryHandoffError('This task changed while its code was being checked. Its work is saved.');
+        await this.checkpoint(lease);
+        await verifyCodingRun(task, runId);
+        evidence = await readCodingEvidence(task);
+        clean = !(await git(lease.workdir, 'status', '--porcelain=v1', '--untracked-files=all'));
+        identity = await sourceIdentity(lease.workdir);
+      }
       const path = pathFor(link);
       const before = await git(path, 'rev-parse', ref);
       // Publication may commit the exact checked files after the turn. Never
@@ -103,6 +115,7 @@ export function createRepositoryDevelopment(root: string) {
       await git(path, 'fetch', '--no-tags', lease.workdir, identity.head);
       if (await git(path, 'merge-base', before, identity.head) !== before) throw new RepositoryHandoffError('This task needs the latest accepted code combined with its changes. Its work is saved.');
       // Compare-and-swap the exact accepted ref, never overwrite another handoff.
+      if (!(await stillCurrent())) throw new RepositoryHandoffError('This task changed while its code was being checked. Its work is saved.');
       await git(path, 'update-ref', ref, identity.head, before);
       return identity.head;
     },

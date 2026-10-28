@@ -14,6 +14,7 @@ import { hasUnansweredInteractions } from './db/interactions.js';
 import { scheduleQueuedMessageDispatch } from './queued-message-dispatcher.js';
 import { broadcast } from './events.js';
 import { getRecovery } from './run-recovery.js';
+import { onlyBackgroundProcesses } from '../shared/background-work.js';
 
 const running = (taskId: string) => hasActiveTaskRun(taskId) || isVerifying(taskId)
   || ['streaming', 'compacting'].includes(getRunStatus(taskId)?.status ?? getLatestTaskAgentRun(taskId)?.status ?? '');
@@ -72,13 +73,23 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
       notify();
       return Boolean(claimed);
     },
-    async checkpoint(task: Task, isStopped: () => boolean = () => false, onWaiting?: () => void): Promise<void> {
-      if (!task.project_id || !repositoryOwnerForTask(task.id)) return;
+    async checkpoint(task: Task, isStopped: () => boolean = () => false, onWaiting?: () => void): Promise<boolean> {
+      const owner = repositoryOwnerForTask(task.id);
+      if (!task.project_id || !owner) return true;
       let announced = false;
       while (true) {
         if (isStopped()) throw new Error('Run stopped by user');
-        const ready = await idle(task.id).catch(() => false);
+        const inventory = await options.adapter.getBackgroundWork?.(task.id).catch(() => undefined);
         if (isStopped()) throw new Error('Run stopped by user');
+        if (inventory && onlyBackgroundProcesses(inventory)) {
+          // Do not mutate Git underneath a running command. Check the current
+          // files and finish this reply; tick commits only after full idle.
+          setRepositoryBlocker(owner.key, owner.token, 'The reply is finished. Background commands are still running, so other tasks are waiting. You can continue this chat or open Background work to stop them.');
+          notify(task.id);
+          return false;
+        }
+        const ready = inventory?.available && !inventory.work.length
+          && (!inventory.continuation || inventory.continuation.status === 'none');
         if (ready) break;
         if (!announced) { onWaiting?.(); announced = true; }
         // No expiry grants ownership to another writer. Stop remains available.
@@ -89,10 +100,12 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
       // A saved publication owns its exact source fingerprint. Let that existing
       // protocol create its commit; the handoff will check the published commit.
       if (!getQueuedTaskMessage(task.id)?.publication) await development.checkpoint(lease);
+      return true;
     },
     async tick(): Promise<void> {
       if (ticking || options.canDispatch?.() === false) return;
       ticking = true;
+      const handoffs: Promise<void>[] = [];
       try {
         for (const owner of listRepositoryOwners()) {
           if (options.canDispatch?.() === false) break;
@@ -140,21 +153,31 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
           }
           const release = claimTaskOperation(task.id, task.project_id, task.workdir);
           if (!release) continue;
-          try {
+          const stillCurrent = async () => {
+            const nativeIdle = await idle(task.id);
+            return nativeIdle && repositoryOwnerForTask(task.id)?.token === owner.token
+              && getLatestTaskAgentRun(task.id)?.runId === owner.runId && getLatestTaskAgentRun(task.id)?.status === 'done'
+              && !getQueuedTaskMessage(task.id) && getRecovery(task.id)?.state !== 'blocked'
+              && !hasUnansweredInteractions(task.id, owner.runId!);
+          };
+          handoffs.push((async () => { try {
             if (!(await idle(task.id))) {
-              setRepositoryBlocker(owner.key, owner.token, 'This task is finishing background work. The next task will start automatically when it is ready.');
-              continue;
+              setRepositoryBlocker(owner.key, owner.token, 'The reply is finished. Background work is still running. Open that task to continue the chat or check its Background work card. The next task will start after background work ends and checks pass.');
+              return;
             }
-            if (getLatestTaskAgentRun(task.id)?.runId !== owner.runId || getQueuedTaskMessage(task.id) || stopped(task.id, owner.runId)) continue;
+            if (getLatestTaskAgentRun(task.id)?.runId !== owner.runId || getQueuedTaskMessage(task.id) || stopped(task.id, owner.runId)) return;
             const link = task.project_id && getProjectRepositoryLink(task.project_id);
             const lease = task.project_id && getProjectEditorForTask(task.project_id, task.id);
             if (!link || !lease || repositoryKey(link) !== owner.key) throw new RepositoryHandoffError('This task’s project connection or saved workspace is unavailable. Check its Project settings.');
-            await development.accept(task, owner.runId, lease, link);
-            finishRepositoryTask(owner.key, owner.token);
+            await development.accept(task, owner.runId, lease, link, stillCurrent);
+            if (await stillCurrent()) finishRepositoryTask(owner.key, owner.token);
           } catch (error) {
             setRepositoryBlocker(owner.key, owner.token, error instanceof RepositoryHandoffError ? error.message
               : 'Olympus could not check this task’s saved code. Its work is safe; the next task is waiting.');
-          } finally { release(); notify(task.id); }
+          } finally {
+            release(); notify(task.id);
+            if (options.canDispatch?.() !== false) for (const id of queuedRepositoryTasks()) scheduleQueuedMessageDispatch(id);
+          } })());
         }
         for (const taskId of queuedRepositoryTasks()) {
           if (!getQueuedTaskMessage(taskId)) { removeUnstartedRepositoryTask(taskId); continue; }
@@ -162,6 +185,9 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
         }
         notify();
       } finally { ticking = false; }
+      // Each handoff keeps its task operation while checking. A long check in
+      // one repository must not prevent other repositories' ticks/admission.
+      await Promise.all(handoffs);
     },
   };
 }

@@ -53,6 +53,7 @@ interface PublicationInput { projectId: string; taskId: string; publicationId: s
 
 export interface PrepareProjectTaskInput {
   automaticHandoff?: boolean;
+  reuseTaskWorkspace?: boolean;
   projectId: string;
   taskId: string;
   profileId: string;
@@ -469,7 +470,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     const existing = getProjectEditorForTask(input.projectId, input.taskId);
     if (existing) {
       await git(existing.workdir, ['rev-parse', '--is-inside-work-tree']);
-      if (input.automaticHandoff) {
+      if (input.automaticHandoff && !input.reuseTaskWorkspace) {
         await serialized(`baseline:${input.projectId}`, async () => {
           const baseline = projectBaselineWorkdir(options.rootDir, input.projectId, input.repositoryLink);
           await refreshBaseline(input.projectId, input.repositoryLink, input.tokenProvider);
@@ -480,6 +481,8 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       updateTask(input.taskId, { workdir: existing.workdir });
       return existing;
     }
+
+    if (input.reuseTaskWorkspace) throw new Error('The saved workspace changed. Background work must finish before preparing another workspace.');
 
     const previous = getLatestProjectEditorForTask(input.projectId, input.taskId);
     // Older releases cleared workdir and could hand this directory to another task.
