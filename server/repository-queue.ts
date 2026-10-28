@@ -122,7 +122,11 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
             const release = claimTaskOperation(task.id, task.project_id, task.workdir);
             if (!release) continue;
             try {
-              if (!getQueuedTaskMessage(task.id) && await idle(task.id).catch(() => false)
+              // A later request may reserve a previously stopped task without
+              // starting a run. Its retained Stop receipt is still valid.
+              const previousRunId = getLatestTaskAgentRun(task.id)?.runId;
+              if (!getQueuedTaskMessage(task.id) && await idle(task.id, previousRunId).catch(() => false)
+                && getLatestTaskAgentRun(task.id)?.runId === previousRunId && !running(task.id)
                 && !repositoryOwnerForTask(task.id)?.runId && !getQueuedTaskMessage(task.id)) {
                 finishRepositoryTask(owner.key, owner.token); notify(task.id);
               }

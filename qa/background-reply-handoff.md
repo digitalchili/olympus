@@ -39,3 +39,22 @@ The existing queue, stopped-owner, task-recovery and repository-development
 regressions pass. Independent review covered admission, deferred verification,
 publication and message/Stop races. Production deployment and live verification
 are recorded separately; these local tests alone are not production proof.
+
+## Unused reservation after Stop (v0.7.54)
+
+The Somboon acceptance fixture exposed a retained repository reservation whose
+`run_id` was null: a stopped task had reserved a later request without starting
+another run. Its native inventory was empty, but its saved Stop receipt made
+the unstarted-reservation path wait forever. The stopped run and receipt remain
+untouched. This path now uses the existing stopped-idle predicate, then rechecks
+the latest run, active work, queued request and reservation before releasing it.
+
+The added `repository_queue_stopped.test.ts` scenario failed before the fix with
+the null-run owner still present. It passes after the fix. Active children,
+unavailable inventory, pending continuation, missing receipts, a failed previous
+run, a newly queued request and a resumed run all retain ownership. The last two
+changes occur during the intended owner's inventory probe, not another task's.
+No unfinished source is accepted and no saved native result is discarded.
+
+Full `npm test`, `npm run typecheck`, `npm run build`, and independent focused
+review passed for this correction. Live acceptance remains a separate gate.

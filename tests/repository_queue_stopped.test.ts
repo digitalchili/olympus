@@ -14,31 +14,42 @@ let active = false;
 let continuation: 'none' | 'pending' | 'blocked' = 'none';
 let pendingResults = false;
 let receiptAvailable = true;
-let duringProbe = () => {};
+let duringProbe = (_taskId: string) => {};
 const dispatched: string[] = [];
 configureQueuedMessageDispatcher({ schedule: id => { dispatched.push(id); } });
 const queue = createRepositoryQueue({ rootDir: process.env.OLYMPUS_DISPATCH_HOME!, adapter: {
-  async getBackgroundWork() {
-    duringProbe();
+  async getBackgroundWork(taskId: string) {
+    duringProbe(taskId);
     return { available, work: active ? [{ id: 'child', kind: 'delegation' as const, status: 'running' }] : [],
       continuation: { status: continuation, reason: continuation === 'blocked' ? 'Stopped by user or interaction; explicit continuation is required.' : undefined },
       checkpoint: receiptAvailable ? { saved: true, source: 'task-continuation-journal', pendingDelegationIds: pendingResults ? ['child'] : [], undeliveredResultCount: pendingResults ? 1 : 0 } : undefined };
   },
 } });
 upsertGitHubInstallation({ id: 77, accountLogin: 'fixture', accountType: 'Organization', permissionMode: 'read_write' });
-for (const [index, mode] of ['stopped', 'legacy-stop', 'failed', 'new-request', 'resumed'].entries()) {
+for (const [index, mode] of ['stopped', 'legacy-stop', 'failed', 'new-request', 'resumed',
+  'reserved-stopped', 'reserved-failed', 'reserved-new-request', 'reserved-resumed'].entries()) {
+  const reserved = mode.startsWith('reserved-');
+  const outcome = mode.replace(/^reserved-/, '');
+  available = true; active = false; continuation = 'none'; pendingResults = false; receiptAvailable = true;
   const project = createProject({ name: mode, purpose: 'Stopped queue admission', managerProfileId: 'default', changedBy: 'test' });
   upsertProjectRepositoryLink(project.id, 77, { id: 910 + index, name: mode, fullName: `fixture/${mode}`, owner: 'fixture', private: false, defaultBranch: 'main', htmlUrl: 'https://example.invalid/repo', cloneUrl: '/unused' });
   const key = `github:${910 + index}`;
   const a = insertTask({ title: 'Earlier task', status: 'in_progress', project_id: project.id });
   const b = insertTask({ title: 'Next task', status: 'in_progress', project_id: project.id });
-  enqueueRepositoryTask(key, a.id); claimRepositoryTask(key, a.id); enqueueRepositoryTask(key, b.id);
+  enqueueRepositoryTask(key, a.id);
+  if (!reserved) claimRepositoryTask(key, a.id);
+  enqueueRepositoryTask(key, b.id);
   const request = (id: string) => putQueuedTaskMessage({ taskId: id, id: `request-${id}`, content: 'Continue', settings: {}, invitedProfileIds: [], collaborationScope: 'discussion', confirmPersistentCollaboration: false, createdAt: 1, updatedAt: 1 });
   request(b.id);
   createTaskAgentRun({ taskId: a.id, runId: mode, status: 'streaming', kind: 'chat', startedAt: 1 });
   beginRecovery(a.id, mode, 1);
-  finishTaskAgentRun(mode, mode === 'legacy-stop' ? 'done' : mode === 'failed' ? 'error' : 'stopped');
-  if (mode !== 'failed') cancelRecovery(a.id);
+  finishTaskAgentRun(mode, outcome === 'legacy-stop' ? 'done' : outcome === 'failed' ? 'error' : 'stopped');
+  if (outcome !== 'failed') cancelRecovery(a.id);
+  if (reserved) {
+    // A later request reserved the repository but never started a new run.
+    claimRepositoryTask(key, a.id);
+    assert.equal(repositoryOwner(key)?.runId, null);
+  }
   active = true;
   await queue.tick();
   assert.equal(repositoryOwner(key)?.taskId, a.id, 'stopped parents cannot release running children');
@@ -53,16 +64,22 @@ for (const [index, mode] of ['stopped', 'legacy-stop', 'failed', 'new-request', 
   await queue.tick();
   assert.equal(repositoryOwner(key)?.taskId, a.id, 'a stop marker alone is not proof that native results are settled');
   receiptAvailable = true;
-  duringProbe = () => {
-    if (mode === 'new-request') request(a.id);
-    if (mode === 'resumed') {
-      createTaskAgentRun({ taskId: a.id, runId: 'replacement', status: 'streaming', kind: 'chat', startedAt: 2 });
-      beginRecovery(a.id, 'replacement', 2);
+  let probedOwner = false;
+  duringProbe = taskId => {
+    if (taskId !== a.id) return;
+    probedOwner = true;
+    if (outcome === 'new-request') request(a.id);
+    if (outcome === 'resumed') {
+      createTaskAgentRun({ taskId: a.id, runId: `${mode}-replacement`, status: 'streaming', kind: 'chat', startedAt: 2 });
+      beginRecovery(a.id, `${mode}-replacement`, 2);
     }
     duringProbe = () => {};
   };
   await queue.tick();
-  if (mode === 'stopped' || mode === 'legacy-stop') {
+  if (outcome === 'new-request' || outcome === 'resumed') {
+    assert.ok(probedOwner, 'concurrent changes must occur during this owner’s inventory probe');
+  }
+  if (outcome === 'stopped' || outcome === 'legacy-stop') {
     assert.equal(repositoryOwner(key), undefined, 'an idle user-stopped owner must release the queue');
     assert.ok(dispatched.includes(b.id), 'the saved next request is scheduled automatically');
     assert.equal(getTask(a.id)?.status, 'in_progress', 'release never marks unfinished work complete');
