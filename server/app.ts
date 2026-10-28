@@ -52,6 +52,8 @@ import { operationalLog } from './observability.js';
 import { createTaskRecoveryRouter } from './routes/task-recovery.js';
 import { createBotsRouter } from './routes/bots.js';
 import { createInboxRouter } from './routes/inbox.js';
+import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
+import { getRecovery } from './run-recovery.js';
 
 const app = express();
 
@@ -110,7 +112,12 @@ app.get('/api/ready', async (_req, res) => {
 app.use('/api/maintenance', createDrainRouter(drainController, undefined, () => {
   closeClientsForRestart();
   closeSubscribersForRestart();
-}, { check: () => checkHermesMaintenance(drainController, adapter, getAllTasks(undefined, true).map(task => task.id)), fenced: hermesUpdateFenced }));
+}, { check: () => checkHermesMaintenance(drainController, adapter, getAllTasks(undefined, true).map(task => task.id), taskId => {
+  const latest = getLatestTaskAgentRun(taskId);
+  const recovery = getRecovery(taskId);
+  return latest?.status === 'stopped' || Boolean(latest && recovery?.run_id === latest.runId
+    && recovery.state === 'blocked' && recovery.reason === 'Stopped by user');
+}), fenced: hermesUpdateFenced }));
 
 app.use(activeRequests.middleware);
 app.use(maintenanceGuard(drainController));

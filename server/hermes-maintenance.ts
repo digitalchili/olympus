@@ -12,6 +12,7 @@ export async function checkHermesMaintenance(
   controller: DrainController,
   adapter: Pick<AgentAdapter, 'getHermesRuntime' | 'getBackgroundWork'>,
   taskIds: string[],
+  isStopped: (taskId: string) => boolean = () => false,
 ) {
   const status = await controller.refreshStatus();
   if (!status.draining || status.activeRuns !== 0) return { ready: false, runtime: null, blockers: ['Active work has not drained.'] };
@@ -21,7 +22,16 @@ export async function checkHermesMaintenance(
     // outlive the foreground conversation. Unknown inventory fails closed.
     for (const taskId of taskIds) {
       const background = await adapter.getBackgroundWork(taskId);
-      if (!background.available || background.work.length || (background.continuation && background.continuation.status !== 'none')) {
+      // A saved Stop is not live work. Require the server's explicit stop and
+      // an empty durable receipt; retain the marker so maintenance cannot resume it.
+      const receipt = background.checkpoint;
+      const idleStop = isStopped(taskId) && background.continuation?.status === 'blocked'
+        && background.continuation.reason === 'Stopped by user or interaction; explicit continuation is required.'
+        && receipt?.saved === true && receipt.source === 'task-continuation-journal'
+        && Array.isArray(receipt.pendingDelegationIds) && receipt.pendingDelegationIds.length === 0
+        && receipt.undeliveredResultCount === 0;
+      if (background.available !== true || !Array.isArray(background.work) || background.work.length
+        || (background.continuation && background.continuation.status !== 'none' && !idleStop)) {
         return { ready: false, runtime: null, blockers: ['A task has background work or its state could not be checked.'] };
       }
     }
