@@ -94,6 +94,9 @@ export interface ProjectCpSyncResult {
 }
 
 export interface ProjectCpService {
+  repositoryHead(input: { repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<string | null>;
+  prepareRepositoryRelease(input: { id: string; sourceSha: string; targetSha: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<{ workdir: string; headSha: string; treeSha: string; changedFiles: string[] }>;
+  publishRepositoryRelease(input: { id: string; publicationId: string; targetSha: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
   acquireEditor(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
   prepareTask(input: PrepareProjectTaskInput): Promise<ProjectEditorLease>;
   updateTaskSource(input: PrepareProjectTaskInput): Promise<ProjectCpSyncResult>;
@@ -315,7 +318,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     for (const ref of refs) await git(lease.workdir, ['check-ref-format', ref.ref]);
     return refs;
   }
-  async function recoverPrepared(lease: ProjectEditorLease, row: ProjectPublication): Promise<ProjectPublication> {
+  async function recoverPrepared(lease: Pick<ProjectEditorLease, 'workdir'>, row: ProjectPublication): Promise<ProjectPublication> {
     if (row.state === 'pending') return row;
     const head = (await git(lease.workdir, ['rev-parse', 'HEAD'])).stdout.trim();
     const conflict = () => new ProjectPublicationError('PUBLICATION_CONFLICT', row);
@@ -343,7 +346,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     await git(lease.workdir, ['update-ref', `refs/olympus/publications/${row.id}`, commit]);
     return setProjectPublicationCommit(row.id, commit);
   }
-  async function publish(lease: ProjectEditorLease, row: ProjectPublication, input: PublicationInput): Promise<ProjectVersion> {
+  async function publish(lease: Pick<ProjectEditorLease, 'workdir'>, row: ProjectPublication, input: Pick<PublicationInput, 'repositoryLink' | 'tokenProvider'>, expectedTarget?: string): Promise<ProjectVersion> {
     row = await recoverPrepared(lease, row);
     const refs = row.refs.map(ref => ({ ...ref, sha: ref.source === 'commit' ? row.commitSha! : ref.source }));
     const observe = async () => {
@@ -353,6 +356,9 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
     let remote: Map<string, string>;
     try { remote = await observe(); } catch { throw new ProjectPublicationError('PUBLICATION_UNCONFIRMED', row); }
     if (refs.every(ref => remote.get(ref.ref) === ref.sha)) return confirmProjectPublication(row.id, now());
+    if (expectedTarget && remote.get(`refs/heads/${input.repositoryLink.defaultBranch}`) !== expectedTarget) {
+      throw new ProjectPublicationError('PUBLICATION_CONFLICT', markProjectPublicationBranchAdvanced(row.id));
+    }
     if (refs.some(ref => ref.createOnly && remote.has(ref.ref) && remote.get(ref.ref) !== ref.sha)) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row);
     // Git itself enforces fast-forward updates. Exact create leases preserve empty-repo intent.
     try {
@@ -370,6 +376,10 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
         throw new ProjectPublicationError('PUBLICATION_CONFLICT', markProjectPublicationBranchAdvanced(row.id));
       }
       throw new ProjectPublicationError('PUBLICATION_UNCONFIRMED', row);
+    }
+    if (expectedTarget) {
+      const after = await observe().catch(() => null);
+      if (!after || !refs.every(ref => after.get(ref.ref) === ref.sha)) throw new ProjectPublicationError('PUBLICATION_UNCONFIRMED', row);
     }
     return confirmProjectPublication(row.id, now());
   }
@@ -538,6 +548,49 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       return serialized(`task:${input.taskId}`, () => acquireEditorUnlocked(input));
     },
 
+    async repositoryHead(input) {
+      const ref = `refs/heads/${input.repositoryLink.defaultBranch}`;
+      await git(process.cwd(), ['check-ref-format', ref]);
+      const result = await git(process.cwd(), ['ls-remote', '--', input.repositoryLink.cloneUrl, ref], await authOptions(input.repositoryLink, input.tokenProvider, true));
+      const sha = result.stdout.trim().split(/\s+/)[0];
+      return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+    },
+    async prepareRepositoryRelease(input) {
+      if (!/^[0-9a-f]{40}$/.test(input.sourceSha) || !/^[0-9a-f]{40}$/.test(input.targetSha)) throw new Error('Invalid release source');
+      const workdir = managedWorkdir(options.rootDir, 'releases', input.id);
+      const parent = dirname(workdir);
+      await mkdir(options.rootDir, { recursive: true }); await pathExists(options.rootDir);
+      await mkdir(parent, { recursive: true }); await pathExists(parent);
+      if (!await pathExists(workdir)) {
+        await git(parent, ['clone', '--no-checkout', '--no-hardlinks', '--template=', development.pathFor(input.repositoryLink), workdir]);
+        await git(workdir, ['remote', 'set-url', 'origin', input.repositoryLink.cloneUrl]);
+        await ensureIdentity(git, workdir);
+        await git(workdir, ['checkout', '--detach', input.sourceSha]);
+        await git(workdir, ['fetch', '--no-tags', 'origin', `refs/heads/${input.repositoryLink.defaultBranch}`], await authOptions(input.repositoryLink, input.tokenProvider, true));
+        if ((await git(workdir, ['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== input.targetSha) throw new Error('GitHub changed while the release was prepared. Review the release again.');
+        await git(workdir, ['merge', '--no-edit', '--no-autostash', input.targetSha]);
+      }
+      await requireOrigin(workdir, input.repositoryLink);
+      if ((await git(workdir, ['status', '--porcelain'])).stdout.trim()) throw new Error('The saved release copy needs attention. All task work is preserved.');
+      const headSha = (await git(workdir, ['rev-parse', 'HEAD'])).stdout.trim();
+      await git(workdir, ['merge-base', '--is-ancestor', input.sourceSha, headSha]);
+      await git(workdir, ['merge-base', '--is-ancestor', input.targetSha, headSha]);
+      const extra = (await git(workdir, ['rev-list', headSha, '--not', input.sourceSha, input.targetSha])).stdout.trim().split('\n').filter(Boolean);
+      if (extra.length && (extra.length !== 1 || (await git(workdir, ['show', '-s', '--format=%P', headSha])).stdout.trim() !== `${input.sourceSha} ${input.targetSha}`)) throw new Error('The saved release source changed. Review it before publishing.');
+      return { workdir, headSha, treeSha: (await git(workdir, ['rev-parse', 'HEAD^{tree}'])).stdout.trim(),
+        changedFiles: (await git(workdir, ['diff', '--name-only', input.targetSha, headSha, '--'])).stdout.trim().split('\n').filter(Boolean) };
+    },
+    async publishRepositoryRelease(input) {
+      const row = getProjectPublication(input.publicationId);
+      const workdir = managedWorkdir(options.rootDir, 'releases', input.id);
+      if (!row || row.taskId || row.leaseId || row.projectId !== input.repositoryLink.projectId
+        || JSON.stringify(row.repository) !== JSON.stringify(repositoryIdentity(input.repositoryLink))
+        || row.refs.length !== 1 || row.refs[0].ref !== `refs/heads/${input.repositoryLink.defaultBranch}`) throw new ProjectPublicationError('PUBLICATION_CONFLICT', row ?? undefined);
+      if (row.state === 'confirmed') return getProjectVersion(row.id)!;
+      await requireOrigin(workdir, input.repositoryLink);
+      return publish({ workdir }, row, input, input.targetSha);
+    },
+
     async prepareTask(input) {
       return serialized(`task:${input.taskId}`, () => acquireEditorUnlocked(input));
     },
@@ -628,7 +681,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
           repository: repositoryIdentity(input.repositoryLink), action: 'commit_push', revertedVersionId: null,
           parentSha, treeSha, commitSha, commitMessage: message, changedFiles,
           targetBranch: input.deployToDefaultBranch ? input.repositoryLink.defaultBranch : lease.branchName, refs, createdAt: now() });
-        return publish(lease, row, { ...input, publicationId: row.id });
+        return publish(lease, row, input);
       });
     },
     async retryPublication(input) {
@@ -668,7 +721,7 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
           repository: repositoryIdentity(input.repositoryLink), action: 'revert', revertedVersionId: target.id,
           parentSha, treeSha, commitSha: null, commitMessage: `Restore ${target.commitSha.slice(0, 7)} — ${target.commitMessage}`.slice(0, 200),
           changedFiles, targetBranch: lease.branchName, refs, createdAt: now() });
-        return publish(lease, row, { ...input, publicationId: row.id });
+        return publish(lease, row, input);
       });
     },
 

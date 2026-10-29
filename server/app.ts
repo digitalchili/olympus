@@ -22,6 +22,7 @@ import { projectFoldersRouter } from './project-folders.js';
 import { createTaskArtifactsRouter } from './task-artifacts.js';
 import { createStudioRouter } from './routes/studio.js';
 import { createProjectsRouter } from './routes/projects.js';
+import { createRepositoryReleaseService } from './repository-releases.js';
 import { createProjectTaskWorkspaceRouter } from './routes/project-task-workspace.js';
 import { createProjectGitHubAccessRouter } from './routes/project-github-access.js';
 import { createProjectSecretsRouter } from './routes/project-secrets.js';
@@ -158,6 +159,8 @@ const projectGitHub = createProjectGitHubService({
   workspaceForTask: task => localProfileRegistry.require(task.profile_name ?? 'default').workspaceDir,
 });
 const projectCp = createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts') });
+const repositoryReleases = createRepositoryReleaseService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), cp: projectCp,
+  tokenProvider: (id, scope) => studioGitHubGateway.installationToken!(id, scope), canDispatch: () => drainController.status().ready });
 const repositoryQueue = createRepositoryQueue({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), adapter,
   canDispatch: () => drainController.status().ready });
 app.use('/api/tasks', profileTaskRequestGate());
@@ -177,7 +180,7 @@ app.use('/api/updates', createUpdatesRouter());
 app.use('/api/updates/hermes', createHermesUpdatesRouter(createHermesUpdateService({ runtime: () => adapter.getHermesRuntime() })));
 app.use('/api/projects', createProjectGitHubAccessRouter(studioGitHubGateway));
 app.use('/api/projects', createProjectSecretsRouter());
-app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp, adapter }));
+app.use('/api/projects', createProjectsRouter({ github: studioGitHubGateway, projectCp, adapter, repositoryReleases }));
 app.use('/api/studio', createStudioRouter({
   github: studioGitHubGateway,
   publicUrl: process.env.OLYMPUS_STUDIO_PUBLIC_URL,
@@ -201,5 +204,5 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   next(error);
 });
 
-export { adapter, drainController, projectGitHub, repositoryQueue };
+export { adapter, drainController, projectGitHub, repositoryQueue, repositoryReleases };
 export default app;

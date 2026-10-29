@@ -1,3 +1,5 @@
+import type { CodingCheck } from './coding-evidence.js';
+
 export interface RepositoryChange {
   id: string;
   taskId: string;
@@ -20,4 +22,18 @@ export interface RepositoryOverview {
   acceptedSha: string | null;
   hasHiddenWork: boolean;
   changes: RepositoryChange[];
+  release?: RepositoryRelease | null;
+}
+
+export type RepositoryReleaseMode = 'all' | 'ready';
+export interface RepositoryRelease {
+  id: string; mode: RepositoryReleaseMode;
+  state: 'waiting' | 'checking' | 'publishing' | 'blocked' | 'confirmed' | 'cancelled';
+  included: RepositoryChange[]; excluded: RepositoryChange[];
+  message: string; targetBranch: string; commitSha: string | null; createdAt: number;
+  checks?: CodingCheck[];
+}
+export interface RepositoryReleasePreview {
+  token: string; mode: RepositoryReleaseMode; included: RepositoryChange[]; excluded: RepositoryChange[]; targetBranch: string;
+  targetSha: string;
 }

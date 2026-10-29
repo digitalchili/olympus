@@ -133,13 +133,13 @@ try {
   assert.equal(relinkedRepository.status, 200);
   assert.equal(((relinkedRepository.body.repositoryLink as Record<string, unknown>)).mode, 'branch_pr');
 
-  const duplicateRepositoryCreate = await call('/api/projects', 'POST', {
+  const invalidRepositoryCreate = await call('/api/projects', 'POST', {
     name: 'Must roll back',
-    purpose: 'Duplicate repository must not leave a Project behind',
+    purpose: 'Unavailable repository must not leave a Project behind',
     managerProfileId: 'studio',
-    repositoryLink: { installationId: 44, repositoryId: 501 },
+    repositoryLink: { installationId: 44, repositoryId: 999 },
   });
-  assert.equal(duplicateRepositoryCreate.status, 409);
+  assert.equal(invalidRepositoryCreate.status, 404);
   assert.equal((await call('/api/projects')).body.projects instanceof Array, true);
   assert.equal((await call('/api/projects')).body.projects instanceof Array
     ? ((await call('/api/projects')).body.projects as unknown[]).length
@@ -152,11 +152,11 @@ try {
   });
   assert.equal(unlinkedResponse.status, 201);
   const unlinkedId = String((unlinkedResponse.body.project as Record<string, unknown>).id);
-  const duplicateRepositoryPatch = await call(`/api/projects/${unlinkedId}`, 'PATCH', {
+  const invalidRepositoryPatch = await call(`/api/projects/${unlinkedId}`, 'PATCH', {
     name: 'Must not persist',
-    repositoryLink: { installationId: 44, repositoryId: 501 },
+    repositoryLink: { installationId: 44, repositoryId: 999 },
   });
-  assert.equal(duplicateRepositoryPatch.status, 409);
+  assert.equal(invalidRepositoryPatch.status, 404);
   assert.equal(((await call(`/api/projects/${unlinkedId}`)).body.project as Record<string, unknown>).name, 'Atomic update target');
 
   const globalOperatorIndex = await call('/api/projects');

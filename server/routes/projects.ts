@@ -72,6 +72,7 @@ import { resolveProjectReferencesDir, resolveOlympusDataDir } from '../paths.js'
 
 import type { AgentAdapter } from '../adapters/types.js';
 
+import type { RepositoryReleaseService } from '../repository-releases.js';
 interface ProjectsRouterOptions {
   registry?: LocalProfileRegistry;
   now?: () => number;
@@ -79,6 +80,7 @@ interface ProjectsRouterOptions {
   github?: StudioGitHubGateway;
   projectCp?: ProjectCpService;
   adapter?: AgentAdapter;
+  repositoryReleases?: RepositoryReleaseService;
 }
 
 type ManagerProjection = {
@@ -380,6 +382,40 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
   const changedBy = options.changedBy ?? 'local-user';
   const github = options.github;
   const projectCp = options.projectCp ?? createProjectCpService({ rootDir: resolve(resolveOlympusDataDir(), 'project-checkouts'), now });
+
+  router.get('/:id/repository-changes', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'view');
+      if (!options.repositoryReleases) return res.status(503).json({ error: 'Repository publishing is unavailable.' });
+      res.json(await options.repositoryReleases.overview(projectId, profileActor(req, registry)));
+    } catch (error) { return sendError(res, error); }
+  });
+  router.post('/:id/repository-releases/preview', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      if (!options.repositoryReleases) return res.status(503).json({ error: 'Repository publishing is unavailable.' });
+      res.json(await options.repositoryReleases.preview(projectId, req.body?.mode, profileActor(req, registry)));
+    } catch (error) { return sendError(res, error); }
+  });
+  router.post('/:id/repository-releases', async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      if (!options.repositoryReleases) return res.status(503).json({ error: 'Repository publishing is unavailable.' });
+      res.status(202).json(await options.repositoryReleases.request(projectId, req.body?.mode, req.body?.token, profileActor(req, registry)));
+    } catch (error) { return sendError(res, error); }
+  });
+  for (const action of ['retry','cancel'] as const) router.post(`/:id/repository-releases/:releaseId/${action}`, async (req, res) => {
+    try {
+      const projectId = routeId(req.params.id);
+      requireProjectRouteAccess(req, registry, projectId, 'contribute');
+      if (!options.repositoryReleases) return res.status(503).json({ error: 'Repository publishing is unavailable.' });
+      await options.repositoryReleases[action](projectId, routeId(req.params.releaseId), profileActor(req, registry));
+      res.status(202).json({ ok: true });
+    } catch (error) { return sendError(res, error); }
+  });
 
   async function withTaskMutation<T>(task: Task, mutate: () => Promise<T>): Promise<T> {
     const projectId = task.project_id!;

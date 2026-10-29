@@ -67,6 +67,7 @@ import { hasReviewableAssistantOutput, shouldPromoteTerminalRun } from '../run-s
 import { scheduleQueuedMessageDispatch } from '../queued-message-dispatcher.js';
 import { consumeQueuedTaskMessage, deleteQueuedTaskMessage, getQueuedTaskMessage, putQueuedTaskMessage, restoreQueuedTaskMessage } from '../db/task-message-queue.js';
 import { createTaskAgentRun, finishTaskAgentRun, getLatestTaskAgentRun, updateTaskAgentRunResolution } from '../db/task-agent-runs.js';
+import { bindRepositoryReleaseQueue } from '../db/repository-releases.js';
 import { syncMessageAttachmentsToProjectReferences } from '../db/project-references.js';
 import { recordInteraction, markInteractionSettled, closeRunInteractions, hasUnansweredInteractions } from '../db/interactions.js';
 import { notifyQueuedPublication } from '../queued-project-publication.js';
@@ -1154,6 +1155,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
         return sendAdapterError(res, error, 'Could not set Hermes goal');
       }
 
+      if (consumedQueue) bindRepositoryReleaseQueue(consumedQueue, started.snapshot.runId);
       return res.status(202).json({ runId: started.snapshot.runId });
     } finally {
       if (!handedOff) releaseRunWork();
@@ -1172,6 +1174,7 @@ chatRouter.post('/:id/messages', async (req, res) => {
       startedAt: snapshot.startedAt,
     });
     performanceTrace?.bindRun(snapshot.runId);
+    if (consumedQueue) bindRepositoryReleaseQueue(consumedQueue, snapshot.runId);
     if (runTask.kind === 'bot') {
       try {
         beginBotRun(runTask.id, snapshot.runId, Number.MAX_SAFE_INTEGER, botDelivery?.id,

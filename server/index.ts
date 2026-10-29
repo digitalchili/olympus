@@ -4,7 +4,7 @@ import 'dotenv/config';
 import './logging.js';
 import './db/index.js';
 import { createServer, type Server } from 'node:http';
-import app, { adapter, drainController, repositoryQueue } from './app.js';
+import app, { adapter, drainController, repositoryQueue, repositoryReleases } from './app.js';
 import { mountFrontend, type FrontendCleanup } from './frontend.js';
 import { closeClientsForRestart } from './events.js';
 import { closeSubscribersForRestart } from './live-chat.js';
@@ -162,6 +162,7 @@ async function main() {
   const recover = () => {
     if (shuttingDown || !drainController.status().ready) return;
     void repositoryQueue.tick().catch(() => console.error('Repository handoff could not be checked; saved work is preserved.'));
+    void repositoryReleases.tick().catch(() => console.error('Repository release could not be checked; saved work is preserved.'));
     void botDispatcher.dispatch().catch(error => console.error('Bot message dispatch failed:', error));
     void reconcileRecoveries(adapter, async (taskId, runId) => {
       const task = getTask(taskId);

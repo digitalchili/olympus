@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { verifyReleaseSource } from '../server/coding-verification.js';
+const root = join(process.env.OLYMPUS_DISPATCH_HOME!, 'npm-release');
+await mkdir(join(root, 'fixture-package'), { recursive: true });
+await writeFile(join(root, 'fixture-package/package.json'), JSON.stringify({ name:'fixture-package',version:'1.0.0',main:'index.js' }));
+await writeFile(join(root, 'fixture-package/index.js'), 'module.exports = 42;');
+await writeFile(join(root, 'package.json'), JSON.stringify({ name:'release-fixture',version:'1.0.0',private:true,dependencies:{'fixture-package':'file:./fixture-package'},scripts:{test:'node -e "if(require(\'fixture-package\')!==42)process.exit(1)"'} }));
+await writeFile(join(root, '.gitignore'), 'node_modules/\n');
+const run = (exe:string,...args:string[])=>execFileSync(exe,args,{cwd:root,stdio:'pipe'});
+run('npm','install','--package-lock-only','--ignore-scripts','--offline','--no-audit','--no-fund');
+run('git','init','-b','main');run('git','add','.');run('git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','Seed');
+const result = await verifyReleaseSource(root);
+assert.equal(result.passed,true,'a fresh release copy installs its locked dependencies before required checks');
+assert.equal(result.checks.at(-1)?.exitCode,0);
+console.log('Release checks install locked dependencies in their own copy');

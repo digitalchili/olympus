@@ -133,6 +133,25 @@ async function runCheck(cwd: string, command: string[], signal: AbortSignal, onP
     child.on('close', code => finish(code));
   });
 }
+/** Reuse task check rules for an isolated release, without inventing a task or changing its evidence. */
+export async function verifyReleaseSource(workdir: string): Promise<{ source: SourceIdentity; checks: CodingCheck[]; passed: boolean; reason?: string }> {
+  const source = await sourceIdentity(workdir);
+  const required = await commands(workdir);
+  if (!required.length) return { source, checks: [], passed: false, reason: 'Configure this repository’s required checks before publishing.' };
+  // A release clone never shares node_modules with a task that is still working.
+  // Use the checked lockfile rather than resolving a new dependency version.
+  const npmLock = await lstat(join(workdir, 'package-lock.json')).then(info => info.isFile(), () => false);
+  if (npmLock) required.unshift(['npm', 'ci', '--no-audit', '--no-fund']);
+  const checks: CodingCheck[] = [];
+  for (const command of required) {
+    const result = await runCheck(workdir, command, new AbortController().signal, () => {});
+    checks.push(result);
+    if (result.exitCode !== 0 || result.timedOut) return {source,checks,passed:false,reason:'The combined release did not pass its required checks. All task work is saved.'};
+  }
+  if ((await sourceIdentity(workdir)).fingerprint !== source.fingerprint) throw new Error('Release files changed during checks. Review the changes before publishing.');
+  return { source, checks, passed:true };
+}
+
 export async function verifyCodingRun(task: Task, runId: string, options: { skipUnchanged?: boolean } = {}): Promise<boolean> {
   if (active.has(task.id) || shuttingDown) return false;
   const controller = new AbortController();

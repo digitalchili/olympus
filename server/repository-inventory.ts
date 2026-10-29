@@ -10,7 +10,7 @@ import { getLatestProjectEditorForTask } from './db/project-cp.js';
 import { listProjectRepositoryLinks } from './db/projects.js';
 import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
 import { getQueuedTaskMessage } from './db/task-message-queue.js';
-import { listRepositoryContributions } from './db/repository-releases.js';
+import { listRepositoryContributions, listRepositoryReleases } from './db/repository-releases.js';
 import { repositoryKey, repositoryOwner } from './db/repository-queue.js';
 import { createRepositoryDevelopment } from './repository-development.js';
 import { canProfileAccessProject } from './project-access.js';
@@ -34,6 +34,9 @@ export function createRepositoryInventory(rootDir: string) {
     async read(link: ProjectRepositoryLink, targetSha: string | null, actor: string | null = null): Promise<RepositoryOverview> {
       const key = repositoryKey(link), path = development.pathFor(link);
       const acceptedSha = await development.head(link);
+      // A release may merge a newer main without changing the development ref.
+      // Its immutable local objects prove ancestry after exact remote readback.
+      const publishedPath = listRepositoryReleases(key).find(row => row.candidate?.headSha === targetSha)?.candidate?.workdir ?? path;
       const links = listProjectRepositoryLinks().filter(item => repositoryKey(item) === key);
       const projects = new Set(links.map(item => item.projectId));
       const tasks = getAllTasks().filter(task => task.project_id && projects.has(task.project_id));
@@ -51,7 +54,7 @@ export function createRepositoryInventory(rootDir: string) {
         const base = { taskId: task.id, title: task.title, projectId: task.project_id!, profileId: task.profile_name || 'default' };
         for (const record of records) {
           if (!record.changedFiles.length || !await isRepositoryAncestor(path, record.commitSha, acceptedSha)
-            || await isRepositoryAncestor(path, record.commitSha, targetSha)) continue;
+            || await isRepositoryAncestor(publishedPath, record.commitSha, targetSha)) continue;
           changes.push({ ...base, id: record.id, state: 'ready', reason: 'Checked and combined with the other accepted changes.',
             changedFiles: record.changedFiles, commitSha: record.commitSha, previousSha: record.previousSha, runId: record.runId, queueId: null });
         }
@@ -68,7 +71,7 @@ export function createRepositoryInventory(rootDir: string) {
           const head = await readRepositoryGit(lease.workdir, 'rev-parse', 'HEAD');
           const dirty = await readRepositoryGit(lease.workdir, 'status', '--porcelain=v1', '--untracked-files=all');
           const accepted = await isRepositoryAncestor(path, head, acceptedSha);
-          const published = await isRepositoryAncestor(path, head, targetSha);
+          const published = await isRepositoryAncestor(publishedPath, head, targetSha);
           if (!dirty && published) continue;
           if (!dirty && accepted && records.some(row => row.commitSha === head)) continue;
           const changedFiles = [...new Set([
@@ -87,12 +90,19 @@ export function createRepositoryInventory(rootDir: string) {
               commitSha: head, previousSha: evidence.baseline.head, runId: evidence.runId, queueId: null });
             continue;
           }
-          changes.push({ ...pending, state: run?.status === 'stopped' ? 'stopped' : 'needs_attention', changedFiles,
+          changes.push({ ...pending, state: run?.status === 'stopped' ? 'stopped' : 'needs_attention', changedFiles, commitSha:head, previousSha:lease.baseSha,
             reason: run?.status === 'stopped' ? 'Stopped — work saved. These changes are not included in a release.'
               : 'Saved changes have not been accepted yet. Open this task to finish its checks and handoff.' });
         } catch {
           changes.push({ ...pending, state: 'needs_attention', reason: 'This task’s saved folder could not be checked. Restore access before including it.' });
         }
+      }
+      const readyHeads = new Set(changes.filter(row=>row.state==='ready').map(row=>row.commitSha));
+      const unverified = changes.filter(row=>row.state!=='ready' && row.commitSha && row.commitSha!==row.previousSha && !readyHeads.has(row.commitSha));
+      for (const change of changes.filter(row=>row.state==='ready')) {
+        const dependency = await Promise.all(unverified.map(async row=>await isRepositoryAncestor(path,row.commitSha,change.commitSha) ? row : null));
+        const missing = dependency.find(Boolean);
+        if (missing) { change.state='needs_attention'; change.reason=`Waiting for the saved changes in “${missing.title}” to be checked before publishing these together.`; }
       }
       return { repositoryKey: key, repositoryName: link.fullName, targetBranch: link.defaultBranch, targetSha, acceptedSha, hasHiddenWork, changes };
     },

@@ -509,3 +509,14 @@ CREATE TABLE IF NOT EXISTS repository_contributions (
   UNIQUE(repository_key, task_id, run_id)
 );
 CREATE INDEX IF NOT EXISTS idx_repository_contributions ON repository_contributions(repository_key, accepted_at);
+
+CREATE TABLE IF NOT EXISTS repository_releases (
+  id TEXT PRIMARY KEY,
+  repository_key TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  state TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repository_release_pending ON repository_releases(repository_key)
+  WHERE state NOT IN ('confirmed', 'cancelled');
