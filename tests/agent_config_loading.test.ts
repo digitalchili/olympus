@@ -34,6 +34,32 @@ if (process.env.PERF_CONFIG_BASELINE === '1') {
   }
 } else {
   {
+    const h = configHarness(); h.render(); h.requests[0].resolve(settings('old-task-model')); await flushConfig();
+    h.savedChanged('queued-turn-admitted');
+    const refresh = h.requests.findLast(r => r.kind === 'settings')!;
+    assert.notEqual(refresh, h.requests[0], 'queued admission changes must refresh the saved task choice');
+    refresh.resolve(settings('queued-model')); await flushConfig();
+    assert.equal(h.render().model, 'queued-model', 'the composer follows settings applied by a queued turn');
+    h.render().setModel('next-model'); h.render().setProvider('next-provider'); h.render().setReasoningEffort('low');
+    h.savedChanged('another-tab-admitted');
+    h.requests.findLast(r => r.kind === 'settings')!.resolve(settings('other-tab-model')); await flushConfig();
+    assert.equal(h.render().model, 'next-model', 'a saved update cannot erase the unsent choice');
+    h.unmount();
+    const reloaded = configHarness(undefined, h.storage); reloaded.render();
+    reloaded.requests[0].resolve(settings('other-tab-model')); await flushConfig();
+    assert.equal(reloaded.render().model, 'next-model', 'reload preserves an explicit unsent choice');
+    assert.equal(reloaded.render().provider, 'next-provider'); assert.equal(reloaded.render().reasoningEffort, 'low');
+    reloaded.select('task-a', 'other');
+    assert.equal(reloaded.render().model, null, 'draft choices never cross profiles');
+    reloaded.unmount();
+    const acknowledged = configHarness(undefined, h.storage); acknowledged.render();
+    acknowledged.requests[0].resolve({ defaults, task: { model: 'next-model', provider: 'next-provider', reasoningEffort: 'low' } }); await flushConfig();
+    acknowledged.savedChanged('new-server-choice');
+    acknowledged.requests.findLast(r => r.kind === 'settings')!.resolve(settings('new-server-model')); await flushConfig();
+    assert.equal(acknowledged.render().model, 'new-server-model', 'a choice saved by the server no longer masks later server updates');
+    acknowledged.unmount();
+  }
+  {
     const h = configHarness(); h.render(); h.refresh();
     h.requests.findLast(r => r.kind === 'defaults')!.reject(new Error('refresh unavailable'));
     h.requests[0].resolve(settings()); await flushConfig();

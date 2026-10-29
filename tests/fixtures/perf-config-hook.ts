@@ -9,12 +9,12 @@ export const currentConfigSource = () => readFileSync(file, 'utf8');
 export const flushConfig = () => new Promise<void>(resolve => setImmediate(resolve));
 
 // Runs the real hook, controlling only React scheduling and its HTTP boundary.
-export function configHarness(source = currentConfigSource()) {
+export function configHarness(source = currentConfigSource(), storage = new Map<string, string>()) {
   const slots: any[] = [], effects: Array<() => void> = [];
   const listeners = new Set<() => void>();
   const cache = new Map<string, any>();
   const requests: Array<{ kind: string; task?: string; profile: string; resolve: (value: any) => void; reject: (error: Error) => void }> = [];
-  let cursor = 0, dirty = false, profile = 'default', task: string | undefined = 'task-a', initial: any;
+  let cursor = 0, dirty = false, profile = 'default', task: string | undefined = 'task-a', initial: any, savedRevision: string | undefined;
   const queue = (kind: string, target?: string, selected = profile) => new Promise((resolve, reject) => requests.push({ kind, task: target, profile: selected, resolve, reject }));
   const same = (a: any[] | undefined, b: any[]) => a && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const hooks = {
@@ -33,7 +33,9 @@ export function configHarness(source = currentConfigSource()) {
   const exported: any = {};
   runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, {
     exports: exported, console,
-    window: { addEventListener: (_: string, fn: () => void) => listeners.add(fn), removeEventListener: (_: string, fn: () => void) => listeners.delete(fn) },
+    window: { localStorage: { getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+      addEventListener: (_: string, fn: () => void) => listeners.add(fn), removeEventListener: (_: string, fn: () => void) => listeners.delete(fn) },
     require: (name: string) => name === 'react' ? hooks : name === '../lib/api' ? {
       fetchAgentDefaults: (selected?: string) => queue('defaults', undefined, selected),
       fetchTaskAgentSettings: (id: string, selected?: string) => queue('settings', id, selected),
@@ -47,13 +49,14 @@ export function configHarness(source = currentConfigSource()) {
   const render = () => {
     let result: any, count = 0;
     do {
-      dirty = false; cursor = 0; result = exported.useAgentConfig(task, initial, profile);
+      dirty = false; cursor = 0; result = exported.useAgentConfig(task, initial, profile, savedRevision);
       while (effects.length) effects.shift()!();
       if (++count > 20) throw new Error('Hook did not settle');
     } while (dirty);
     return result;
   };
-  return { render, requests, cache,
+  return { render, requests, cache, storage,
+    savedChanged(revision: string) { savedRevision = revision; return render(); },
     select(nextTask: string | undefined, nextProfile = profile, nextInitial?: any) { task = nextTask; profile = nextProfile; initial = nextInitial; return render(); },
     refresh() { for (const listener of listeners) listener(); },
     unmount() { for (const slot of slots) slot?.cleanup?.(); },

@@ -26,6 +26,16 @@ const direct = renderToStaticMarkup(createElement(RunModelResolution, {
 }));
 assert.equal(direct, '', 'the selected model should not be repeated in a separate status panel');
 
+const nextChoice = renderToStaticMarkup(createElement(RunModelResolution, {
+  resolution: { requested: { model: 'running-model', provider: 'openai-codex', reasoningEffort: 'high' },
+    actual: { model: 'running-model', provider: 'openai-codex', reasoningEffort: 'high' } },
+  next: { model: 'next-model', provider: 'openai-codex', reasoningEffort: 'low' },
+}));
+assert.match(nextChoice, /Current run:/);
+assert.match(nextChoice, /running-model/);
+assert.match(nextChoice, /Next message:/);
+assert.match(nextChoice, /next-model/);
+
 const requested = { model: 'gpt-6-astra', provider: 'openai-codex', reasoningEffort: 'xhigh' };
 const legacyReason = 'Primary model failed; Hermes activated its configured fallback.';
 function render(actual = requested, fallbackReason?: string) {

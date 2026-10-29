@@ -315,6 +315,10 @@ export function TaskChat({
   const taskRun = useStore((s) => s.taskRuns.get(taskId));
   const taskOutcome = useStore(s => s.taskOutcomes.get(taskId));
   const taskUpdatedAt = useStore(s => s.tasks.find(task => task.id === taskId)?.updated_at);
+  const savedAgentChoice = useStore(s => {
+    const task = s.tasks.find(task => task.id === taskId);
+    return task ? JSON.stringify([task.agent_model, task.agent_provider, task.reasoning_effort]) : undefined;
+  });
   const repositoryWait = useStore(s => s.tasks.find(task => task.id === taskId)?.repositoryQueue?.message);
   const [continuing, setContinuing] = useState(false);
   const authRunKey = `${activeProfileId}:${taskId}:${taskOutcome?.runId ?? taskRun?.runId ?? ''}`;
@@ -383,6 +387,7 @@ export function TaskChat({
     taskId,
     startupRef.current.initialSettings,
     activeProfileId,
+    savedAgentChoice,
   );
   const waitingForTaskSettings = isLoading && !startupRef.current.initialSettings;
   const toolbarDefaults = waitingForTaskSettings ? null : defaults;
@@ -1272,7 +1277,10 @@ export function TaskChat({
         {!isBot && projectId && loadedTaskId === taskId && <ProjectChatBlockedNotice projectId={projectId} profileId={activeProfileId} blocker={projectBlocker} />}
         {!isBot && projectId && loadedTaskId === taskId && onReviewPublication && <TaskPublicationNotice issue={publicationIssue} onReview={onReviewPublication} />}
         <TaskInteractionPanel key={taskId} taskId={taskId} isStreaming={isStreaming} className={CHAT_COLUMN_CLASS} />
-        {modelResolution && <RunModelResolution resolution={modelResolution} />}
+        {modelResolution && <RunModelResolution resolution={modelResolution} next={taskRun ? {
+          model: model ?? defaults?.model ?? null, provider: provider ?? defaults?.provider ?? null,
+          reasoningEffort: reasoningEffort ?? defaults?.reasoningEffort ?? null,
+        } : undefined} />}
         {queuedMessage?.publication && <div className={CHAT_COLUMN_CLASS}>{queuedMessageBar}</div>}
         <div className={`${CHAT_COLUMN_CLASS} rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 sm:rounded-2xl`}>
           {!isBot && persistentGrants.length > 0 && (
