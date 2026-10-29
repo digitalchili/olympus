@@ -14,6 +14,7 @@ import { repositoryOwner } from '../server/db/repository-queue.js';
 import { configureQueuedMessageDispatcher } from '../server/queued-message-dispatcher.js';
 import { putQueuedTaskMessage } from '../server/db/task-message-queue.js';
 import { deleteQueuedTaskMessage } from '../server/db/task-message-queue.js';
+import db from '../server/db/index.js';
 
 const root = process.env.OLYMPUS_DISPATCH_HOME!;
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -49,6 +50,10 @@ assert.equal(await verifyCodingRun(getTask(a.id)!, 'run-a'), true);
 const accepted = await development.accept(getTask(a.id)!, 'run-a', leaseA, link);
 assert.equal(accepted, git(leaseA.workdir, 'rev-parse', 'HEAD'));
 assert.equal(await development.accept(getTask(a.id)!, 'run-a', leaseA, link), accepted, 'retry after an interrupted receipt is idempotent');
+const contributions = db.prepare("SELECT 1 FROM sqlite_master WHERE name='repository_contributions'").get()
+  ? db.prepare('SELECT task_id, run_id, commit_sha, previous_sha FROM repository_contributions').all() : [];
+assert.deepEqual(contributions, [{ task_id: a.id, run_id: 'run-a', commit_sha: accepted, previous_sha: original }],
+  'accepted work must retain its task and run provenance exactly once, including after retry');
 const b = insertTask({ title: 'Task B', status: 'in_progress', project_id: project.id });
 putQueuedTaskMessage({ taskId: b.id, id: 'request-b', content: 'Build B', settings: {}, invitedProfileIds: [], collaborationScope: 'discussion', confirmPersistentCollaboration: false, createdAt: Date.now(), updatedAt: Date.now() });
 assert.equal(await queue.admit(b), false);
@@ -100,6 +105,31 @@ const afterStop = insertTask({ title: 'After stopped work', status: 'in_progress
 assert.equal((await prepare(afterStop.id)).baseSha, accepted);
 assert.equal(git(remote, 'rev-parse', 'main'), original, 'automatic handoff never publishes to GitHub');
 assert.equal(git(leaseA.workdir, 'status', '--porcelain'), '');
+const inventoryModule = await import('../server/repository-inventory.js').catch(() => null);
+const inventory = inventoryModule?.createRepositoryInventory(checkouts);
+const beforeInventory = git(leaseB.workdir, 'status', '--porcelain');
+const overview = await inventory?.read(link, original) ?? { changes: [] };
+assert.equal(overview.changes.filter(row => row.taskId === a.id && row.state === 'ready').length, 1,
+  'the sidebar names accepted A once, even after a conversation and retries');
+assert.equal(overview.changes.find(row => row.taskId === b.id)?.state, 'stopped', 'stopped work remains visible but is not ready');
+assert.equal(git(leaseB.workdir, 'status', '--porcelain'), beforeInventory, 'viewing saved drafts does not change them');
+assert.equal((await inventory!.read(link, accepted)).changes.some(row => row.taskId === a.id), false,
+  'accepted work already contained in the current remote target is no longer unpublished');
+const savedRecords = db.prepare('SELECT * FROM repository_contributions WHERE task_id = ?').all(a.id) as any[];
+db.prepare('DELETE FROM repository_contributions WHERE task_id = ?').run(a.id);
+assert.equal((await inventory!.read(link, original)).changes.find(row => row.taskId === a.id)?.state, 'ready',
+  'legacy checked work is recognized from fresh matching evidence and accepted ancestry');
+assert.equal((db.prepare('SELECT COUNT(*) n FROM repository_contributions WHERE task_id = ?').get(a.id) as any).n, 0,
+  'legacy discovery does not rewrite provenance or evidence');
+for (const row of savedRecords) db.prepare('INSERT INTO repository_contributions VALUES (@id,@repository_key,@project_id,@task_id,@run_id,@commit_sha,@previous_sha,@fingerprint,@changed_files_json,@accepted_at)').run(row);
+const otherProject = createProject({ name: 'Same repo other profile', purpose: 'Permissions', managerProfileId: 'other', changedBy: 'test' });
+upsertProjectRepositoryLink(otherProject.id, 77, { id: 9001, name: 'fixture', fullName: 'fixture/repo', owner: 'fixture', private: false, defaultBranch: 'main', htmlUrl: 'https://example.invalid/repo', cloneUrl: remote });
+const hidden = insertTask({ title: 'Private pending change', status: 'in_progress', project_id: otherProject.id, profile_name: 'other' });
+putQueuedTaskMessage({ taskId: hidden.id, id: 'hidden-request', content: 'Private prompt', settings: {}, invitedProfileIds: [], collaborationScope: 'discussion', confirmPersistentCollaboration: false, createdAt: Date.now(), updatedAt: Date.now() });
+const restricted = await inventory!.read(link, original, 'default');
+assert.equal(restricted.hasHiddenWork, true);
+assert.ok(!JSON.stringify(restricted).includes('Private'), 'protected task title and prompt must not leak');
+assert.ok((await inventory!.read(link, original)).changes.some(row => row.taskId === hidden.id), 'operator view includes queued work from another Project on the same repository');
 console.log('Checked development handoff tests passed');
 // A new upstream commit must be included in the recorded starting version.
 await writeFile(join(seed, 'upstream.txt'), 'latest remote work');

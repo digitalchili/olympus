@@ -7,6 +7,7 @@ import type { ProjectEditorLease, ProjectRepositoryLink, Task } from '../shared/
 import { readCodingEvidence, sourceIdentity, verifyCodingRun } from './coding-verification.js';
 import { listProjectVersions } from './db/project-cp.js';
 import { repositoryKey } from './db/repository-queue.js';
+import { recordRepositoryContribution } from './db/repository-releases.js';
 import { buildProjectGitEnv } from './project-git-auth.js';
 
 export class RepositoryHandoffError extends Error {}
@@ -36,6 +37,10 @@ export function createRepositoryDevelopment(root: string) {
     }
   }
   return {
+    pathFor,
+    async head(link: ProjectRepositoryLink): Promise<string | null> {
+      return await exists(pathFor(link)) ? git(pathFor(link), 'rev-parse', '--verify', ref) : null;
+    },
     async source(link: ProjectRepositoryLink, baseline: string): Promise<{ path: string; branch: string }> {
       const path = pathFor(link);
       const parent = join(root, 'development');
@@ -92,6 +97,11 @@ export function createRepositoryDevelopment(root: string) {
       }
       const path = pathFor(link);
       const before = await git(path, 'rev-parse', ref);
+      const record = async (head: string, previous: string) => recordRepositoryContribution({
+        repositoryKey: repositoryKey(link), projectId: link.projectId, taskId: task.id, runId,
+        commitSha: head, previousSha: previous, fingerprint: identity.fingerprint,
+        changedFiles: head === previous ? [] : (await git(path, 'diff', '--name-only', previous, head, '--')).split('\n').filter(Boolean),
+      });
       // Publication may commit the exact checked files after the turn. Never
       // rewrite its authorization fingerprint: verify that confirmed commit here.
       if (clean && evidence?.runId === runId && ['stale', 'skipped'].includes(evidence.status)
@@ -106,16 +116,20 @@ export function createRepositoryDevelopment(root: string) {
         && (identity.head === lease.baseSha || identity.head === before)
         && identity.fingerprint === evidence.baseline.fingerprint
         && identity.fingerprint === evidence.source?.fingerprint) {
+        await record(before, before);
         return before;
       }
       if (evidence?.runId !== runId || evidence.status !== 'passed' || !evidence.source) throw new RepositoryHandoffError('This task’s code checks have not passed. Open its Checks panel to see what needs fixing. Its work is saved.');
       if (task.workdir !== lease.workdir || !clean) throw new RepositoryHandoffError('This task has saved code changes that still need checking. Open its Checks panel to run checks.');
       if (identity.fingerprint !== evidence.source.fingerprint) throw new RepositoryHandoffError('This task’s code changed after its checks. Run its checks again before the next task starts.');
-      if (before === identity.head) return before;
+      if (before === identity.head) { await record(before, evidence.baseline.head); return before; }
       await git(path, 'fetch', '--no-tags', lease.workdir, identity.head);
       if (await git(path, 'merge-base', before, identity.head) !== before) throw new RepositoryHandoffError('This task needs the latest accepted code combined with its changes. Its work is saved.');
       // Compare-and-swap the exact accepted ref, never overwrite another handoff.
       if (!(await stillCurrent())) throw new RepositoryHandoffError('This task changed while its code was being checked. Its work is saved.');
+      // Save attribution before the CAS. Readers only count records contained
+      // in the accepted ref; retrying after a crash cannot lose attribution.
+      await record(identity.head, before);
       await git(path, 'update-ref', ref, identity.head, before);
       return identity.head;
     },

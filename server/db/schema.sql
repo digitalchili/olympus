@@ -309,8 +309,7 @@ CREATE TABLE IF NOT EXISTS project_repository_links (
   clone_url              TEXT NOT NULL,
   mode                   TEXT NOT NULL DEFAULT 'read_only' CHECK(mode IN ('read_only', 'branch_pr')),
   created_at             INTEGER NOT NULL,
-  updated_at             INTEGER NOT NULL,
-  UNIQUE(provider, provider_repository_id)
+  updated_at             INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS project_github_access (
@@ -495,3 +494,18 @@ CREATE TABLE IF NOT EXISTS repository_task_queue (
   held_by TEXT,
   task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS repository_contributions (
+  id TEXT PRIMARY KEY,
+  repository_key TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  previous_sha TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  changed_files_json TEXT NOT NULL,
+  accepted_at INTEGER NOT NULL,
+  UNIQUE(repository_key, task_id, run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_repository_contributions ON repository_contributions(repository_key, accepted_at);

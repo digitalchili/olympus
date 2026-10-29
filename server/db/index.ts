@@ -226,6 +226,23 @@ function recoverInterruptedDelegations(): void {
   `).run(now, now);
 }
 
+// Several Projects may describe the same repository; serialization belongs to
+// repository_workflows. Rebuild without cascading away the existing sync row.
+const repositorySchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='project_repository_links'").get() as { sql: string } | undefined;
+if (repositorySchema && /UNIQUE\s*\(provider,\s*provider_repository_id\)/i.test(repositorySchema.sql)) {
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      const definition = schema.match(/CREATE TABLE IF NOT EXISTS project_repository_links \([\s\S]*?\n\);/)![0];
+      db.exec(definition.replace('IF NOT EXISTS project_repository_links', 'project_repository_links_new'));
+      db.exec(`INSERT INTO project_repository_links_new SELECT * FROM project_repository_links;
+        DROP TABLE project_repository_links;
+        ALTER TABLE project_repository_links_new RENAME TO project_repository_links;`);
+      if ((db.pragma('foreign_key_check') as unknown[]).length) throw new Error('Repository migration failed its reference check');
+    })();
+  } finally { db.pragma('foreign_keys = ON'); }
+}
+
 db.exec('BEGIN IMMEDIATE');
 try {
   db.exec(schema);
