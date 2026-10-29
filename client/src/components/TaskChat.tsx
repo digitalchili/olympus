@@ -1,4 +1,5 @@
 import { useProjectSecretEntry } from '../hooks/useProjectSecretEntry';
+import { RepositoryChanges } from './RepositoryChanges';
 import { pauseTaskRecovery } from '../lib/api';
 import { CodingEvidencePanel } from './CodingEvidencePanel';
 import { BackgroundWorkNotice } from './BackgroundWorkNotice';
@@ -1419,6 +1420,7 @@ export function TaskChat({
       </div>
       </div>
       <aside aria-label="Task activity" className="order-first grid max-h-[30vh] shrink-0 grid-cols-1 gap-2 overflow-y-auto border-b border-zinc-100 p-3 dark:border-zinc-800 sm:grid-cols-3 xl:order-last xl:max-h-none xl:w-72 xl:grid-cols-1 xl:content-start xl:border-b-0 xl:border-l [&:not(:has(section))]:hidden">
+        {!isBot && projectId && <RepositoryChanges key={`repository:${projectId}:${activeProfileId}`} projectId={projectId} profileId={activeProfileId} />}
         <DelegationActivity key={`delegation:${taskId}`} runs={delegationRuns ?? []} />
         <BackgroundWorkNotice key={`background:${activeProfileId}:${taskId}`} taskId={taskId} isStreaming={isStreaming} />
         {!isBot && <CodingEvidencePanel key={`coding:${taskId}`} taskId={taskId} isStreaming={isStreaming} collapsed onViewAgentReply={viewAgentReply} />}

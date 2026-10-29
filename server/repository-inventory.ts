@@ -91,7 +91,7 @@ export function createRepositoryInventory(rootDir: string) {
             continue;
           }
           changes.push({ ...pending, state: run?.status === 'stopped' ? 'stopped' : 'needs_attention', changedFiles, commitSha:head, previousSha:lease.baseSha,
-            reason: run?.status === 'stopped' ? 'Stopped — work saved. These changes are not included in a release.'
+            reason: run?.status === 'stopped' ? 'Work is saved. Finish this task and pass its checks before publishing these changes.'
               : 'Saved changes have not been accepted yet. Open this task to finish its checks and handoff.' });
         } catch {
           changes.push({ ...pending, state: 'needs_attention', reason: 'This task’s saved folder could not be checked. Restore access before including it.' });

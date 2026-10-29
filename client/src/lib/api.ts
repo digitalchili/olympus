@@ -1,4 +1,5 @@
 import type { HermesUpdateStatus } from '@shared/hermes-updates';
+import type { RepositoryOverview, RepositoryRelease, RepositoryReleaseMode, RepositoryReleasePreview } from '@shared/repository-releases';
 import type { ProjectSecretEntry, ProjectSecretMetadata } from '@shared/project-secrets';
 import type {
   AgentDefaults,
@@ -365,6 +366,23 @@ export function importStudioProject(installationId: number, repositoryId: number
 
 export function fetchProjects() {
   return request<{ projects: ProjectSummary[]; pendingDeletions?: Array<{ id: string; name: string }> }>('/projects', undefined, false);
+}
+
+export function fetchRepositoryChanges(projectId: string, profileId: string) {
+  return request<RepositoryOverview | null>(apiPathWithProfile(`/projects/${encodeURIComponent(projectId)}/repository-changes`, profileId));
+}
+export function previewRepositoryRelease(projectId: string, profileId: string, mode: RepositoryReleaseMode) {
+  return request<RepositoryReleasePreview>(apiPathWithProfile(`/projects/${encodeURIComponent(projectId)}/repository-releases/preview`, profileId), {
+    method: 'POST', body: JSON.stringify({ mode }),
+  });
+}
+export function requestRepositoryRelease(projectId: string, profileId: string, preview: RepositoryReleasePreview) {
+  return request<RepositoryRelease>(apiPathWithProfile(`/projects/${encodeURIComponent(projectId)}/repository-releases`, profileId), {
+    method: 'POST', body: JSON.stringify({ mode: preview.mode, token: preview.token }),
+  });
+}
+export function actOnRepositoryRelease(projectId: string, profileId: string, id: string, action: 'retry' | 'cancel') {
+  return request<{ ok: true }>(apiPathWithProfile(`/projects/${encodeURIComponent(projectId)}/repository-releases/${encodeURIComponent(id)}/${action}`, profileId), { method: 'POST' });
 }
 
 export function createProject(input: { name: string; purpose: string; managerProfileId: string; repositoryLink?: { installationId: number; repositoryId: number } | null }) {

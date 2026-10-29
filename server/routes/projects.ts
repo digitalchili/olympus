@@ -387,6 +387,7 @@ export function createProjectsRouter(options: ProjectsRouterOptions = {}): Route
     try {
       const projectId = routeId(req.params.id);
       requireProjectRouteAccess(req, registry, projectId, 'view');
+      if (!getProjectRepositoryLink(projectId)) return res.json(null);
       if (!options.repositoryReleases) return res.status(503).json({ error: 'Repository publishing is unavailable.' });
       res.json(await options.repositoryReleases.overview(projectId, profileActor(req, registry)));
     } catch (error) { return sendError(res, error); }

@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { RepositoryChange, RepositoryOverview } from '../shared/repository-releases.js';
+const module = await import('../client/src/components/RepositoryChanges.js').catch(()=>null);
+const change = (id:string,title:string,state:RepositoryChange['state']):RepositoryChange=>({id,taskId:id,title,state,projectId:'project',profileId:'default',reason:state==='ready'?'Checks passed.':'This task is still working.',changedFiles:['client/player.ts'],commitSha:null,previousSha:null,runId:null,queueId:null});
+const ready=change('a','Artwork fix','ready'), working=change('b','Offline playback','working');
+const overview:RepositoryOverview={repositoryKey:'repo',repositoryName:'fixture/radio',targetBranch:'main',targetSha:'sha',acceptedSha:'sha',hasHiddenWork:false,changes:[ready,working]};
+function render(view=overview,preview:any=null) {return module ? renderToStaticMarkup(createElement(module.RepositoryChangesPanel,{overview:view,preview,busy:false,error:'',onPreview:()=>{},onPublish:()=>{},onClosePreview:()=>{},onRetry:()=>{},onCancel:()=>{},onRefresh:()=>{}})) : '';}
+const html=render();
+assert.match(html,/Unpublished changes/);
+assert.match(html,/Artwork fix/); assert.match(html,/Offline playback/);
+assert.match(html,/Ready to publish/); assert.match(html,/Still working/);
+assert.match(html,/Wait for all/); assert.match(html,/Publish what.*ready/);
+assert.match(html,/\/projects\/project\/tasks\/a\?profile=default/);
+const preview=render(overview,{mode:'ready',included:[ready],excluded:[working],token:'token',targetBranch:'main',targetSha:'sha'});
+assert.match(preview,/Included in this publish/); assert.match(preview,/Left for later/);assert.match(preview,/Publish to main/);
+assert.doesNotMatch(render({...overview,hasHiddenWork:true}),/data-release-mode=/,'protected scope must not offer a partial list as all');
+const release={id:'release',mode:'all' as const,state:'waiting' as const,included:[ready,working],excluded:[],message:'Waiting for “Offline playback” to finish. This release will continue automatically.',targetBranch:'main',commitSha:null,createdAt:1};
+assert.match(render({...overview,release}),/Waiting for.*Offline playback/);
+const confirmed=render({...overview,changes:[],release:{...release,state:'confirmed',message:'On GitHub. Deployment has not been verified.'}});
+assert.match(confirmed,/On GitHub/);assert.match(confirmed,/Deployment has not been verified/);assert.doesNotMatch(confirmed,/>Live</);
+const grouped=render({...overview,changes:[ready,{...ready,id:'second-update'}]});
+assert.equal((grouped.match(/>Artwork fix</g)||[]).length,1,'one task title even when it has several accepted updates');
+console.log('Repository changes sidebar, release choices and truthful status render correctly');
