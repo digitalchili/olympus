@@ -11,6 +11,7 @@ import type { CodingEvidence, CodingCheck, RunningCodingCheck, SourceIdentity, S
 
 const exec = promisify(execFile);
 const active = new Map<string, { controller: AbortController; done: Promise<void> }>();
+const releaseChecks = new Map<AbortController, Promise<void>>();
 const WORKSPACE_CHANGED = 'This task’s workspace changed. Send a new message to establish its baseline before running checks.';
 let shuttingDown = false;
 export const isVerifying = (taskId: string): boolean => active.has(taskId);
@@ -24,7 +25,10 @@ export async function cancelCodingVerification(taskId: string, reason = 'Verific
 /** Shutdown only: prevent later agent completions from starting another check. */
 export async function cancelAllCodingVerifications(reason = 'Server shutting down'): Promise<void> {
   shuttingDown = true;
+  const releases = [...releaseChecks.entries()];
+  for (const [controller] of releases) controller.abort(new Error(reason));
   await Promise.all([...active.keys()].map(taskId => cancelCodingVerification(taskId, reason)));
+  await Promise.all(releases.map(([,done])=>done));
 }
 async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
   return (await exec('git', args, { cwd, signal, maxBuffer: 8 * 1024 * 1024 })).stdout;
@@ -134,8 +138,14 @@ async function runCheck(cwd: string, command: string[], signal: AbortSignal, onP
   });
 }
 /** Reuse task check rules for an isolated release, without inventing a task or changing its evidence. */
-export async function verifyReleaseSource(workdir: string): Promise<{ source: SourceIdentity; checks: CodingCheck[]; passed: boolean; reason?: string }> {
-  const source = await sourceIdentity(workdir);
+export async function verifyReleaseSource(workdir: string, externalSignal?: AbortSignal): Promise<{ source: SourceIdentity; checks: CodingCheck[]; passed: boolean; reason?: string }> {
+  if (shuttingDown) throw new Error('Server shutting down');
+  const controller = new AbortController();
+  const signal = externalSignal ? AbortSignal.any([controller.signal,externalSignal]) : controller.signal;
+  let settled!: () => void;
+  releaseChecks.set(controller, new Promise<void>(resolve=>{settled=resolve;}));
+  try {
+  const source = await sourceIdentity(workdir, signal);
   const required = await commands(workdir);
   if (!required.length) return { source, checks: [], passed: false, reason: 'Configure this repository’s required checks before publishing.' };
   // A release clone never shares node_modules with a task that is still working.
@@ -144,12 +154,13 @@ export async function verifyReleaseSource(workdir: string): Promise<{ source: So
   if (npmLock) required.unshift(['npm', 'ci', '--no-audit', '--no-fund']);
   const checks: CodingCheck[] = [];
   for (const command of required) {
-    const result = await runCheck(workdir, command, new AbortController().signal, () => {});
+    const result = await runCheck(workdir, command, signal, () => {});
     checks.push(result);
     if (result.exitCode !== 0 || result.timedOut) return {source,checks,passed:false,reason:'The combined release did not pass its required checks. All task work is saved.'};
   }
-  if ((await sourceIdentity(workdir)).fingerprint !== source.fingerprint) throw new Error('Release files changed during checks. Review the changes before publishing.');
+  if ((await sourceIdentity(workdir, signal)).fingerprint !== source.fingerprint) throw new Error('Release files changed during checks. Review the changes before publishing.');
   return { source, checks, passed:true };
+  } finally { releaseChecks.delete(controller); settled(); }
 }
 
 export async function verifyCodingRun(task: Task, runId: string, options: { skipUnchanged?: boolean } = {}): Promise<boolean> {

@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import type { ProjectRepositoryLink } from '../shared/types.js';
 import type { CodingEvidence } from '../shared/coding-evidence.js';
 import type { RepositoryChange, RepositoryOverview } from '../shared/repository-releases.js';
@@ -26,6 +28,13 @@ export async function isRepositoryAncestor(path: string, ancestor: string | null
   if (!ancestor || !head) return false;
   return readRepositoryGit(path, 'merge-base', '--is-ancestor', ancestor, head).then(() => true, () => false);
 }
+export const repositoryTargetPath = (root: string, key: string) => join(root, 'repository-targets', `${createHash('sha256').update(key).digest('hex')}.git`);
+const hasCommit = (path: string, sha: string | null) => sha ? readRepositoryGit(path, 'cat-file', '-e', `${sha}^{commit}`).then(() => true, () => false) : Promise.resolve(false);
+export async function repositoryPublishedPath(root: string, link: ProjectRepositoryLink, sha: string | null): Promise<string> {
+  const key = repositoryKey(link), cache = repositoryTargetPath(root, key);
+  return await hasCommit(cache, sha) ? cache
+    : listRepositoryReleases(key).find(row => row.candidate?.headSha === sha)?.candidate?.workdir ?? createRepositoryDevelopment(root).pathFor(link);
+}
 
 /** No fetch, index refresh, evidence updates or handoff repairs in this reader. */
 export function createRepositoryInventory(rootDir: string) {
@@ -36,7 +45,9 @@ export function createRepositoryInventory(rootDir: string) {
       const acceptedSha = await development.head(link);
       // A release may merge a newer main without changing the development ref.
       // Its immutable local objects prove ancestry after exact remote readback.
-      const publishedPath = listRepositoryReleases(key).find(row => row.candidate?.headSha === targetSha)?.candidate?.workdir ?? path;
+      const publishedPath = await repositoryPublishedPath(rootDir, link, targetSha);
+      const targetKnown = await hasCommit(publishedPath, targetSha);
+      const targetPending = 'Checking the latest GitHub version. This list will refresh shortly.';
       const links = listProjectRepositoryLinks().filter(item => repositoryKey(item) === key);
       const projects = new Set(links.map(item => item.projectId));
       const tasks = getAllTasks().filter(task => task.project_id && projects.has(task.project_id));
@@ -55,7 +66,7 @@ export function createRepositoryInventory(rootDir: string) {
         for (const record of records) {
           if (!record.changedFiles.length || !await isRepositoryAncestor(path, record.commitSha, acceptedSha)
             || await isRepositoryAncestor(publishedPath, record.commitSha, targetSha)) continue;
-          changes.push({ ...base, id: record.id, state: 'ready', reason: 'Checked and combined with the other accepted changes.',
+          changes.push({ ...base, id: record.id, state: targetKnown ? 'ready' : 'needs_attention', reason: targetKnown ? 'Checked and combined with the other accepted changes.' : targetPending,
             changedFiles: record.changedFiles, commitSha: record.commitSha, previousSha: record.previousSha, runId: record.runId, queueId: null });
         }
         const working = run && ['streaming', 'compacting'].includes(run.status);
@@ -85,7 +96,7 @@ export function createRepositoryInventory(rootDir: string) {
             .map(row => JSON.parse(row.evidence_json) as CodingEvidence).find(item => item.source?.head === head && item.baseline.head !== head);
           if (!dirty && accepted && evidence?.source && evidence.workdir === await realpath(lease.workdir)
             && (await sourceIdentity(lease.workdir)).fingerprint === evidence.source.fingerprint) {
-            changes.push({ ...base, id: `legacy:${task.id}:${evidence.runId}`, state: 'ready', reason: 'Checked changes already combined in the shared development version.',
+            changes.push({ ...base, id: `legacy:${task.id}:${evidence.runId}`, state: targetKnown ? 'ready' : 'needs_attention', reason: targetKnown ? 'Checked changes already combined in the shared development version.' : targetPending,
               changedFiles: (await readRepositoryGit(path, 'diff', '--name-only', evidence.baseline.head, head, '--')).split('\n').filter(Boolean),
               commitSha: head, previousSha: evidence.baseline.head, runId: evidence.runId, queueId: null });
             continue;

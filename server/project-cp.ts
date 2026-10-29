@@ -21,6 +21,8 @@ import { buildProjectGitEnv, parseProjectGitConfig, validateProjectGitTransportC
 import { getTask, updateTask } from './db/queries.js';
 import { GitHubPermissionUpgradeError } from './studio/github-permissions.js';
 import { createRepositoryDevelopment } from './repository-development.js';
+import { repositoryTargetPath } from './repository-inventory.js';
+import { repositoryKey } from './db/repository-queue.js';
 
 const execFile = promisify(execFileCallback);
 const MAX_DIFF_BYTES = 60_000;
@@ -94,6 +96,7 @@ export interface ProjectCpSyncResult {
 }
 
 export interface ProjectCpService {
+  refreshRepositoryTarget(input: { repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<void>;
   repositoryHead(input: { repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<string | null>;
   prepareRepositoryRelease(input: { id: string; sourceSha: string; targetSha: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<{ workdir: string; headSha: string; treeSha: string; changedFiles: string[] }>;
   publishRepositoryRelease(input: { id: string; publicationId: string; targetSha: string; repositoryLink: ProjectRepositoryLink; tokenProvider?: InstallationTokenProvider }): Promise<ProjectVersion>;
@@ -548,6 +551,17 @@ export function createProjectCpService(options: ProjectCpServiceOptions): Projec
       return serialized(`task:${input.taskId}`, () => acquireEditorUnlocked(input));
     },
 
+    async refreshRepositoryTarget(input) {
+      const workdir = repositoryTargetPath(options.rootDir, repositoryKey(input.repositoryLink));
+      await serialized(`target:${workdir}`, async () => {
+        await mkdir(dirname(workdir), { recursive: true });
+        if (!await pathExists(workdir)) await git(dirname(workdir), ['init', '--bare', '--template=', workdir]);
+        // Server-owned object cache only. No task index, branch or worktree changes.
+        const ref = `refs/heads/${input.repositoryLink.defaultBranch}`;
+        await git(workdir, ['check-ref-format', ref]);
+        await git(workdir, ['fetch', '--no-tags', '--', input.repositoryLink.cloneUrl, ref], await authOptions(input.repositoryLink, input.tokenProvider, true));
+      });
+    },
     async repositoryHead(input) {
       const ref = `refs/heads/${input.repositoryLink.defaultBranch}`;
       await git(process.cwd(), ['check-ref-format', ref]);

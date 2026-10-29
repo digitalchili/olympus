@@ -7,7 +7,7 @@ import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
 import { abandonProjectPublication, createProjectPublication, getProjectPublication } from './db/project-publications.js';
 import { getRepositoryRelease, listRepositoryContributions, listRepositoryReleases, queueReleaseFingerprint, saveRepositoryRelease, type ReleaseMember, type SavedRepositoryRelease } from './db/repository-releases.js';
 import { repositoryKey } from './db/repository-queue.js';
-import { createRepositoryInventory, isRepositoryAncestor, readRepositoryGit } from './repository-inventory.js';
+import { createRepositoryInventory, isRepositoryAncestor, readRepositoryGit, repositoryPublishedPath } from './repository-inventory.js';
 import { createRepositoryDevelopment } from './repository-development.js';
 import { canProfileAccessProject, requireProfileProjectAccess } from './project-access.js';
 import { claimProjectOperation, hasTaskOperation } from './task-run-lifecycle.js';
@@ -24,6 +24,8 @@ function publicRelease(row: SavedRepositoryRelease): RepositoryRelease {
 export function createRepositoryReleaseService(options: { rootDir: string; cp: ProjectCpService; tokenProvider?: InstallationTokenProvider; canDispatch?: () => boolean }) {
   const inventory = createRepositoryInventory(options.rootDir), development = createRepositoryDevelopment(options.rootDir);
   const busy = new Set<string>();
+  const operations = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  const observed = new Map<string, ProjectRepositoryLink>();
   const canDispatch = () => options.canDispatch?.() ?? true;
   function linkFor(projectId: string, actor: string | null, write = false): ProjectRepositoryLink {
     if (actor) requireProfileProjectAccess(projectId, actor, write ? 'contribute' : 'view');
@@ -39,6 +41,7 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
   }
   async function snapshot(projectId: string, actor: string | null) {
     const link = linkFor(projectId, actor);
+    observed.set(projectId, link);
     const targetSha = await options.cp.repositoryHead({ repositoryLink: link, tokenProvider: options.tokenProvider });
     return inventory.read(link, targetSha, actor);
   }
@@ -47,7 +50,7 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
     const view = await snapshot(projectId, actor);
     if (view.hasHiddenWork) throw conflict('Some repository work is unavailable in this view. Open from a profile with access to all included work.');
     if (!view.targetSha) throw conflict('The GitHub target could not be confirmed. Try again after connecting the repository.');
-    const included = view.changes.filter(row => mode === 'all' || row.state === 'ready');
+    const included = view.changes.filter(row => row.state === 'ready' || (mode === 'all' && row.state === 'working'));
     const excluded = view.changes.filter(row => !included.includes(row));
     if (!included.length) throw conflict('There are no checked changes ready to publish yet.');
     const queued = included.filter(row => row.queueId).map(row => queueReleaseFingerprint(getQueuedTaskMessage(row.taskId)!));
@@ -64,6 +67,9 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
     if (!row || busy.has(row.repositoryKey) || !canDispatch() || ['confirmed','cancelled'].includes(row.state)) return;
     if (!retry && ['blocked','publishing'].includes(row.state)) return;
     busy.add(row.repositoryKey);
+    const controller = new AbortController();
+    let settled!: () => void;
+    operations.set(id, { controller, done: new Promise<void>(resolve => { settled = resolve; }) });
     const claims: Array<() => void> = [];
     try {
       for (const link of listProjectRepositoryLinks().filter(link => repositoryKey(link) === row!.repositoryKey)) {
@@ -79,7 +85,7 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
         update(row,{state:'confirmed',message:'On GitHub. Deployment has not been verified.'}); return;
       }
       const path = development.pathFor(link), accepted = await development.head(link);
-      const targetPath = listRepositoryReleases(row.repositoryKey).find(item=>item.candidate?.headSha===row!.targetSha)?.candidate?.workdir ?? path;
+      const targetPath = await repositoryPublishedPath(options.rootDir, link, row.targetSha);
       if (!row.sourceSha) {
         const contributions = listRepositoryContributions(row.repositoryKey);
         const resolved: ReleaseMember[] = [];
@@ -157,7 +163,8 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
       const beforeChecks = await sourceIdentity(row.candidate!.workdir);
       if (beforeChecks.head !== row.candidate!.headSha || await readRepositoryGit(row.candidate!.workdir,'status','--porcelain')
         || (row.verification && beforeChecks.fingerprint !== row.verification.source.fingerprint)) throw conflict('The saved release copy changed. Start a new publish request to check the current work.');
-      if (!row.verification?.passed) update(row, { verification: await verifyReleaseSource(row.candidate!.workdir) });
+      controller.signal.throwIfAborted();
+      if (!row.verification?.passed) update(row, { verification: await verifyReleaseSource(row.candidate!.workdir, controller.signal) });
       if (!row.verification!.passed) throw conflict(row.verification!.reason ?? 'The combined release checks failed. All work is saved.');
       if (beforeChecks.fingerprint !== row.verification!.source.fingerprint) throw conflict('The release copy changed before checks. Review it before publishing.');
       if ((await sourceIdentity(row.candidate!.workdir)).fingerprint !== row.verification!.source.fingerprint) throw conflict('The release copy changed after checks. Review it before publishing.');
@@ -184,7 +191,7 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
           : error instanceof Error && (error as any).statusCode === 409 ? error.message
             : 'The combined release could not be prepared or checked. All work is saved. Review its checks and repository connection before retrying.'});
       }
-    } finally { claims.reverse().forEach(release=>release()); busy.delete(row.repositoryKey); }
+    } finally { claims.reverse().forEach(release=>release()); busy.delete(row.repositoryKey); operations.delete(id); settled(); }
   }
   return {
     preview,
@@ -203,28 +210,42 @@ export function createRepositoryReleaseService(options: { rootDir: string; cp: P
         if (!item.queueId) return [{...item}];
         const queued = getQueuedTaskMessage(item.taskId);
         if (!queued || queued.id !== item.queueId) throw conflict('The saved request changed. Review the publish preview.');
-        return [...(item.runId ? [{...item,id:`${item.id}:run`,queueId:null}] : []),
-          {...item,runId:null,queueFingerprint:queueReleaseFingerprint(queued)}];
+        // A same-task queued turn continues the captured active turn's files.
+        // The queue accepts that chain only once, after the bound final turn.
+        return [{...item,queueFingerprint:queueReleaseFingerprint(queued)}];
       });
       const row: SavedRepositoryRelease = {id:randomUUID(),repositoryKey:repositoryKey(link),projectId,actor,repository:link,
         mode,state:'waiting',included:view.included,excluded:view.excluded,members,sourceSha:null,targetSha:view.targetSha,
         message:'Publish request saved. Waiting for the included tasks and checks.',targetBranch:link.defaultBranch,commitSha:null,createdAt:Date.now()};
       assertMemberAccess(row); saveRepositoryRelease(row); return publicRelease(row);
     },
-    async tick() { for (const row of listRepositoryReleases().filter(row=>['waiting','checking'].includes(row.state))) await advance(row.id); },
+    async tick() {
+      if (!canDispatch()) return;
+      const pending = listRepositoryReleases().filter(row=>['waiting','checking'].includes(row.state));
+      for (const row of pending) observed.set(row.projectId, row.repository);
+      // Refresh remote objects outside read-only sidebar requests, never in task clones.
+      await Promise.all([...new Map([...observed.values()].map(link=>[repositoryKey(link),link])).values()].map(async link => {
+        const current = getProjectRepositoryLink(link.projectId);
+        if (current && identity(current) === identity(link)) await options.cp.refreshRepositoryTarget({repositoryLink:current,tokenProvider:options.tokenProvider}).catch(()=>{});
+      }));
+      for (const row of pending) await advance(row.id);
+    },
     async retry(projectId: string, id: string, actor: string | null = null) {
       const row=getRepositoryRelease(id), link=linkFor(projectId,actor,true);
       if (!row || row.repositoryKey!==repositoryKey(link)) throw conflict('Publish request not found.');
       if (actor && row.members.some(member=>!canProfileAccessProject(member.projectId,actor,'contribute'))) throw conflict('This publish request requires access to all included Projects.');
       await advance(id,true); return publicRelease(getRepositoryRelease(id)!);
     },
-    cancel(projectId: string,id: string,actor: string | null = null) {
+    async cancel(projectId: string,id: string,actor: string | null = null) {
       const row=getRepositoryRelease(id),link=linkFor(projectId,actor,true);
       if (!row || row.repositoryKey!==repositoryKey(link)) throw conflict('Publish request not found.');
       if (actor && row.members.some(member=>!canProfileAccessProject(member.projectId,actor,'contribute'))) throw conflict('This publish request requires access to all included Projects.');
       if (row.state==='confirmed' || (row.publicationId && busy.has(row.repositoryKey))) throw conflict('Publication has already started. Wait for its GitHub confirmation before stopping retries.');
       if (row.publicationId) abandonProjectPublication(row.publicationId);
       saveRepositoryRelease({...row,state:'cancelled',message:row.publicationId ? 'Stopped retrying this saved publication. Check GitHub for its final status. All task work is saved.' : 'Publish request cancelled. All task work is saved.'});
+      const operation = operations.get(id);
+      operation?.controller.abort(new Error('Publish request cancelled'));
+      await operation?.done;
     },
   };
 }
