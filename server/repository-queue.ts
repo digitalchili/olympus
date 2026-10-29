@@ -1,6 +1,6 @@
 import type { AgentAdapter } from './adapters/types.js';
 import type { Task } from '../shared/types.js';
-import { getAllTasks, getTask } from './db/queries.js';
+import { getAllTasks, getTask, updateTask } from './db/queries.js';
 import { getProjectRepositoryLink } from './db/projects.js';
 import { getProjectEditorForTask } from './db/project-cp.js';
 import { getLatestTaskAgentRun } from './db/task-agent-runs.js';
@@ -31,7 +31,13 @@ export function createRepositoryQueue(options: { rootDir: string; adapter: Pick<
   let ticking = false;
   const notify = (extra?: string) => {
     for (const id of new Set([...queuedRepositoryTasks(), ...(extra ? [extra] : [])])) {
-      const task = getTask(id);
+      let task = getTask(id);
+      // A saved request is unfinished work even before its agent can start.
+      // Reconcile existing waiting cards too, without reopening publication-only requests.
+      if (task?.repositoryQueue?.waitingForTaskId && task.status !== 'in_progress') {
+        const request = getQueuedTaskMessage(id);
+        if (request && !request.publication) task = updateTask(id, { status: 'in_progress' });
+      }
       if (task) broadcast({ type: 'task_updated', task });
     }
   };
