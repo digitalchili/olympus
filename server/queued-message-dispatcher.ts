@@ -39,23 +39,29 @@ export function createQueuedMessageDispatcher<T = QueuedTaskMessage>(
   dependencies: DispatcherDependencies<T>,
 ): QueuedMessageDispatcher {
   const scheduled = new Set<string>();
+  const inFlight = new Set<string>();
+  const reschedule = new Set<string>();
   const defer = dependencies.defer ?? ((work: () => void) => setTimeout(work, 0));
 
-  return {
-    schedule(taskId: string) {
-      if (scheduled.has(taskId)) return;
-      scheduled.add(taskId);
-      defer(() => {
-        scheduled.delete(taskId);
-        if (dependencies.isActive(taskId)) return;
-        const message = dependencies.load(taskId);
-        if (!message) return;
-        void dependencies.deliver(taskId, message).catch((error) => {
-          dependencies.onError?.(taskId, error);
-        });
+  const schedule = (taskId: string) => {
+    if (inFlight.has(taskId)) { reschedule.add(taskId); return; }
+    if (scheduled.has(taskId)) return;
+    scheduled.add(taskId);
+    defer(() => {
+      scheduled.delete(taskId);
+      if (dependencies.isActive(taskId)) return;
+      const message = dependencies.load(taskId);
+      if (!message) return;
+      inFlight.add(taskId);
+      void dependencies.deliver(taskId, message).catch((error) => {
+        dependencies.onError?.(taskId, error);
+      }).finally(() => {
+        inFlight.delete(taskId);
+        if (reschedule.delete(taskId)) schedule(taskId);
       });
-    },
+    });
   };
+  return { schedule };
 }
 
 let configuredDispatcher: QueuedMessageDispatcher | null = null;
