@@ -5,3 +5,5 @@ A saved message may be scheduled repeatedly while a previous dispatch is still a
 The dispatcher now permits one delivery per task at a time and rechecks a pending schedule once it settles. Different tasks remain independent; a message already consumed is not replayed; a failed attempt reaches the error handler and a pending retry remains serialized. Browser/manual requests can still collide with a server request, and this change does not resolve every possible admission blocker.
 
 A regression reproduced two overlapping deliveries before the fix and passes afterward. Node 22 full tests, build, typecheck, and independent review passed. The native SQLite dependency did not load under unsupported Node 26; validation used the supported Node 22 runtime.
+
+The v0.7.57 CI and image workflows failed because an existing task-start test assumed a deferred callback was always present synchronously while a delivery was still settling. The test now waits for that callback, preserving its assertion that a consumed request is not redelivered. Version v0.7.57 remains immutable and must not be deployed.

@@ -54,7 +54,10 @@ try {
  for(let i=0;i<100 && getLatestTaskAgentRun(task.id)?.status!=='done';i++) await new Promise(r=>setTimeout(r,10));
  assert.equal(getLatestTaskAgentRun(task.id)?.status,'done',JSON.stringify(deliveryErrors));
  assert.equal(starts,1);assert.equal(getQueuedTaskMessage(task.id),undefined);
- dispatcher.schedule(task.id);deferred.shift()!();await new Promise(r=>setTimeout(r,20));assert.equal(starts,1);
+ dispatcher.schedule(task.id);
+ for(let i=0;i<100 && deferred.length===0;i++) await new Promise(r=>setTimeout(r,10));
+ assert.ok(deferred.length, 'the settled dispatcher rechecks the saved queue');
+ deferred.shift()!();await new Promise(r=>setTimeout(r,20));assert.equal(starts,1);
  const project=createProject({name:'Project model selection',purpose:'Test selected startup settings',managerProfileId:'som',changedBy:'test'});
  for(const mode of ['task','goal']) {
   const selected={mode,model:'native-model',provider:'openai-codex',reasoningEffort:'low'};
