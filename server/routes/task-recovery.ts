@@ -12,6 +12,10 @@ import type { Task } from '../../shared/types.js';
 import { onlyBackgroundProcesses } from '../../shared/background-work.js';
 import { repositoryOwnerForTask } from '../db/repository-queue.js';
 import { getProjectEditorForTask } from '../db/project-cp.js';
+import { getQueuedTaskMessage } from '../db/task-message-queue.js';
+
+type AdmissionResult = { status: number; body: unknown } | null;
+const queuedAdmissions = new Map<string, { id: string; content: string; result: Promise<AdmissionResult> }>();
 
 function canContinueWithProcesses(task: Task, inventory: TaskBackgroundWork): boolean {
   const latest = getLatestTaskAgentRun(task.id);
@@ -93,6 +97,15 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
     const performanceTrace = requestPerformanceTrace(res);
     const task = res.locals.task as Task;
     if (typeof req.body?.content !== 'string' || !req.body.content.trim()) return next();
+    const queuedId = typeof req.body.queuedMessageId === 'string'
+      && req.body.recoveryOfRunId === undefined && req.body.botDeliveryId === undefined ? req.body.queuedMessageId : null;
+    const existing = queuedAdmissions.get(task.id);
+    if (queuedId && existing && existing.id === queuedId && existing.content === req.body.content) {
+      const result = await existing.result;
+      if (res.destroyed) return;
+      return result ? res.status(result.status).json(result.body)
+        : res.status(503).json({ error: 'Could not confirm whether the saved request started. Check the task before retrying.' });
+    }
     const live = getRunStatus(task.id);
     if (hasActiveTaskRun(task.id) || isVerifying(task.id) || live?.status === 'streaming' || live?.status === 'compacting') {
       return res.status(409).json({ code: 'TASK_RUN_ACTIVE', error: 'This task already has a message in progress.' });
@@ -103,6 +116,20 @@ export function createTaskRecoveryRouter(adapter: Pick<AgentAdapter, 'getBackgro
     res.locals.releaseTaskOperation = release;
     res.once('finish', release);
     res.once('close', () => { if (!res.locals.preparingProjectTask) release(); });
+    let saved: ReturnType<typeof getQueuedTaskMessage>;
+    try { saved = queuedId ? getQueuedTaskMessage(task.id) : undefined; }
+    catch { return res.status(500).json({ error: 'Could not read the saved request. Try again.' }); }
+    if (saved && saved.id === queuedId && saved.content === req.body.content) {
+      let settle!: (result: AdmissionResult) => void;
+      const entry = { id: saved.id, content: saved.content, result: new Promise<AdmissionResult>(resolve => { settle = resolve; }) };
+      queuedAdmissions.set(task.id, entry);
+      const json = res.json;
+      res.json = function (body: unknown) { settle({ status: this.statusCode, body }); return json.call(this, body); };
+      res.once('close', () => {
+        settle(null);
+        if (queuedAdmissions.get(task.id) === entry) queuedAdmissions.delete(task.id);
+      });
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const inventory = await performanceSpan(performanceTrace, 'inventory', () => Promise.race([

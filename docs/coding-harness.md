@@ -74,11 +74,11 @@ After an SSE reconnect, the browser reloads persisted history and run status eve
 
 ## Hermes compatibility
 
-The Docker runtime pins Hermes **v0.22.5**, source commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`, using the official stable image by immutable multi-platform digest:
+The Docker runtime pins Hermes **v0.22.6**, source commit `f0d94882e89ab8d4098b5bb2f166adfb9ee0a0ab`, using the official stable image by immutable multi-platform digest:
 
-`nousresearch/hermes-agent:stable@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d`
+`nousresearch/hermes-agent:stable@sha256:d27689bc6e8581ec884a7227c9101fdaebf6c853cff8859020dac14f21452b4d`
 
-The registry manifest and image install stamp were checked on 2026-10-27. The stable image contains the exact v0.22.5 release commit. The digest, rather than the mutable `stable` name, selects the image. Runtime identity reads `install-stamp.json` before the legacy release-date constant. The selective skill-policy patch remains unchanged; regular sessions keep their normal tools and delegation.
+The registry manifest and image install stamp were checked on 2026-11-03. The image contains the exact v0.22.6 release commit. The digest, rather than the mutable `stable` name, selects the image. Runtime identity reads `install-stamp.json` before the legacy release-date constant. The selective skill-policy patch was adapted to the new Hermes prompt builder; regular sessions keep their normal tools and delegation.
 
 Olympus supports the native normalized-question callback and scoped `tools.approval_context` APIs, retaining the older runtime interface where available. Terminal tools remain disabled if a scoped approval context is unavailable. Resumed model history preserves Hermes's `api_content` sidecar, including skill-change notes; chat display still uses the original user content. Signed thinking remains owned by Hermes and preserved through the worker replay boundary.
 

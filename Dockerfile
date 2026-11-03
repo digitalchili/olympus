@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# Native authentication and recovery contracts are tested against Hermes v0.22.5.
-ARG HERMES_IMAGE=nousresearch/hermes-agent:stable@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
+# Native authentication and recovery contracts are tested against Hermes v0.22.6.
+ARG HERMES_IMAGE=nousresearch/hermes-agent:stable@sha256:d27689bc6e8581ec884a7227c9101fdaebf6c853cff8859020dac14f21452b4d
 
 # Hermes now ships Node 26; Olympus supports Node 22.22–25. Keep the tested
 # Node toolchain identical for the Olympus build and server. Preserve Hermes's

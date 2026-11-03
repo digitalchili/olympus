@@ -31,9 +31,26 @@ def wait_for(predicate, description, timeout=15):
 def child():
     sys.path[:0] = [str(WORKERS), str(SOURCE)]
     import hermes_worker as worker
+    import hermes_openai_auth
     # Keep the built protocol output, while native imports use worker stderr.
     sys.stdout = sys.stderr
     from hermes_cli import model_switch
+
+    # Hermes 0.22.6 resets PYTHONPATH during worker initialization. Reinstall
+    # the test-only transport for private OAuth helpers without changing the
+    # production worker or permitting external network access.
+    original_spawn = hermes_openai_auth.NativeAuthBackend._spawn
+    def fixture_spawn(self, action):
+        previous = os.environ.get('PYTHONPATH')
+        os.environ['PYTHONPATH'] = str(ROOT / 'transport') + ':/fixtures:' + str(SOURCE)
+        try:
+            return original_spawn(self, action)
+        finally:
+            if previous is None:
+                os.environ.pop('PYTHONPATH', None)
+            else:
+                os.environ['PYTHONPATH'] = previous
+    hermes_openai_auth.NativeAuthBackend._spawn = fixture_spawn
 
     def inventory(**kwargs):
         with (ROOT / 'catalog-calls').open('a') as output:
