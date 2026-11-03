@@ -1538,36 +1538,6 @@ def _register_mcp_servers(cfg: dict[str, Any]) -> None:
     _mcp_servers_registered = True
 
 
-def _normalize_fallback_entry(raw: Any) -> dict[str, Any] | None:
-    if not isinstance(raw, dict):
-        return None
-    model = string_or_none(raw.get("model"))
-    if not model:
-        return None
-    return {
-        "model": model,
-        "provider": string_or_none(raw.get("provider")),
-        "base_url": string_or_none(raw.get("base_url")),
-    }
-
-
-def _fallback_model(cfg: dict[str, Any]) -> list[dict[str, Any]] | None:
-    try:
-        from hermes_cli.fallback_config import get_fallback_chain
-
-        return get_fallback_chain(cfg) or None
-    except Exception:
-        pass
-
-    chain: list[dict[str, Any]] = []
-    for key in ("fallback_providers", "fallback_model"):
-        raw = cfg.get(key)
-        for item in raw if isinstance(raw, list) else [raw]:
-            if (entry := _normalize_fallback_entry(item)) is not None:
-                chain.append(entry)
-    return chain or None
-
-
 def _parse_reasoning(effort: str | None) -> dict[str, Any] | None:
     if not effort:
         return None
@@ -1713,7 +1683,8 @@ def _create_agent(
         "session_db": session_db,
         "enabled_toolsets": _resolve_toolsets(cfg),
         "disabled_toolsets": interaction_disabled_toolsets(),
-        "fallback_model": _fallback_model(cfg),
+        # Task model selection is binding; provider failures must remain failures.
+        "fallback_model": [],
         "clarify_callback": clarify_callback,
     }
     profile_limit = _agent_max_iterations(cfg)

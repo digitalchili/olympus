@@ -11,7 +11,7 @@ import hermes_worker as worker
 
 
 class ModelResolutionTests(unittest.TestCase):
-    def run_statuses(self, statuses):
+    def run_statuses(self, statuses, *, native_result=None):
         sent = []
 
         class Agent:
@@ -23,7 +23,7 @@ class ModelResolutionTests(unittest.TestCase):
                     self.model = model
                     self._fallback_activated = activated
                     self.status_callback('diagnostic', message)
-                return {'completed': True, 'final_response': 'Done'}
+                return native_result if native_result is not None else {'completed': True, 'final_response': 'Done'}
 
         runtime = types.ModuleType('hermes_cli.runtime_provider')
         runtime.resolve_runtime_provider = lambda **kw: {'provider': 'openai-codex', 'api_key': 'fixture'}
@@ -70,6 +70,45 @@ class ModelResolutionTests(unittest.TestCase):
         agent = types.SimpleNamespace(model='gpt-5.5', provider='openai-codex', _fallback_activated=True)
         result = worker._model_resolution_payload(agent, {'model': 'gpt-6-astra', 'provider': 'openai-codex'})
         self.assertEqual(result['fallbackReason'], 'Hermes is using its configured fallback model.')
+
+    def test_selected_model_failure_remains_an_error(self):
+        for reason, code in [('model_entitlement', 'model_error'), ('rate_limit', 'rate_limit')]:
+            with self.subTest(reason=reason), self.assertRaises(worker.WorkerError) as caught:
+                self.run_statuses([], native_result={
+                    'completed': False, 'failed': True, 'failure_reason': reason,
+                    'final_response': 'PRIVATE upstream error',
+                })
+            self.assertEqual(caught.exception.code, code)
+            self.assertNotIn('PRIVATE', str(caught.exception))
+
+
+class ModelFallbackPolicyTests(unittest.TestCase):
+    def test_task_agent_never_inherits_configured_model_fallback(self):
+        runtime = types.ModuleType('hermes_cli.runtime_provider')
+        runtime.resolve_runtime_provider = lambda **kw: {'provider': 'openai-codex', 'api_key': 'fixture'}
+        for key in ('fallback_model', 'fallback_providers'):
+            config = {
+                'model': {'provider': 'openai-codex', 'default': 'gpt-6.1-sol'},
+                key: [{'provider': 'openai-codex', 'model': 'gpt-5.5'}],
+            }
+            with self.subTest(config_key=key), ExitStack() as stack:
+                stack.enter_context(patch.dict(sys.modules, {'hermes_cli.runtime_provider': runtime}))
+                for name, value in {
+                    '_ensure_imports': lambda: None, 'install_native_guard': lambda: None,
+                    '_install_delegate_child_reasoning_compat': lambda: None,
+                    '_register_mcp_servers': lambda cfg: None, '_load_config': lambda: config,
+                    '_resolve_toolsets': lambda cfg: [], '_SessionDB': None,
+                    '_AIAgent': types.SimpleNamespace,
+                    '_AIAgent_PARAMS': {'model', 'provider', 'reasoning_config', 'fallback_model'},
+                }.items():
+                    stack.enter_context(patch.object(worker, name, value))
+                agent = worker._create_agent(session_id='fixture', requested_model='gpt-6.1-sol',
+                                             requested_provider='openai-codex', reasoning_effort='low')
+                self.assertFalse(getattr(agent, 'fallback_model', None))
+                self.assertEqual(agent.model, 'gpt-6.1-sol')
+                self.assertEqual(agent.provider, 'openai-codex')
+                self.assertEqual(worker._agent_reasoning_effort(agent), 'low')
+                self.assertEqual(config[key], [{'provider': 'openai-codex', 'model': 'gpt-5.5'}])
 
 
 if __name__ == '__main__':

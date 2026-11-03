@@ -2,6 +2,8 @@
 
 Olympus keeps Hermes as its execution engine. Olympus provides persisted continuation bookkeeping, safe automatic recovery and Git verification evidence around that engine.
 
+Root task runs keep the selected model, provider and reasoning effort. Olympus disables Hermes's configured model fallback chain for these runs. If the selected model is unavailable or reaches a provider limit, the run reports the failure instead of switching models. This applies to chat, goal and recovery turns. Delegated children inherit the empty chain unless Hermes has a separately configured child fallback route. Olympus does not edit the Hermes profile configuration or change standalone scheduled jobs.
+
 ## Proportionate execution
 
 The shared task instructions keep one primary executor responsible for the result, with direct execution as the default. Delegation should have a specific deliverable and a concrete benefit from parallel work, expertise, access or tools. Explicitly assigned profiles and existing active work retain ownership. When review is needed, the default is one consolidated review; additional review needs material changes, changed risk, unresolved findings or an explicit requirement. Passing evidence can be reused only while its source and relevant configuration/runtime match. Required final-source checks, independent reviews required by the user or repository, pending approvals and publication guards still apply.
